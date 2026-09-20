@@ -4,6 +4,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
+import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 
 export interface PlatformBreakdown {
   name: string;
@@ -11,19 +12,71 @@ export interface PlatformBreakdown {
   color: string;
 }
 
-export interface EngagementByPlatform {
+/**
+ * Real publishing outcome per platform, derived from each post's stored
+ * publish results.
+ *
+ * Note there are no likes/comments/shares here: this app only requests
+ * `threads_basic` + `threads_content_publish`, and per-post metrics require the
+ * insights endpoints and scopes. Numbers are omitted rather than invented.
+ */
+export interface PlatformPublishStats {
   platform: string;
-  likes: number;
-  comments: number;
-  shares: number;
+  published: number;
+  failed: number;
 }
 
-export interface TopPost {
+/** A published post, with the permalink captured at publish time when we have it. */
+export interface PublishedPost {
   id: string;
   platform: string;
   text: string;
-  engagement: number;
   date: string;
+  /** Public post URL, present only when the platform returned one. */
+  url: string | null;
+  /** How many platforms this post went out to. */
+  platformCount: number;
+}
+
+/** Shape of one entry in `posts.results` (written by the publish path). */
+interface StoredPublishResult {
+  platform?: string;
+  success?: boolean;
+  url?: string;
+  error?: string;
+}
+
+/** `posts.results` is a JSON string; anything unreadable counts as no results. */
+function parseResults(raw: string | null): StoredPublishResult[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as StoredPublishResult[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function splitPlatforms(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+/** "Sep 20" style date for the charts, or an em dash when unknown. */
+function shortDate(value: Date | null): string {
+  return value
+    ? value.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : "—";
+}
+
+/** Display name for a platform id: "threads" → "Threads" (registry name wins). */
+function platformLabel(id: string): string {
+  return (
+    PLATFORM_REGISTRY[id as PlatformId]?.name ??
+    id.charAt(0).toUpperCase() + id.slice(1)
+  );
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -43,8 +96,8 @@ export async function getAnalyticsData() {
   if (!session) {
     return {
       platformBreakdown: [] as PlatformBreakdown[],
-      engagementByPlatform: [] as EngagementByPlatform[],
-      topPosts: [] as TopPost[],
+      publishStats: [] as PlatformPublishStats[],
+      recentPosts: [] as PublishedPost[],
     };
   }
 
@@ -70,85 +123,61 @@ export async function getAnalyticsData() {
   const platformBreakdown: PlatformBreakdown[] = Object.entries(platformCounts)
     .sort((a, b) => b[1] - a[1])
     .map(([name, count]) => ({
-      name: name.charAt(0).toUpperCase() + name.slice(1),
+      name: platformLabel(name),
       value: totalPosts > 0 ? Math.round((count / totalPosts) * 100) : 0,
       color: PLATFORM_COLORS[name] || "#888888",
     }));
 
-  // Engagement by platform: derive from post results or use estimates
-  const engagementMap: Record<
-    string,
-    { likes: number; comments: number; shares: number }
-  > = {};
+  // Publish outcomes per platform, taken from each post's stored results.
+  const statsMap = new Map<string, PlatformPublishStats>();
 
   for (const post of publishedPosts) {
-    const platforms = post.platforms.split(",").map((p) => p.trim());
-    let postEngagement = { likes: 0, comments: 0, shares: 0 };
+    const platforms = splitPlatforms(post.platforms);
+    const results = parseResults(post.results);
 
-    if (post.results) {
-      try {
-        const results = JSON.parse(post.results);
-        if (Array.isArray(results)) {
-          for (const r of results) {
-            if (r.success) {
-              postEngagement.likes += 45;
-              postEngagement.comments += 12;
-              postEngagement.shares += 8;
-            }
-          }
-        }
-      } catch {
-        postEngagement = { likes: 45, comments: 12, shares: 8 };
-      }
-    } else {
-      postEngagement = { likes: 45, comments: 12, shares: 8 };
-    }
+    // Attribute each result to the platform it names. Rows published before
+    // results were stored have none, so they count once per target platform.
+    const outcomes: Array<{ platform: string; success: boolean }> =
+      results.length > 0
+        ? results.map((r) => ({
+            platform: r.platform?.trim() || platforms[0] || "unknown",
+            success: r.success === true,
+          }))
+        : platforms.map((platform) => ({ platform, success: true }));
 
-    for (const p of platforms) {
-      if (!engagementMap[p])
-        engagementMap[p] = { likes: 0, comments: 0, shares: 0 };
-      engagementMap[p].likes += postEngagement.likes;
-      engagementMap[p].comments += postEngagement.comments;
-      engagementMap[p].shares += postEngagement.shares;
+    for (const { platform, success } of outcomes) {
+      const entry = statsMap.get(platform) ?? {
+        platform,
+        published: 0,
+        failed: 0,
+      };
+      if (success) entry.published += 1;
+      else entry.failed += 1;
+      statsMap.set(platform, entry);
     }
   }
 
-  const engagementByPlatform: EngagementByPlatform[] = Object.entries(
-    engagementMap
-  )
-    .sort((a, b) => b[1].likes - a[1].likes)
-    .slice(0, 5)
-    .map(([platform, data]) => ({
-      platform: platform.charAt(0).toUpperCase() + platform.slice(1),
-      ...data,
-    }));
+  const publishStats: PlatformPublishStats[] = Array.from(statsMap.values())
+    .sort((a, b) => b.published + b.failed - (a.published + a.failed))
+    .slice(0, 6)
+    .map((entry) => ({ ...entry, platform: platformLabel(entry.platform) }));
 
-  // Top performing posts
-  const topPosts: TopPost[] = publishedPosts.slice(0, 5).map((post) => {
-    let engagement = 65;
-    if (post.results) {
-      try {
-        const results = JSON.parse(post.results);
-        if (Array.isArray(results)) {
-          engagement = results.filter((r: any) => r.success).length * 65;
-        }
-      } catch {}
-    }
+  // Most recent posts, with the permalink captured at publish time so a row can
+  // link straight to the live post when the platform returned one.
+  const recentPosts: PublishedPost[] = publishedPosts.slice(0, 5).map((post) => {
+    const platforms = splitPlatforms(post.platforms);
+    const url = parseResults(post.results).find((r) => r.success && r.url)?.url;
 
     return {
       id: post.id,
-      platform: post.platforms.split(",")[0]?.trim() || "unknown",
-      text: post.content.slice(0, 60) + (post.content.length > 60 ? "…" : ""),
-      engagement,
-      date: post.publishedAt
-        ? post.publishedAt.toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-          })
-        : "—",
+      platform: platforms[0] || "unknown",
+      text: post.content,
+      date: shortDate(post.publishedAt),
+      url: url ?? null,
+      platformCount: platforms.length,
     };
   });
 
-  return { platformBreakdown, engagementByPlatform, topPosts };
+  return { platformBreakdown, publishStats, recentPosts };
 }
 

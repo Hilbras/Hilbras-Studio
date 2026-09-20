@@ -1,6 +1,6 @@
 "use server";
 
-import { eq, and, gte, lte, desc, sql, count } from "drizzle-orm";
+import { eq, and, gte, lte, desc, count } from "drizzle-orm";
 import { db } from "@/db";
 import { posts, socialAccounts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
@@ -21,10 +21,16 @@ export interface ActivityItem {
   timestamp: string;
 }
 
+/**
+ * One day of publishing activity.
+ *
+ * Only `posts` is real: impressions/reach and likes/comments/shares are **not**
+ * available from the Threads API with the scopes we request (`threads_basic`,
+ * `threads_content_publish`) — reading them needs `threads_manage_insights`, so
+ * they are reported as zero rather than guessed. See `getWeeklyChartData`.
+ */
 export interface WeeklyChartPoint {
   day: string;
-  reach: number;
-  engagement: number;
   posts: number;
 }
 
@@ -129,27 +135,32 @@ export async function getDashboardStats(): Promise<DashboardStat[]> {
     return pct >= 0 ? `+${pct}%` : `${pct}%`;
   };
 
+  // Every card here is a real count from the `posts` table. Reach and
+  // engagement are deliberately absent rather than estimated: they need the
+  // platform insights APIs (`threads_manage_insights` etc.), which this app does
+  // not request yet. Placeholder multipliers ("× 850") previously made the
+  // dashboard look populated while showing invented numbers.
   return [
-    {
-      label: "Total Reach",
-      value: currentPublished * 850,
-      suffix: "",
-      change: calcChange(currentPublished, previousPublished),
-      positive: currentPublished >= previousPublished,
-    },
-    {
-      label: "Engagement",
-      value: currentPublished * 68,
-      suffix: "",
-      change: calcChange(currentPublished, previousPublished),
-      positive: currentPublished >= previousPublished,
-    },
     {
       label: "Posts Published",
       value: currentPublished,
       suffix: "",
       change: calcChange(currentPublished, previousPublished),
       positive: currentPublished >= previousPublished,
+    },
+    {
+      label: "Scheduled",
+      value: currentScheduled,
+      suffix: "",
+      change: "—",
+      positive: true,
+    },
+    {
+      label: "Total Posts",
+      value: totalPosts,
+      suffix: "",
+      change: "—",
+      positive: true,
     },
     {
       label: "Connected Accounts",
@@ -207,21 +218,18 @@ export async function getWeeklyChartData(): Promise<WeeklyChartPoint[]> {
     );
 
   const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const buckets: Record<string, { posts: number; reach: number }> = {};
-  for (const d of dayNames) buckets[d] = { posts: 0, reach: 0 };
+  const buckets: Record<string, { posts: number }> = {};
+  for (const d of dayNames) buckets[d] = { posts: 0 };
 
   for (const row of rows) {
     if (!row.publishedAt) continue;
     const dayIdx = row.publishedAt.getDay();
     const dayName = dayNames[dayIdx === 0 ? 6 : dayIdx - 1];
     buckets[dayName].posts += 1;
-    buckets[dayName].reach += 850;
   }
 
   return dayNames.map((day) => ({
     day,
-    reach: buckets[day].reach,
-    engagement: buckets[day].posts * 68,
     posts: buckets[day].posts,
   }));
 }

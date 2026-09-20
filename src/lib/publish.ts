@@ -3,8 +3,12 @@
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { socialAccounts } from "@/db/schema";
-import { decryptSecret } from "@/lib/crypto";
+import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { PLATFORM_REGISTRY } from "@/lib/platforms";
+import {
+  refreshLongLivedToken,
+  supportsTokenRefresh,
+} from "@/lib/platform-tokens";
 import { getSessionUser } from "@/lib/session";
 
 interface PublishResult {
@@ -40,9 +44,29 @@ function errorMessage(e: unknown, fallback: string): string {
   return e instanceof Error && e.message ? e.message : fallback;
 }
 
+/** Sleep helper for the container processing polls. */
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Refresh a long-lived token this close to expiry. Threads/Instagram tokens live
+ * 60 days and are only refreshable while still valid, so refreshing a week ahead
+ * leaves plenty of room for a retry if the first attempt fails.
+ */
+const TOKEN_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Fallback lifetime when the platform omits `expires_in` (60 days). */
+const DEFAULT_TOKEN_LIFETIME_SECONDS = 60 * 24 * 60 * 60;
+
 /**
  * Load the connection for a platform. Newest row wins, so a connection made
  * before reconnects replaced rows instead of appending them can't shadow it.
+ *
+ * If the platform's long-lived token is within `TOKEN_REFRESH_WINDOW_MS` of
+ * expiring, it is refreshed here and written back: otherwise the connection
+ * silently dies ~60 days after connect, because nothing else acts on
+ * `tokenExpiresAt`.
  */
 async function getConnectedAccount(
   userId: string,
@@ -50,8 +74,10 @@ async function getConnectedAccount(
 ): Promise<ConnectedAccount | null> {
   const [account] = await db
     .select({
+      id: socialAccounts.id,
       accessTokenEnc: socialAccounts.accessTokenEnc,
       platformAccountId: socialAccounts.platformAccountId,
+      tokenExpiresAt: socialAccounts.tokenExpiresAt,
     })
     .from(socialAccounts)
     .where(
@@ -64,14 +90,36 @@ async function getConnectedAccount(
     .limit(1);
 
   if (!account?.accessTokenEnc) return null;
+
+  let accessToken: string;
   try {
-    return {
-      accessToken: decryptSecret(account.accessTokenEnc),
-      platformAccountId: account.platformAccountId,
-    };
+    accessToken = decryptSecret(account.accessTokenEnc);
   } catch {
     return null;
   }
+
+  if (account.tokenExpiresAt && supportsTokenRefresh(platform)) {
+    const msLeft = account.tokenExpiresAt.getTime() - Date.now();
+    if (msLeft > 0 && msLeft < TOKEN_REFRESH_WINDOW_MS) {
+      const refreshed = await refreshLongLivedToken(platform, accessToken);
+      if (refreshed) {
+        accessToken = refreshed.accessToken;
+        const expiresAt = new Date(
+          Date.now() +
+            (refreshed.expiresIn ?? DEFAULT_TOKEN_LIFETIME_SECONDS) * 1000
+        );
+        await db
+          .update(socialAccounts)
+          .set({
+            accessTokenEnc: encryptSecret(accessToken),
+            tokenExpiresAt: expiresAt,
+          })
+          .where(eq(socialAccounts.id, account.id));
+      }
+    }
+  }
+
+  return { accessToken, platformAccountId: account.platformAccountId };
 }
 
 /** Get a decrypted access token for a specific connected platform. */
@@ -107,7 +155,7 @@ async function containerReady(
     } catch {
       // Fall through to the delay: publishing may still succeed.
     }
-    await new Promise((r) => setTimeout(r, 1500));
+    await delay(1500);
   }
   return "unknown";
 }
@@ -318,34 +366,83 @@ async function publishToX(userId: string, text: string): Promise<PublishResult> 
   }
 }
 
+/** `media_type` values the Threads publishing API accepts for our post kinds. */
+type ThreadsMediaType = "TEXT" | "IMAGE" | "VIDEO";
+
+const VIDEO_URL_PATTERN = /\.(mp4|mov|m4v|webm)(\?.*)?$/i;
+
+/**
+ * Pick the Threads `media_type` for a post.
+ *
+ * The composer supplies a single media URL, so the kind is read off the URL
+ * (docs: IMAGE posts take `image_url`, VIDEO posts take `video_url`). Anything
+ * that is not recognisably a video is treated as an image, which is what the
+ * composer's URL field has always meant.
+ */
+function threadsMediaType(mediaUrl?: string): ThreadsMediaType {
+  if (!mediaUrl) return "TEXT";
+  return VIDEO_URL_PATTERN.test(mediaUrl) ? "VIDEO" : "IMAGE";
+}
+
+/**
+ * How long to wait for a container to finish processing, per media type.
+ *
+ * Meta's guidance for the Threads API is that an app "should wait an average of
+ * 30 seconds" after creating a container before calling `threads_publish`, and
+ * video processing takes longer than images. Text containers are FINISHED as
+ * soon as they are created, so they only need a token check.
+ *
+ * Note: this blocks the request for up to 60s on a video post — well within a
+ * Node server's budget, but a serverless plan with a lower function timeout
+ * should lower `VIDEO` accordingly.
+ */
+const THREADS_CONTAINER_BUDGET_MS: Record<ThreadsMediaType, number> = {
+  TEXT: 6_000,
+  IMAGE: 30_000,
+  VIDEO: 60_000,
+};
+
+/** Gap between container status polls. */
+const THREADS_CONTAINER_POLL_MS = 3_000;
+
 /**
  * Wait for a Threads media container to finish processing.
  *
  * The Threads container reports `status` (not Instagram's `status_code`) and an
- * `error_message`, per the Threads troubleshooting guide. Text containers are
- * normally FINISHED straight away; images can take longer.
+ * `error_message`, per the Threads troubleshooting guide.
  */
 async function threadsContainerReady(
   containerId: string,
   token: string,
-  attempts = 4
+  mediaType: ThreadsMediaType
 ): Promise<"ready" | "failed" | "unknown"> {
-  for (let i = 0; i < attempts; i++) {
+  const deadline = Date.now() + THREADS_CONTAINER_BUDGET_MS[mediaType];
+
+  for (;;) {
     try {
       const res = await fetch(
         `${GRAPH_THREADS}/${containerId}?fields=status,error_message&access_token=${encodeURIComponent(token)}`
       );
       if (res.ok) {
-        const { status } = (await res.json()) as { status?: string };
+        const { status, error_message } = (await res.json()) as {
+          status?: string;
+          error_message?: string;
+        };
         if (status === "FINISHED" || status === "PUBLISHED") return "ready";
-        if (status === "ERROR" || status === "EXPIRED") return "failed";
+        if (status === "ERROR" || status === "EXPIRED") {
+          if (error_message) {
+            console.warn(`[threads] container ${containerId} failed: ${error_message}`);
+          }
+          return "failed";
+        }
       }
     } catch {
       // Fall through to the delay: publishing may still succeed.
     }
-    await new Promise((r) => setTimeout(r, 1500));
+
+    if (Date.now() >= deadline) return "unknown";
+    await delay(THREADS_CONTAINER_POLL_MS);
   }
-  return "unknown";
 }
 
 /** Public permalink of a published Threads post (best effort, see Instagram). */
@@ -368,7 +465,9 @@ async function threadsPermalink(
 /**
  * Publish to Threads via the Threads API.
  * Same container flow as Instagram: create container → wait → publish.
- * Text-only posts are supported here (500-character limit).
+ *
+ * Text-only posts are supported here (500-character limit), images take
+ * `image_url`, and video takes `video_url`.
  *
  * Docs: POST /{threads-user-id}/threads → POST /{threads-user-id}/threads_publish
  */
@@ -389,18 +488,23 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
 
   const token = account.accessToken;
   const threadsUserId = account.platformAccountId;
+  const mediaType = threadsMediaType(imageUrl);
 
   try {
-    // Step 1: create the container. `media_type=TEXT` is text-only.
+    // Step 1: create the container. The media URL field is named after the
+    // media type — sending a video URL as `image_url` (or vice versa) fails.
+    const containerParams: Record<string, string> = {
+      media_type: mediaType,
+      text,
+      access_token: token,
+    };
+    if (imageUrl && mediaType === "IMAGE") containerParams.image_url = imageUrl;
+    if (imageUrl && mediaType === "VIDEO") containerParams.video_url = imageUrl;
+
     const containerRes = await fetch(`${GRAPH_THREADS}/${threadsUserId}/threads`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        media_type: imageUrl ? "IMAGE" : "TEXT",
-        text,
-        ...(imageUrl ? { image_url: imageUrl } : {}),
-        access_token: token,
-      }).toString(),
+      body: new URLSearchParams(containerParams).toString(),
     });
 
     if (!containerRes.ok) {
@@ -418,7 +522,7 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
     }
 
     // Step 2: wait for the container to finish processing.
-    const ready = await threadsContainerReady(containerId, token);
+    const ready = await threadsContainerReady(containerId, token, mediaType);
     if (ready === "failed") {
       return {
         platform: "threads",

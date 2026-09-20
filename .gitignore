@@ -33,6 +33,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template is a placeholder-only file referenced by README.md, so it
+# is committed: without this negation the docs link to a file that isn't there.
+!.env.example
 
 # vercel
 .vercel

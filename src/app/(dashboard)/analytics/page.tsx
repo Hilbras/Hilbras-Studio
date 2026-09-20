@@ -16,10 +16,10 @@ import { BlurFade } from "@/components/motion/blur-fade";
 import { getAnalyticsData } from "@/app/actions/analytics";
 import { getWeeklyChartData } from "@/app/actions/dashboard";
 import {
-  LazyReachChart,
+  LazyPublishingChart,
   LazyPlatformBreakdown,
-  LazyEngagementChart,
-  TopPostsClient,
+  LazyPublishStatsChart,
+  RecentPostsClient,
 } from "./analytics-clients";
 
 export default async function AnalyticsPage() {
@@ -60,8 +60,8 @@ export default async function AnalyticsPage() {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <div>
-                      <CardTitle>Reach Over Time</CardTitle>
-                      <CardDescription>Impressions this week</CardDescription>
+                      <CardTitle>Publishing Over Time</CardTitle>
+                      <CardDescription>Posts published this week</CardDescription>
                     </div>
                     <Badge variant="gold" className="gap-1">
                       <TrendingUp className="size-3" /> Weekly
@@ -69,7 +69,7 @@ export default async function AnalyticsPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <LazyReachChart data={weeklyChart} />
+                  <LazyPublishingChart data={weeklyChart} />
                 </CardContent>
               </Card>
             </BlurFade>
@@ -89,24 +89,24 @@ export default async function AnalyticsPage() {
             </BlurFade>
           </div>
 
-          {/* Middle row: engagement */}
+          {/* Middle row: what actually happened when we published */}
           <BlurFade delay={0.15}>
             <Card className="hover:shadow-xl hover:shadow-gold-500/10 transition-shadow duration-300 h-full">
               <CardHeader>
-                <CardTitle>Engagement by Platform</CardTitle>
-                <CardDescription>Likes, comments, and shares</CardDescription>
+                <CardTitle>Publish Results by Platform</CardTitle>
+                <CardDescription>
+                  Successful and failed publish attempts
+                </CardDescription>
               </CardHeader>
               <CardContent>
-                <LazyEngagementChart
-                  data={analyticsData.engagementByPlatform}
-                />
+                <LazyPublishStatsChart data={analyticsData.publishStats} />
               </CardContent>
             </Card>
           </BlurFade>
 
-          {/* Top performing posts */}
+          {/* Most recent posts (recency, not invented engagement scores) */}
           <BlurFade delay={0.25}>
-            <TopPostsClient posts={analyticsData.topPosts} />
+            <RecentPostsClient posts={analyticsData.recentPosts} />
           </BlurFade>
         </div>
       </div>

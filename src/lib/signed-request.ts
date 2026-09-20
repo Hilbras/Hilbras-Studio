@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { storedCredentials } from "@/db/schema";
@@ -45,20 +45,58 @@ export function parseSignedRequest(
 }
 
 /**
- * Read the Threads app secret directly from the DB without a session check —
- * Meta's servers call these callbacks, so no user cookie will be present.
+ * Every Threads app secret a callback could legitimately have been signed with,
+ * most recently saved first.
+ *
+ * These webhooks are called by Meta's servers, so there is no session and the
+ * secret cannot be looked up per user — it has to be every candidate we know
+ * about. A secret can live in two places:
+ *
+ *   1. the Settings UI, which stores one encrypted row per user
+ *   2. `THREADS_CLIENT_SECRET`, the setup described in docs/THREADS_SETUP.md
+ *
+ * Both are collected, and the signature is checked against each in turn. That
+ * also means a secret rotated in the UI keeps verifying callbacks signed with
+ * the previous secret until Meta switches over.
  */
-export async function readThreadsAppSecret(): Promise<string | null> {
-  const [row] = await db
+export async function readThreadsAppSecrets(): Promise<string[]> {
+  const rows = await db
     .select({ encryptedValue: storedCredentials.encryptedValue })
     .from(storedCredentials)
     .where(eq(storedCredentials.keyName, "threads_client_secret"))
-    .limit(1);
+    .orderBy(desc(storedCredentials.updatedAt));
 
-  if (!row?.encryptedValue) return null;
-  try {
-    return decryptSecret(row.encryptedValue);
-  } catch {
-    return null;
+  const secrets: string[] = [];
+  const add = (secret: string | null | undefined) => {
+    const trimmed = secret?.trim();
+    if (trimmed && !secrets.includes(trimmed)) secrets.push(trimmed);
+  };
+
+  for (const row of rows) {
+    if (!row.encryptedValue) continue;
+    try {
+      add(decryptSecret(row.encryptedValue));
+    } catch {
+      // Row can't be decrypted (e.g. the encryption key changed) — skip it
+      // rather than failing every candidate.
+    }
   }
+
+  add(process.env.THREADS_CLIENT_SECRET);
+  return secrets;
+}
+
+/**
+ * Verify a Meta `signed_request` against any of the candidate secrets and
+ * return its payload, or null when none of them match.
+ */
+export function verifyThreadsSignedRequest(
+  signedRequest: string,
+  secrets: string[]
+): Record<string, unknown> | null {
+  for (const secret of secrets) {
+    const payload = parseSignedRequest(signedRequest, secret);
+    if (payload) return payload;
+  }
+  return null;
 }

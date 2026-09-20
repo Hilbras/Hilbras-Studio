@@ -16,23 +16,12 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { Flame } from "lucide-react";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { PlatformIcon } from "@/components/platform-icon";
-import { NumberTicker } from "@/components/motion/number-ticker";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
 import type { WeeklyChartPoint } from "@/app/actions/dashboard";
 import type {
   PlatformBreakdown,
-  EngagementByPlatform,
+  PlatformPublishStats,
 } from "@/app/actions/analytics";
 
 const chartTooltipStyle = {
@@ -43,7 +32,7 @@ const chartTooltipStyle = {
   boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
 };
 
-export function ReachChartClient({ data }: { data: WeeklyChartPoint[] }) {
+export function PublishingChartClient({ data }: { data: WeeklyChartPoint[] }) {
   return (
     <div className="h-72">
       <ResponsiveContainer width="100%" height="100%">
@@ -65,9 +54,12 @@ export function ReachChartClient({ data }: { data: WeeklyChartPoint[] }) {
             tickLine={false}
           />
           <Tooltip contentStyle={chartTooltipStyle} />
+          {/* `posts` is the only series the posts table can actually supply —
+              impressions need the platform insights APIs and their scopes. */}
           <Line
             type="monotone"
-            dataKey="reach"
+            dataKey="posts"
+            name="Posts"
             stroke="var(--color-gold-500)"
             strokeWidth={2.5}
             dot={{ fill: "var(--color-gold-500)", strokeWidth: 0, r: 4 }}
@@ -77,13 +69,6 @@ export function ReachChartClient({ data }: { data: WeeklyChartPoint[] }) {
               stroke: "var(--color-background)",
               r: 7,
             }}
-          />
-          <Line
-            type="monotone"
-            dataKey="engagement"
-            stroke="var(--color-gold-300)"
-            strokeWidth={2}
-            dot={{ fill: "var(--color-gold-300)", strokeWidth: 0, r: 3 }}
           />
         </LineChart>
       </ResponsiveContainer>
@@ -148,15 +133,15 @@ export function PlatformBreakdownClient({
   );
 }
 
-export function EngagementChartClient({
+export function PublishStatsChartClient({
   data,
 }: {
-  data: EngagementByPlatform[];
+  data: PlatformPublishStats[];
 }) {
   if (data.length === 0) {
     return (
       <div className="h-72 flex items-center justify-center text-sm text-muted-foreground">
-        No engagement data yet. Publish some posts!
+        No publish attempts yet. Publish a post to see results here.
       </div>
     );
   }
@@ -177,6 +162,7 @@ export function EngagementChartClient({
             tickLine={false}
           />
           <YAxis
+            allowDecimals={false}
             tick={{ fill: "var(--color-muted-foreground)" }}
             axisLine={false}
             tickLine={false}
@@ -184,18 +170,15 @@ export function EngagementChartClient({
           <Tooltip contentStyle={chartTooltipStyle} />
           <Legend />
           <Bar
-            dataKey="likes"
+            dataKey="published"
+            name="Published"
             fill="var(--color-gold-500)"
             radius={[6, 6, 0, 0]}
           />
           <Bar
-            dataKey="comments"
-            fill="var(--color-gold-300)"
-            radius={[6, 6, 0, 0]}
-          />
-          <Bar
-            dataKey="shares"
-            fill="var(--color-gold-700)"
+            dataKey="failed"
+            name="Failed"
+            fill="#ef4444"
             radius={[6, 6, 0, 0]}
           />
         </BarChart>

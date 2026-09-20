@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { socialAccounts } from "@/db/schema";
-import { parseSignedRequest, readThreadsAppSecret } from "@/lib/signed-request";
+import { readThreadsAppSecrets, verifyThreadsSignedRequest } from "@/lib/signed-request";
 
 /**
  * Delete Callback (Meta data-deletion request).
@@ -29,15 +29,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing signed_request" }, { status: 400 });
   }
 
-  const appSecret = await readThreadsAppSecret();
-  if (!appSecret) {
+  const secrets = await readThreadsAppSecrets();
+  if (secrets.length === 0) {
     return NextResponse.json(
       { error: "app secret not configured" },
       { status: 500 }
     );
   }
 
-  const payload = parseSignedRequest(signedRequest, appSecret);
+  const payload = verifyThreadsSignedRequest(signedRequest, secrets);
   const userId =
     payload && typeof payload.user_id === "string" ? payload.user_id : null;
 

@@ -28,8 +28,8 @@ export function WeeklyChartClient({ data }: { data: WeeklyChartPoint[] }) {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div>
-              <CardTitle>Weekly Reach</CardTitle>
-              <CardDescription>Impressions across all platforms</CardDescription>
+              <CardTitle>Weekly Publishing</CardTitle>
+              <CardDescription>Posts published across all platforms</CardDescription>
             </div>
             <motion.div whileHover={{ scale: 1.05 }}>
               <Badge variant="gold">This Week</Badge>
@@ -81,9 +81,13 @@ export function WeeklyChartClient({ data }: { data: WeeklyChartPoint[] }) {
                     boxShadow: "0 8px 32px rgba(0,0,0,0.12)",
                   }}
                 />
+                {/* `posts` is the only real series available: impressions need
+                    the platform insights APIs (Threads: threads_manage_insights),
+                    which this app does not request yet. */}
                 <Area
                   type="monotone"
-                  dataKey="reach"
+                  dataKey="posts"
+                  name="Posts"
                   stroke="var(--color-gold-500)"
                   fill="url(#goldGrad)"
                   strokeWidth={2.5}

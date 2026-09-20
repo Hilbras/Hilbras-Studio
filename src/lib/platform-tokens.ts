@@ -42,6 +42,61 @@ export function supportsLongLivedToken(platform: string): boolean {
 }
 
 /**
+ * Refresh endpoints for long-lived tokens.
+ *
+ * Unlike the short→long exchange, refreshing does **not** take the app secret —
+ * only `grant_type` and the existing long-lived `access_token`. Per the docs the
+ * token must be at least 24 hours old and not yet expired, and each refresh
+ * grants another 60 days. A token left unrefreshed for 60 days is dead.
+ *
+ * Docs: Instagram GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token
+ *       Threads   GET https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token
+ */
+const REFRESH_ENDPOINTS: Partial<Record<string, { url: string; grantType: string }>> = {
+  instagram: {
+    url: "https://graph.instagram.com/refresh_access_token",
+    grantType: "ig_refresh_token",
+  },
+  threads: {
+    url: "https://graph.threads.net/refresh_access_token",
+    grantType: "th_refresh_token",
+  },
+};
+
+/** Whether a long-lived token for this platform can be refreshed in place. */
+export function supportsTokenRefresh(platform: string): boolean {
+  return Boolean(REFRESH_ENDPOINTS[platform]);
+}
+
+/** Shared GET-and-parse for the token endpoints (exchange and refresh). */
+async function fetchToken(
+  platform: string,
+  url: string
+): Promise<LongLivedToken | null> {
+  try {
+    const res = await fetch(url, { method: "GET" });
+    const body = (await res.json().catch(() => ({}))) as MetaTokenResponse;
+
+    if (!res.ok || !body.access_token) {
+      console.warn(
+        `[${platform}] token request failed (${res.status}) ${
+          body.error?.message ?? ""
+        }`.trim()
+      );
+      return null;
+    }
+
+    return { accessToken: body.access_token, expiresIn: body.expires_in ?? null };
+  } catch (e) {
+    console.warn(
+      `[${platform}] token request errored`,
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
+}
+
+/**
  * Exchange a short-lived token for a long-lived one.
  *
  * Returns null when the platform has no long-lived exchange or the upgrade
@@ -61,25 +116,26 @@ export async function exchangeForLongLivedToken(
   url.searchParams.set("client_secret", clientSecret);
   url.searchParams.set("access_token", shortLivedToken);
 
-  try {
-    const res = await fetch(url.toString(), { method: "GET" });
-    const body = (await res.json().catch(() => ({}))) as MetaTokenResponse;
+  return fetchToken(platform, url.toString());
+}
 
-    if (!res.ok || !body.access_token) {
-      console.warn(
-        `[${platform}] long-lived token exchange failed (${res.status}) ${
-          body.error?.message ?? ""
-        }`.trim()
-      );
-      return null;
-    }
+/**
+ * Refresh a long-lived token, extending its life by another 60 days.
+ *
+ * Called before a token is about to expire (see the publish path). Returns null
+ * if the platform cannot refresh or the refresh fails, in which case the caller
+ * keeps using the existing token until it really does expire.
+ */
+export async function refreshLongLivedToken(
+  platform: string,
+  longLivedToken: string
+): Promise<LongLivedToken | null> {
+  const endpoint = REFRESH_ENDPOINTS[platform];
+  if (!endpoint) return null;
 
-    return { accessToken: body.access_token, expiresIn: body.expires_in ?? null };
-  } catch (e) {
-    console.warn(
-      `[${platform}] long-lived token exchange errored`,
-      e instanceof Error ? e.message : e
-    );
-    return null;
-  }
+  const url = new URL(endpoint.url);
+  url.searchParams.set("grant_type", endpoint.grantType);
+  url.searchParams.set("access_token", longLivedToken);
+
+  return fetchToken(platform, url.toString());
 }

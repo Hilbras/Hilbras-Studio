@@ -22,6 +22,7 @@ import {
   Trash2,
   Eye,
   ChevronDown,
+  Film,
 } from "lucide-react";
 
 import {
@@ -69,6 +70,8 @@ export default function ComposerPage() {
   const [loading, setLoading] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [imageUrl, setImageUrl] = React.useState("");
+  /** Lets the media button jump to the field that publishes actually read. */
+  const mediaInputRef = React.useRef<HTMLInputElement>(null);
   const [publishing, setPublishing] = React.useState(false);
   const [publishResults, setPublishResults] = React.useState<
     Array<{ platform: string; success: boolean; postId?: string; error?: string; url?: string }>
@@ -256,8 +259,13 @@ export default function ComposerPage() {
 
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" className="gap-1 rounded-xl">
-                          <ImagePlus className="size-3" /> Add Image URL
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1 rounded-xl"
+                          onClick={() => mediaInputRef.current?.focus()}
+                        >
+                          <ImagePlus className="size-3" /> Add Media URL
                         </Button>
                         <span className="text-[10px] text-muted-foreground">
                           {draft.length} characters
@@ -275,14 +283,14 @@ export default function ComposerPage() {
               </Ripple>
             </BlurFade>
 
-            {/* Image URL */}
+            {/* Media URL */}
             <BlurFade delay={0.12}>
               <Card className="hover:shadow-lg transition-shadow duration-300">
                 <CardContent className="p-4">
-                  <Label htmlFor="imageUrl" className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1.5">
-                    <ImagePlus className="size-3" /> Image URL (required for Instagram)
+                  <Label htmlFor="mediaUrl" className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1.5">
+                    <Film className="size-3" /> Media URL — required for Instagram, and for Threads image/video posts
                   </Label>
-                  <Input id="imageUrl" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg" className="rounded-xl text-sm" />
+                  <Input ref={mediaInputRef} id="mediaUrl" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg — a .mp4/.mov link posts as Threads video" className="rounded-xl text-sm" />
                 </CardContent>
               </Card>
             </BlurFade>

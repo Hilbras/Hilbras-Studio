@@ -52,37 +52,38 @@ export async function signUpAction(
 
   const { name, username, email, password } = parsed.data;
 
-  // Check for existing account
-  const [clash] = await db
-    .select({ email: users.email, username: users.username })
-    .from(users)
-    .where(or(eq(users.email, email), eq(users.username, username)))
-    .limit(1);
+  try {
+    const [clash] = await db
+      .select({ email: users.email, username: users.username })
+      .from(users)
+      .where(or(eq(users.email, email), eq(users.username, username)))
+      .limit(1);
 
-  if (clash) {
-    return {
-      error:
-        clash.email === email
-          ? "An account with this email already exists"
-          : "That username is already taken",
-    };
+    if (clash) {
+      return {
+        error:
+          clash.email === email
+            ? "An account with this email already exists"
+            : "That username is already taken",
+      };
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const userId = randomUUID();
+
+    await db.insert(users).values({
+      id: userId,
+      name,
+      username,
+      email,
+      passwordHash,
+    });
+
+    await createSession(userId);
+    return { success: true };
+  } catch (e: any) {
+    return { error: e?.message?.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
   }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  const userId = randomUUID();
-
-  await db.insert(users).values({
-    id: userId,
-    name,
-    username,
-    email,
-    passwordHash,
-  });
-
-  // Set session cookie — must happen before any redirect
-  await createSession(userId);
-
-  return { success: true };
 }
 
 /** Verify credentials (email OR username) and start a session. */
@@ -104,31 +105,31 @@ export async function signInAction(
 
   const { identifier, password } = parsed.data;
 
-  // Look up user by email or username
-  const [user] = await db
-    .select({ id: users.id, passwordHash: users.passwordHash })
-    .from(users)
-    .where(
-      identifier.includes("@")
-        ? eq(users.email, identifier)
-        : eq(users.username, identifier)
-    )
-    .limit(1);
+  try {
+    const [user] = await db
+      .select({ id: users.id, passwordHash: users.passwordHash })
+      .from(users)
+      .where(
+        identifier.includes("@")
+          ? eq(users.email, identifier)
+          : eq(users.username, identifier)
+      )
+      .limit(1);
 
-  if (!user) {
-    return { error: "No account found with that email or username" };
+    if (!user) {
+      return { error: "No account found with that email or username" };
+    }
+
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return { error: "Incorrect password. Please try again." };
+    }
+
+    await createSession(user.id);
+    return { success: true };
+  } catch (e: any) {
+    return { error: e?.message?.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
   }
-
-  // Async bcrypt compare — never block the event loop
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
-    return { error: "Incorrect password. Please try again." };
-  }
-
-  // Set session cookie — must happen before any redirect
-  await createSession(user.id);
-
-  return { success: true };
 }
 
 /** End the session and go to the landing page. */

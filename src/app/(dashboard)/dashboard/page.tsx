@@ -1,28 +1,17 @@
 import Link from "next/link";
 import {
-  ArrowUpRight,
-  TrendingUp,
-  TrendingDown,
   Plus,
   Sparkles,
   ExternalLink,
-  Eye,
-  MessageSquare,
-  Zap,
-  Send,
-  Clock,
 } from "lucide-react";
+import { Suspense } from "react";
+import dynamic from "next/dynamic";
 
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { PlatformIcon } from "@/components/platform-icon";
 import { GradientMesh } from "@/components/motion/gradient-mesh";
 import { WordReveal } from "@/components/motion/word-reveal";
 import { MagneticButton } from "@/components/motion/magnetic-button";
@@ -38,10 +27,14 @@ import {
 } from "@/app/actions/dashboard";
 import {
   StatCardsClient,
-  WeeklyChartClient,
   RecentActivityClient,
   ConnectedAccountsClient,
 } from "./dashboard-clients";
+
+const WeeklyChartClient = dynamic(
+  () => import("./dashboard-clients").then((m) => m.WeeklyChartClient),
+  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
+);
 
 export default async function DashboardPage() {
   const [stats, activity, chartData, accounts] = await Promise.all([
@@ -124,7 +117,9 @@ export default async function DashboardPage() {
           <StatCardsClient stats={stats} />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <Suspense fallback={<div className="h-72 animate-pulse rounded-xl bg-muted" />}>
             <WeeklyChartClient data={chartData} />
+          </Suspense>
             <RecentActivityClient activity={activity} />
           </div>
 

@@ -1,6 +1,5 @@
 "use client";
 
-import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -18,7 +17,6 @@ import {
 import { cn } from "@/components/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
 import type { Platform } from "@/components/platform-icon";
-import { getConnectedPlatforms } from "@/app/actions/posts";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -34,16 +32,13 @@ const NAV_ITEMS = [
 export function Sidebar({
   collapsed,
   onToggle,
+  connectedPlatforms = [],
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  connectedPlatforms?: Platform[];
 }) {
   const pathname = usePathname();
-  const [connectedPlatforms, setConnectedPlatforms] = React.useState<Platform[]>([]);
-
-  React.useEffect(() => {
-    getConnectedPlatforms().then((p) => setConnectedPlatforms(p as Platform[]));
-  }, []);
 
   return (
     <aside

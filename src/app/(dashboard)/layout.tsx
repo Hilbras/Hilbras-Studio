@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { requireSessionUser } from "@/lib/session";
+import { getConnectedPlatforms } from "@/app/actions/posts";
 
 export default async function DashboardLayout({
   children,
@@ -7,6 +8,7 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const user = await requireSessionUser();
+  const platforms = await getConnectedPlatforms();
 
   return (
     <AppShell
@@ -15,6 +17,7 @@ export default async function DashboardLayout({
         email: user.email,
         username: user.username,
       }}
+      connectedPlatforms={platforms as any}
     >
       {children}
     </AppShell>

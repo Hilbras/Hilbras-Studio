@@ -1,11 +1,11 @@
 "use client";
 
 import * as React from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Bell, Search, Command, LogOut } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { PageTransition } from "@/components/page-transition";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { signOutAction } from "@/app/actions/auth";
+import type { Platform } from "@/components/platform-icon";
+
+const PageTransition = dynamic(
+  () => import("@/components/page-transition").then((m) => m.PageTransition),
+  { ssr: false }
+);
 
 export interface ShellUser {
   name?: string | null;
@@ -34,9 +40,11 @@ function initials(name?: string | null, email?: string | null): string {
 export function AppShell({
   children,
   user,
+  connectedPlatforms,
 }: {
   children: React.ReactNode;
   user: ShellUser;
+  connectedPlatforms: Platform[];
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
   const router = useRouter();
@@ -53,6 +61,7 @@ export function AppShell({
       <Sidebar
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}
+        connectedPlatforms={connectedPlatforms}
       />
 
       <div className="flex flex-col flex-1 min-w-0">
@@ -62,7 +71,7 @@ export function AppShell({
             <Search className="size-4 text-muted-foreground" />
             <div className="relative flex-1">
               <Input
-                placeholder="Search across all platforms…"
+                placeholder="Search across all platforms..."
                 autoComplete="off"
                 className="border-none bg-muted/50 shadow-none focus-visible:ring-2 focus-visible:ring-gold-500/30 h-9 rounded-xl text-sm"
               />

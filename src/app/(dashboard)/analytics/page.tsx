@@ -1,4 +1,6 @@
 import { Download, TrendingUp } from "lucide-react";
+import { Suspense } from "react";
+import dynamic from "next/dynamic";
 
 import {
   Card,
@@ -15,12 +17,23 @@ import { MagneticButton } from "@/components/motion/magnetic-button";
 import { BlurFade } from "@/components/motion/blur-fade";
 import { getAnalyticsData } from "@/app/actions/analytics";
 import { getWeeklyChartData } from "@/app/actions/dashboard";
-import {
-  ReachChartClient,
-  PlatformBreakdownClient,
-  EngagementChartClient,
-  TopPostsClient,
-} from "./analytics-clients";
+
+const ReachChartClient = dynamic(
+  () => import("./analytics-clients").then((m) => m.ReachChartClient),
+  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
+);
+const PlatformBreakdownClient = dynamic(
+  () => import("./analytics-clients").then((m) => m.PlatformBreakdownClient),
+  { ssr: false, loading: () => <div className="h-56 animate-pulse rounded-xl bg-muted" /> }
+);
+const EngagementChartClient = dynamic(
+  () => import("./analytics-clients").then((m) => m.EngagementChartClient),
+  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
+);
+const TopPostsClient = dynamic(
+  () => import("./analytics-clients").then((m) => m.TopPostsClient),
+  { ssr: false, loading: () => <div className="h-48 animate-pulse rounded-xl bg-muted" /> }
+);
 
 export default async function AnalyticsPage() {
   const [analyticsData, weeklyChart] = await Promise.all([

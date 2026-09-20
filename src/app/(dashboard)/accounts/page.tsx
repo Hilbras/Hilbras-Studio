@@ -2,7 +2,7 @@
 
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Card,
@@ -48,7 +48,6 @@ import {
 type TestResult = { valid: boolean; message: string };
 
 export default function AccountsPage() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const connectedPlatform = searchParams.get("connected");
   const errorParam = searchParams.get("error");
@@ -94,19 +93,10 @@ export default function AccountsPage() {
       paramsHandledRef.current = true;
       setShowFeedback(true);
       refreshData();
-
-      const url = new URL(window.location.href);
-      url.searchParams.delete("connected");
-      url.searchParams.delete("error");
-
-      requestAnimationFrame(() => {
-        router.replace(url.pathname + url.search, { scroll: false });
-      });
-
       const t = setTimeout(() => setShowFeedback(false), 5000);
       return () => clearTimeout(t);
     }
-  }, [connectedPlatform, errorParam, refreshData, router]);
+  }, [connectedPlatform, errorParam, refreshData]);
 
   const openModal = async (platform: string) => {
     setSelectedPlatform(platform);

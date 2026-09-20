@@ -470,6 +470,7 @@ function Footer() {
           <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
             <a href="#features" className="hover:text-foreground">Features</a>
             <Link href="/pricing" className="hover:text-foreground">Pricing</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
             <Link href="/login" className="hover:text-foreground">Sign in</Link>
             <Link href="/signup" className="hover:text-foreground">Get started</Link>
           </nav>

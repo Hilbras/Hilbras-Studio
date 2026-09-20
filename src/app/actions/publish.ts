@@ -1,6 +1,6 @@
 "use server";
 
-import { publishPost, publishToAll } from "@/lib/publish";
+import { publishPost, publishToAll, type PublishResult } from "@/lib/publish";
 
 export interface PublishActionState {
   error?: string;
@@ -72,4 +72,39 @@ export async function publishToAllAction(
     error: `Failed to publish: ${failures.map((f) => f.error).join("; ")}`,
     results,
   };
+}
+
+/**
+ * Publish now, with positional arguments — what the Composer calls.
+ *
+ * `@/lib/publish` holds the platform HTTP connectors and is a plain server
+ * module, so a client component cannot import it directly. These actions are the
+ * client-facing entry points; both resolve the user from the session, so neither
+ * can be aimed at another account.
+ */
+export async function publishPostNowAction(
+  platform: string,
+  text: string,
+  imageUrl?: string
+): Promise<PublishResult[]> {
+  if (!text?.trim()) return [{ platform, success: false, error: "Post content is required" }];
+  if (!platform) return [{ platform: "unknown", success: false, error: "Select a platform" }];
+
+  return [await publishPost(platform, text.trim(), imageUrl)];
+}
+
+/** Publish one draft to several platforms now — the Composer's main path. */
+export async function publishToAllNowAction(
+  text: string,
+  imageUrl?: string,
+  platforms?: string[]
+): Promise<PublishResult[]> {
+  if (!text?.trim()) {
+    return [{ platform: "all", success: false, error: "Post content is required" }];
+  }
+  if (!platforms?.length) {
+    return [{ platform: "all", success: false, error: "Select at least one platform" }];
+  }
+
+  return publishToAll(text.trim(), imageUrl, platforms);
 }

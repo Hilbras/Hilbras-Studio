@@ -17,6 +17,7 @@ import { BlurFade } from "@/components/motion/blur-fade";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { getScheduledPosts } from "@/app/actions/posts";
 import { SchedulerGridClient } from "./scheduler-clients";
+import { PublishDueButton } from "./publish-due-button";
 
 function getWeekRange(offset = 0) {
   const today = new Date();
@@ -58,6 +59,7 @@ export default async function SchedulerPage() {
             <span className="text-sm font-medium px-2">
               {formatDate(monday)} – {formatDate(sunday)}
             </span>
+            <PublishDueButton />
             <MagneticButton strength={0.15}>
               <Link href="/composer">
                 <Button variant="gold" size="sm" className="gap-1 rounded-xl ml-2">

@@ -1,4 +1,4 @@
-"use server";
+import "server-only";
 
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
@@ -11,7 +11,7 @@ import {
 } from "@/lib/platform-tokens";
 import { getSessionUser } from "@/lib/session";
 
-interface PublishResult {
+export interface PublishResult {
   platform: string;
   success: boolean;
   postId?: string;
@@ -564,26 +564,31 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
   }
 }
 
+/** Platforms `publishToAll` targets when the caller doesn't name any. */
+const DEFAULT_TARGET_PLATFORMS = ["instagram", "facebook", "x", "threads"];
+
 /**
- * Main publish function — routes to the right platform connector.
+ * Route one platform to its connector on behalf of a specific user.
+ *
+ * The user id is passed in rather than taken from the session because the
+ * scheduled-post runner publishes for users who are not making a request —
+ * a cron invocation has no session cookie.
  */
-export async function publishPost(
+async function publishForUser(
+  userId: string,
   platform: string,
   text: string,
   imageUrl?: string
 ): Promise<PublishResult> {
-  const session = await getSessionUser();
-  if (!session) return { platform, success: false, error: "Not signed in" };
-
   switch (platform) {
     case "instagram":
-      return publishToInstagram(session.id, text, imageUrl);
+      return publishToInstagram(userId, text, imageUrl);
     case "facebook":
-      return publishToFacebook(session.id, text, imageUrl);
+      return publishToFacebook(userId, text, imageUrl);
     case "x":
-      return publishToX(session.id, text);
+      return publishToX(userId, text);
     case "threads":
-      return publishToThreads(session.id, text, imageUrl);
+      return publishToThreads(userId, text, imageUrl);
     default:
       return {
         platform,
@@ -594,7 +599,41 @@ export async function publishPost(
 }
 
 /**
- * Publish to all connected platforms at once.
+ * Publish to several platforms as a specific user, with no session involved.
+ *
+ * Only for trusted server callers (the scheduled-post runner). The user id comes
+ * from the caller, so this must never be reachable from the browser: the file is
+ * a plain server module rather than a `"use server"` one for exactly that reason.
+ */
+export async function publishToAllForUser(
+  userId: string,
+  text: string,
+  imageUrl?: string,
+  platforms?: string[]
+): Promise<PublishResult[]> {
+  const targetPlatforms = platforms ?? DEFAULT_TARGET_PLATFORMS;
+  return Promise.all(
+    targetPlatforms.map((p) => publishForUser(userId, p, text, imageUrl))
+  );
+}
+
+/**
+ * Main publish function — routes to the right platform connector for the
+ * signed-in user.
+ */
+export async function publishPost(
+  platform: string,
+  text: string,
+  imageUrl?: string
+): Promise<PublishResult> {
+  const session = await getSessionUser();
+  if (!session) return { platform, success: false, error: "Not signed in" };
+
+  return publishForUser(session.id, platform, text, imageUrl);
+}
+
+/**
+ * Publish to all connected platforms at once for the signed-in user.
  */
 export async function publishToAll(
   text: string,
@@ -604,9 +643,5 @@ export async function publishToAll(
   const session = await getSessionUser();
   if (!session) return [{ platform: "all", success: false, error: "Not signed in" }];
 
-  const targetPlatforms = platforms ?? ["instagram", "facebook", "x", "threads"];
-  const results = await Promise.all(
-    targetPlatforms.map((p) => publishPost(p, text, imageUrl))
-  );
-  return results;
+  return publishToAllForUser(session.id, text, imageUrl, platforms);
 }

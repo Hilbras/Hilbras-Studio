@@ -47,7 +47,7 @@ import { Ripple } from "@/components/motion/ripple";
 import { OrbitingDots } from "@/components/motion/orbiting-dots";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
 import { processAssistantMessage } from "@/app/actions/ai";
-import { publishPost, publishToAll } from "@/lib/publish";
+import { publishToAllNowAction } from "@/app/actions/publish";
 import { createPostAction, listPosts, deletePost, markPublished, getConnectedPlatforms, getConfiguredPlatforms } from "@/app/actions/posts";
 
 const AI_SUGGESTIONS = [
@@ -160,7 +160,7 @@ export default function ComposerPage() {
       }
 
       // Publish immediately
-      const results = await publishToAll(draft, imageUrl || undefined, selected);
+      const results = await publishToAllNowAction(draft, imageUrl || undefined, selected);
       setPublishResults(results);
 
       // Save results

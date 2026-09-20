@@ -5,6 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { posts, socialAccounts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
+import { publishDuePosts } from "@/lib/scheduled-posts";
 
 export interface PostItem {
   id: string;
@@ -168,4 +169,32 @@ export async function deletePost(postId: string): Promise<{ ok: boolean }> {
     .where(and(eq(posts.id, postId), eq(posts.userId, session.id)));
 
   return { ok: true };
+}
+
+/** Summary the Scheduler's "Publish due now" button renders. */
+export interface PublishDueResult {
+  error?: string;
+  processed?: number;
+  published?: number;
+  failed?: number;
+}
+
+/**
+ * Publish every post that is due right now for the signed-in user.
+ *
+ * Backs the Scheduler's "Publish due now" button. Vercel's cron can only run once
+ * a day on the Hobby plan, so this is how a due post goes out on time without an
+ * upgrade — and it doubles as a manual catch-up after a failed run.
+ */
+export async function publishDuePostsAction(): Promise<PublishDueResult> {
+  const session = await getSessionUser();
+  if (!session) return { error: "Not signed in" };
+
+  const summary = await publishDuePosts({ userId: session.id });
+
+  return {
+    processed: summary.processed,
+    published: summary.published,
+    failed: summary.failed,
+  };
 }

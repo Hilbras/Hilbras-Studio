@@ -104,7 +104,7 @@ export default function AccountsPage() {
       const url = new URL(window.location.href);
       url.searchParams.delete("connected");
       url.searchParams.delete("error");
-      router.replace(url.pathname + url.search, { scroll: false });
+      setTimeout(() => router.replace(url.pathname + url.search, { scroll: false }), 0);
     }
   }, [connectedPlatform, errorParam, router]);
 

@@ -9,6 +9,7 @@ import {
   refreshLongLivedToken,
   supportsTokenRefresh,
 } from "@/lib/platform-tokens";
+import { isThreadsPermissionError, THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
 import { getSessionUser } from "@/lib/session";
 
 export interface PublishResult {
@@ -509,6 +510,14 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
 
     if (!containerRes.ok) {
       const err = (await containerRes.json().catch(() => ({}))) as GraphError;
+      // An empty grant (no accepted Threads Tester role, or an unpublished app
+      // whose permissions never passed App Review) answers every endpoint with
+      // code 100 / error_subcode 10 — repeat the fix instead of Meta's wording,
+      // which otherwise only says "submit for app review".
+      if (isThreadsPermissionError(err)) {
+        console.warn("[threads] publish blocked: the connection has no permission grant");
+        return { platform: "threads", success: false, error: THREADS_PERMISSION_FIX };
+      }
       return {
         platform: "threads",
         success: false,
@@ -543,6 +552,12 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
 
     if (!publishRes.ok) {
       const err = (await publishRes.json().catch(() => ({}))) as GraphError;
+      if (isThreadsPermissionError(err)) {
+        // Reachable when the grant was revoked (or the tester role removed)
+        // between creating the container and publishing it.
+        console.warn("[threads] publish blocked: the connection has no permission grant");
+        return { platform: "threads", success: false, error: THREADS_PERMISSION_FIX };
+      }
       return {
         platform: "threads",
         success: false,

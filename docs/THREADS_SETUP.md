@@ -84,6 +84,20 @@ While the app is unpublished, only people with a role on it can authorize:
    permissions** on threads.net (or in the Threads app). The invitation is *not*
    active until they accept it
 
+Two consequences worth knowing before you publish:
+
+- Meta still returns an access token when the grant ends up empty, so a Threads
+  connection can look healthy and then fail on the very first API call. Hilbras
+  Studio avoids that: right after the token exchange the connect flow calls
+  `GET /me` (which needs only `threads_basic`) and, if Meta answers with
+  `100/10` — *"This action requires the threads_basic permission…"* — it refuses
+  the connection with `threads_permissions_not_granted` instead of storing a
+  token that cannot do anything.
+- The grant is bound to the token, so **accepting the invitation is not
+  retroactive**: a connection made before acceptance keeps failing until you
+  press **Connect** again. Same for an app that is published with
+  `threads_basic`/`threads_content_publish` still waiting on App Review.
+
 ## Step 5: Connect and post
 
 ```bash
@@ -140,6 +154,7 @@ Then, in the composer, select Threads and write the post:
 | `invalid_state` or `missing_pkce_verifier` | The authorization was started in a different browser/session, or cookies were cleared mid-flow. Start over from `/accounts` |
 | `no_access_token` | Meta returned no token — usually an app/secret mismatch or a redirect URI that does not match |
 | "This app is not ready" in the authorization window | The account is not a Threads Tester yet, or the invitation was never accepted (see Step 4) |
+| Publish fails with **"This action requires the threads_basic permission. You must submit for app review, or your user must be in the list of Threads testers."** — `THApiException`, error **100**, `error_subcode` **10** (also on `GET /me`, which needs no more than `threads_basic`) | Meta issued a token but granted **no** permissions, and it answers this way on *every* endpoint. Per Meta's own rule, only an app user **with a role on the app** can grant permissions until the app is published *and* each permission passed App Review — so either the account is not an accepted **Threads Tester**, or the app is live but `threads_basic`/`threads_content_publish` were never submitted for review. Fix: **App roles → Roles → Add People → Threads Tester** (and the knob in the Threads use case settings, **Add or Remove Threads Test Users**), **accept the invite** at threads.net → **Settings → Account → Website permissions**, then **reconnect Threads** — the old token stays empty forever, an accepted invite is not retroactive. Hilbras Studio now refuses such a connect with `threads_permissions_not_granted` and repeats the same fix in the publish result |
 | Publish works, then fails about an hour later | The long-lived exchange failed — look for `[threads] token request failed` in the server log (usually a wrong app secret) |
 | Container creation succeeds but publish fails or times out | The media URL is not publicly reachable, or the format is unsupported. Check the log line `[threads] container <id> failed: <error_message>` |
 | Deauthorize / data-deletion webhook returns `500 app secret not configured` | Neither `THREADS_CLIENT_SECRET` nor a UI-saved `threads_client_secret` exists. The webhook has no session, so it verifies against **every** stored secret plus the env var |

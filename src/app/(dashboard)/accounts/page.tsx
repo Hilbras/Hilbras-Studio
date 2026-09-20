@@ -41,6 +41,7 @@ import {
   Check,
 } from "lucide-react";
 import { allPlatforms, type PlatformId } from "@/lib/platforms";
+import { THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
 import {
   getPlatformCredentials,
   savePlatformCredentials,
@@ -58,11 +59,14 @@ type TestResult = { valid: boolean; message: string };
  *
  * The wording for `threads_app_id_invalid` mirrors `THREADS_APP_ID_HINT` in
  * `@/lib/platform-app-check`. It is repeated rather than imported because that
- * module is `server-only` and this page is a client component.
+ * module is `server-only` and this page is a client component. The Threads
+ * permissions wording *is* imported — `@/lib/threads-errors` is deliberately
+ * isomorphic, so the connect banner and the publish result cannot drift apart.
  */
 const CONNECT_ERROR_MESSAGES: Record<string, string> = {
   credentials_not_configured:
     "No app credentials are saved for this platform yet. Open Configure, paste the client ID and secret, then connect.",
+  threads_permissions_not_granted: THREADS_PERMISSION_FIX,
   threads_app_id_invalid:
     "That app ID is not a Threads app ID. A Meta app hands out two pairs — paste the Threads app ID and secret from the app's Threads use case (Settings → Threads), not the Instagram/Facebook pair.",
   credentials_missing:

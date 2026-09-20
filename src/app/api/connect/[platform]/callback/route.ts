@@ -8,6 +8,7 @@ import { encryptSecret } from "@/lib/crypto";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
 import { readPlatformAppCredentials } from "@/lib/platform-credentials";
+import { isThreadsPermissionError } from "@/lib/threads-errors";
 import {
   exchangeForLongLivedToken,
   supportsLongLivedToken,
@@ -164,6 +165,20 @@ export async function GET(
       const profile = (await profileRes.json()) as { username?: string; id?: string };
       profileUsername = profile.username;
       platformAccountId = profile.id;
+    } else {
+      // Meta issues a token even when the app user ended up granting nothing, and
+      // then every Threads call fails with code 100 / error_subcode 10 ("This
+      // action requires the threads_basic permission"). This profile call — the
+      // first one made with the new token — is where that becomes visible, and
+      // `GET /me` needs no more than `threads_basic`, which every Threads grant
+      // includes. So a failure here means the account has no grant at all (not an
+      // accepted Threads Tester yet, or the app is unpublished without App
+      // Review): report it instead of storing a connection that can only fail.
+      // Other failures keep the old behaviour of connecting without a username.
+      const errorPayload = await profileRes.json().catch(() => null);
+      if (isThreadsPermissionError(errorPayload)) {
+        return fail("threads_permissions_not_granted");
+      }
     }
   }
 

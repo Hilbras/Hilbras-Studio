@@ -52,20 +52,32 @@ export async function createPostAction(
   return { success: scheduledAt ? "Post scheduled" : "Draft saved", postId };
 }
 
-/** Mark a post as published and store the results. */
-export async function markPublished(
+/**
+ * Write a post's terminal state after a Composer publish attempt — the twin of
+ * `finalize` in `@/lib/scheduled-posts`, and deliberately the same rule: a post
+ * counts as published when **at least one** platform accepted it, while every
+ * platform failing leaves it `failed`.
+ *
+ * Marking the row `published` regardless of the outcome used to be the behaviour
+ * here, which made a Threads post with a refused permission grant show up as live
+ * in the queue it never reached. `results` keeps the per-platform reason, so the
+ * queue can explain the failure.
+ */
+export async function recordPublishOutcome(
   postId: string,
   results: Array<{ platform: string; success: boolean; error?: string }>
 ): Promise<void> {
   const session = await getSessionUser();
   if (!session) return;
 
+  const ok = results.some((r) => r.success);
+
   await db
     .update(posts)
     .set({
-      status: "published",
+      status: ok ? "published" : "failed",
       results: JSON.stringify(results),
-      publishedAt: new Date(),
+      publishedAt: ok ? new Date() : null,
     })
     .where(and(eq(posts.id, postId), eq(posts.userId, session.id)));
 }

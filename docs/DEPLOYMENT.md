@@ -87,6 +87,14 @@ overlapping cron run and button click cannot post the same content twice. A post
 stuck in `publishing` (for example a timed-out invocation) is automatically
 re-queued after 10 minutes.
 
+### Terminal statuses
+
+A post ends up `published` when **at least one** target platform accepted it, and
+`failed` when every one of them refused; `results` holds the per-platform detail
+either way. Both the Composer (`recordPublishOutcome` in `src/app/actions/posts.ts`)
+and the runner (`finalize` in `src/lib/scheduled-posts.ts`) apply that same rule —
+so a publish that a platform rejected is never reported as live in the queue.
+
 ## 4. Platform OAuth redirect URIs
 
 For every platform you connect, register the callback in that platform's

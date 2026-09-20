@@ -48,7 +48,7 @@ import { OrbitingDots } from "@/components/motion/orbiting-dots";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
 import { processAssistantMessage } from "@/app/actions/ai";
 import { publishToAllNowAction } from "@/app/actions/publish";
-import { createPostAction, listPosts, deletePost, markPublished, getConnectedPlatforms, getConfiguredPlatforms } from "@/app/actions/posts";
+import { createPostAction, listPosts, deletePost, recordPublishOutcome, getConnectedPlatforms, getConfiguredPlatforms } from "@/app/actions/posts";
 
 const AI_SUGGESTIONS = [
   { icon: Lightbulb, text: "Product launch announcement" },
@@ -165,7 +165,7 @@ export default function ComposerPage() {
 
       // Save results
       if (saveResult.postId) {
-        await markPublished(saveResult.postId, results);
+        await recordPublishOutcome(saveResult.postId, results);
       }
 
       listPosts().then(setPosts);

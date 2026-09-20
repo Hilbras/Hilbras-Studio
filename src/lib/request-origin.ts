@@ -1,14 +1,23 @@
 import type { NextRequest } from "next/server";
 
 /**
- * Derive the public origin of a request, honoring reverse-proxy headers.
+ * Return the public base URL of the application.
  *
- * Tunnels (ngrok / Cloudflare) terminate TLS and forward plain HTTP to the
- * Next.js server, so `req.url` alone yields `http://localhost:3000`. Meta
- * requires the OAuth redirect_uri to match the saved HTTPS URL exactly, so
- * we prefer x-forwarded-proto / x-forwarded-host when present.
+ * Priority:
+ *   1. APP_URL env var (set in production — guaranteed correct, no header tricks)
+ *   2. Dynamic derivation from request headers (local dev / tunnels)
+ *
+ * Meta requires the OAuth redirect_uri to match the registered URL exactly,
+ * so using a hardcoded env var in production eliminates any protocol / host
+ * mismatch caused by reverse-proxy headers.
  */
 export function requestOrigin(req: NextRequest): string {
+  // Production: use the hardcoded env var — always correct
+  if (process.env.APP_URL) {
+    return process.env.APP_URL.replace(/\/+$/, "");
+  }
+
+  // Local dev / tunnels: derive from headers
   const url = new URL(req.url);
 
   const proto =

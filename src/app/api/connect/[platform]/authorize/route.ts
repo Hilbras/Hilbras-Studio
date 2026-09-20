@@ -52,13 +52,6 @@ export async function GET(
 
   const verifierCookieName = `pkce_${platformIdStr}`;
   const redirectUri = `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`;
-  console.log("[OAuth] redirect_uri:", redirectUri);
-  console.log("[OAuth] headers:", JSON.stringify({
-    proto: req.headers.get("x-forwarded-proto"),
-    host: req.headers.get("x-forwarded-host"),
-    hostHeader: req.headers.get("host"),
-    reqUrl: req.url,
-  }));
   const response = NextResponse.redirect(
     `${platform.auth.authorizeUrl}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(platform.auth.scopes.join(" "))}&state=${encodeURIComponent(state)}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256`
   );

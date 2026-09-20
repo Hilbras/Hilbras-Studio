@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+/.zcode/
 /.pnp
 .pnp.*
 .yarn/*
@@ -40,9 +41,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local sqlite
-data/
-hilbras.db-*
+# local db
+*.db
+*.db-*
 
 # IDE / editor
 .zcode/

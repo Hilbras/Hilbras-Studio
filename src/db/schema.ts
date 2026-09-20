@@ -1,10 +1,10 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
 
 /**
  * users — application accounts for Hilbras Studio.
  * Passwords are stored as bcrypt hashes, never in plaintext.
  */
-export const users = sqliteTable("users", {
+export const users = pgTable("users", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
@@ -14,16 +14,14 @@ export const users = sqliteTable("users", {
    */
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
  * social_accounts — OAuth connections to external platforms (Instagram, X, etc.).
  * Tokens are encrypted at rest before insertion (encryption layer comes with the connectors phase).
  */
-export const socialAccounts = sqliteTable("social_accounts", {
+export const socialAccounts = pgTable("social_accounts", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
@@ -33,10 +31,8 @@ export const socialAccounts = sqliteTable("social_accounts", {
   username: text("username"),
   accessTokenEnc: text("access_token_enc"),
   refreshTokenEnc: text("refresh_token_enc"),
-  tokenExpiresAt: integer("token_expires_at", { mode: "timestamp" }),
-  connectedAt: integer("connected_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  connectedAt: timestamp("connected_at").notNull().defaultNow(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -46,25 +42,15 @@ export type NewUser = typeof users.$inferInsert;
  * user_preferences — per-user AI behavior toggles (Settings page).
  * One row per user, created lazily with defaults on first read.
  */
-export const userPreferences = sqliteTable("user_preferences", {
+export const userPreferences = pgTable("user_preferences", {
   userId: text("user_id")
     .primaryKey()
     .references(() => users.id, { onDelete: "cascade" }),
-  autoHashtags: integer("auto_hashtags", { mode: "boolean" })
-    .notNull()
-    .default(true),
-  adaptTone: integer("adapt_tone", { mode: "boolean" }).notNull().default(true),
-  autoSchedule: integer("auto_schedule", { mode: "boolean" })
-    .notNull()
-    .default(false),
-  engagementNotifications: integer("engagement_notifications", {
-    mode: "boolean",
-  })
-    .notNull()
-    .default(true),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
+  autoHashtags: boolean("auto_hashtags").notNull().default(true),
+  adaptTone: boolean("adapt_tone").notNull().default(true),
+  autoSchedule: boolean("auto_schedule").notNull().default(false),
+  engagementNotifications: boolean("engagement_notifications").notNull().default(true),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type UserPreferences = typeof userPreferences.$inferSelect;
@@ -73,7 +59,7 @@ export type UserPreferences = typeof userPreferences.$inferSelect;
  * stored_credentials — per-user encrypted secrets (API keys, OAuth tokens).
  * Stores things users want to configure from the UI without editing .env.local.
  */
-export const storedCredentials = sqliteTable("stored_credentials", {
+export const storedCredentials = pgTable("stored_credentials", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
@@ -84,12 +70,8 @@ export const storedCredentials = sqliteTable("stored_credentials", {
   encryptedValue: text("encrypted_value").notNull(),
   /** Optional label for display (e.g., "OpenAI (GPT-4)") */
   label: text("label"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type StoredCredential = typeof storedCredentials.$inferSelect;
@@ -99,7 +81,7 @@ export type NewStoredCredential = typeof storedCredentials.$inferInsert;
  * posts — content created via the Composer.
  * Tracks the full lifecycle: draft → scheduled → published → archived.
  */
-export const posts = sqliteTable("posts", {
+export const posts = pgTable("posts", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
@@ -113,13 +95,11 @@ export const posts = sqliteTable("posts", {
   /** draft | scheduled | published | failed */
   status: text("status").notNull().default("draft"),
   /** ISO timestamp — set when status = scheduled. */
-  scheduledAt: integer("scheduled_at", { mode: "timestamp" }),
+  scheduledAt: timestamp("scheduled_at"),
   /** JSON array of per-platform publish results. */
   results: text("results"),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
-  publishedAt: integer("published_at", { mode: "timestamp" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  publishedAt: timestamp("published_at"),
 });
 
 export type Post = typeof posts.$inferSelect;
@@ -129,7 +109,7 @@ export type Post = typeof posts.$inferSelect;
  * Stores base URL, API key, format, and model so any OpenAI-compatible
  * or Anthropic-compatible provider can be used without code changes.
  */
-export const aiProviders = sqliteTable("ai_providers", {
+export const aiProviders = pgTable("ai_providers", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
@@ -140,13 +120,9 @@ export const aiProviders = sqliteTable("ai_providers", {
   /** "openai" for OpenAI-compatible APIs, "anthropic" for Anthropic Messages API. */
   apiFormat: text("api_format").notNull().default("openai"),
   modelId: text("model_id").notNull(),
-  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
-  createdAt: integer("created_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
-  updatedAt: integer("updated_at", { mode: "timestamp" })
-    .notNull()
-    .$defaultFn(() => new Date()),
+  isDefault: boolean("is_default").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 export type AiProvider = typeof aiProviders.$inferSelect;

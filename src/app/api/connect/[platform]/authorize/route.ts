@@ -51,8 +51,10 @@ export async function GET(
   const codeChallenge = Buffer.from(hashed).toString("base64url").replace(/=/g, "");
 
   const verifierCookieName = `pkce_${platformIdStr}`;
+  const redirectUri = `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`;
+  console.log("[OAuth] redirect_uri:", redirectUri);
   const response = NextResponse.redirect(
-    `${platform.auth.authorizeUrl}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(`${requestOrigin(req)}/api/connect/${platformIdStr}/callback`)}&response_type=code&scope=${encodeURIComponent(platform.auth.scopes.join(" "))}&state=${encodeURIComponent(state)}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256`
+    `${platform.auth.authorizeUrl}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(platform.auth.scopes.join(" "))}&state=${encodeURIComponent(state)}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256`
   );
 
   response.cookies.set(verifierCookieName, codeVerifier, {

@@ -3,7 +3,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Card,
   CardContent,
@@ -69,12 +69,12 @@ export default function AccountsPage() {
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [testingPlatform, setTestingPlatform] = useState<string | null>(null);
 
+  const paramsHandledRef = useRef(false);
+
   const refreshData = useCallback(async () => {
     const platforms = allPlatforms();
     const [confResults, connResults] = await Promise.all([
       Promise.all(platforms.map(async (p) => ({ id: p.id, exists: await checkCredentialsExist(p.id) }))),
-      // Check OAuth connections — look for the platform in the DB query
-      // We'll use a simple approach: check if the social_accounts page returns data
       (async () => {
         try {
           const res = await fetch("/api/check-connections");
@@ -90,23 +90,23 @@ export default function AccountsPage() {
   useEffect(() => { refreshData(); }, [refreshData]);
 
   useEffect(() => {
-    if (connectedPlatform || errorParam) {
+    if ((connectedPlatform || errorParam) && !paramsHandledRef.current) {
+      paramsHandledRef.current = true;
       setShowFeedback(true);
-      const t = setTimeout(() => setShowFeedback(false), 5000);
-      // Re-check connections after OAuth redirect
       refreshData();
-      return () => clearTimeout(t);
-    }
-  }, [connectedPlatform, errorParam, refreshData]);
 
-  useEffect(() => {
-    if (connectedPlatform || errorParam) {
       const url = new URL(window.location.href);
       url.searchParams.delete("connected");
       url.searchParams.delete("error");
-      setTimeout(() => router.replace(url.pathname + url.search, { scroll: false }), 0);
+
+      requestAnimationFrame(() => {
+        router.replace(url.pathname + url.search, { scroll: false });
+      });
+
+      const t = setTimeout(() => setShowFeedback(false), 5000);
+      return () => clearTimeout(t);
     }
-  }, [connectedPlatform, errorParam, router]);
+  }, [connectedPlatform, errorParam, refreshData, router]);
 
   const openModal = async (platform: string) => {
     setSelectedPlatform(platform);

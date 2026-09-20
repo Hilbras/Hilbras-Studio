@@ -66,7 +66,12 @@ http://localhost:3000/api/connect/threads/delete
 ```
 
 The redirect URI must match **exactly** — including scheme, host, port and path —
-or Meta rejects the authorization request.
+or Meta rejects the authorization request with `URL Blocked` (error **1349168**).
+Two traps: this list belongs to the **Threads use case** (Facebook Login and
+Instagram have their own, separate lists), and the dashboard sometimes **adds a
+trailing slash by itself** — `…/callback/` does not match `…/callback`. Copy the
+exact string from **Settings → Accounts → Configure** in Hilbras Studio: it is the
+URL the connect flow will actually send.
 
 ## Step 4: Add a Threads tester
 
@@ -126,8 +131,12 @@ Then, in the composer, select Threads and write the post:
 | Symptom | Cause / fix |
 |---|---|
 | `credentials_missing` | No `THREADS_CLIENT_ID`/`THREADS_CLIENT_SECRET` in `.env.local` and none saved in **Settings → Accounts** for the signed-in user |
+| `Authorization Failed: No app ID was sent with the request.` (error **4476002**) on threads.net, or `threads_app_id_invalid` inside Hilbras Studio | The saved client ID is the app's **Facebook/Instagram** half. The Threads API does not recognise it (`Invalid client_id`), and Meta renders that as "no app ID". Re-copy **both** values from the Threads use case → **Settings**. Note a UI-saved value **overrides** `THREADS_CLIENT_ID`, so fix it in **Settings → Accounts** — adding the env var alone changes nothing while the old row is stored |
+| "Test Keys" reports the credentials are not a Threads app pair | Same cause as above. Hilbras Studio now probes the platform's token endpoint before sending you to the authorize page, so this is caught in-app instead of ending on Meta's error page |
 | Token exchange fails with **400**, or `token_exchange_failed:400` after authorizing | The Instagram/Facebook app ID and secret were used instead of the Threads pair — re-copy both from the Threads use case **Settings** |
 | `missing_code_or_state` / Meta shows a redirect-URI error | The redirect URI in the dashboard does not match `{APP_URL}/api/connect/threads/callback` exactly |
+| `URL Blocked: This redirect failed because the redirect URI is not whitelisted in the app's Client OAuth Settings` (error **1349168**) | The redirect URI is missing from **Client OAuth Settings → valid OAuth redirect URIs** *inside the Threads use case* (Use cases → Threads → Settings). Register `{APP_URL}/api/connect/threads/callback` there and click **Save** — the Facebook Login side of the app has its own list and does not cover Threads. Copy the URL from **Settings → Accounts → Configure** to get the exact string. Removing the Facebook/Instagram URIs or adding the Threads URI to the wrong use case does not help | 
+| The dashboard URL list shows a **trailing slash** you did not type | Meta's editor appends one itself, and the comparison is literal: `…/callback/` does **not** match the `…/callback` Hilbras Studio sends. Delete the slash before saving (Meta's own docs warn about this) |
 | `invalid_state` or `missing_pkce_verifier` | The authorization was started in a different browser/session, or cookies were cleared mid-flow. Start over from `/accounts` |
 | `no_access_token` | Meta returned no token — usually an app/secret mismatch or a redirect URI that does not match |
 | "This app is not ready" in the authorization window | The account is not a Threads Tester yet, or the invitation was never accepted (see Step 4) |

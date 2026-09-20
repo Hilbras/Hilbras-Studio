@@ -50,6 +50,12 @@ export async function GET(
   const stateStr = searchParams.get("state");
   const error = searchParams.get("error");
 
+  // Meta reports a redirect URI that is not registered on the `error_code`
+  // parameter (1349168 "URL Blocked"), with `error` often absent — without this
+  // the browser would land back on /accounts with an empty banner.
+  const errorCode = searchParams.get("error_code");
+  if (errorCode === "1349168") return fail("url_blocked");
+
   if (error) return fail(error);
   if (!code || !stateStr) return fail("missing_code_or_state");
 

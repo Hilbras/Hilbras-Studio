@@ -36,6 +36,9 @@ import {
   Loader2,
   TestTube2,
   Link2,
+  AlertTriangle,
+  Copy,
+  Check,
 } from "lucide-react";
 import { allPlatforms, type PlatformId } from "@/lib/platforms";
 import {
@@ -43,9 +46,65 @@ import {
   savePlatformCredentials,
   testPlatformCredentials,
   checkCredentialsExist,
+  getConnectRedirectUri,
 } from "@/app/actions/platform";
 
 type TestResult = { valid: boolean; message: string };
+
+/**
+ * Connect failures come back as `?error=<code>`. The codes we raise ourselves get
+ * a sentence explaining what to do; provider codes (`<name>_<reason>`) are shown
+ * as they are, because only the provider knows what they mean.
+ *
+ * The wording for `threads_app_id_invalid` mirrors `THREADS_APP_ID_HINT` in
+ * `@/lib/platform-app-check`. It is repeated rather than imported because that
+ * module is `server-only` and this page is a client component.
+ */
+const CONNECT_ERROR_MESSAGES: Record<string, string> = {
+  credentials_not_configured:
+    "No app credentials are saved for this platform yet. Open Configure, paste the client ID and secret, then connect.",
+  threads_app_id_invalid:
+    "That app ID is not a Threads app ID. A Meta app hands out two pairs — paste the Threads app ID and secret from the app's Threads use case (Settings → Threads), not the Instagram/Facebook pair.",
+  credentials_missing:
+    "The saved app credentials could not be read. Save them again in Configure.",
+  invalid_state:
+    "The authorization was started in a different browser session. Start the connect again from this page.",
+  missing_pkce_verifier:
+    "The browser dropped the PKCE cookie mid-flow. Start the connect again from this page.",
+  missing_code_or_state:
+    "The provider sent the browser back without an authorization code. Start the connect again from this page.",
+  no_access_token:
+    "The provider returned no access token — usually an app ID/secret mismatch, or a redirect URI that is not registered exactly.",
+  url_blocked:
+    "The provider blocked the redirect URL (Meta error 1349168). Register the redirect URI shown in Configure — exactly as printed, with no trailing slash added — as a valid OAuth redirect URI in the app's Client OAuth Settings.",
+  access_denied:
+    "You cancelled the authorization window, so nothing was connected. Start the connect again whenever you are ready.",
+  instagram_personal_only:
+    "Instagram publishing needs a Business or Creator account, not a personal profile.",
+};
+
+function safeDecode(value: string): string {
+  // `useSearchParams` already decodes; a second pass can throw on a stray "%".
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function describeConnectError(raw: string): string {
+  if (CONNECT_ERROR_MESSAGES[raw]) return CONNECT_ERROR_MESSAGES[raw];
+  // Meta sometimes forwards the numeric code instead of a slug.
+  if (raw === "1349168") return CONNECT_ERROR_MESSAGES.url_blocked;
+  if (raw.endsWith("_app_credentials_invalid")) {
+    return "The provider rejected these app credentials. Re-copy the client ID and secret for this platform.";
+  }
+  if (raw.startsWith("token_exchange_failed")) {
+    const status = raw.split(":")[1];
+    return `The token exchange failed${status ? ` (HTTP ${status})` : ""} — the app ID/secret or the registered redirect URI does not match this platform.`;
+  }
+  return raw;
+}
 
 export default function AccountsPage() {
   const searchParams = useSearchParams();
@@ -64,6 +123,8 @@ export default function AccountsPage() {
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState("");
   const [modalSuccess, setModalSuccess] = useState("");
+  const [redirectUri, setRedirectUri] = useState<string | null>(null);
+  const [copiedUri, setCopiedUri] = useState(false);
 
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [testingPlatform, setTestingPlatform] = useState<string | null>(null);
@@ -107,11 +168,28 @@ export default function AccountsPage() {
     setModalOpen(true);
     setLoadingKeys(true);
     try {
-      const { clientId: existingId, clientSecret: existingSecret } = await getPlatformCredentials(platform);
+      // The redirect URI comes from the server so it matches the value the
+      // authorize route will send — `APP_URL` is not visible to the browser.
+      const [{ clientId: existingId, clientSecret: existingSecret }, uri] = await Promise.all([
+        getPlatformCredentials(platform),
+        getConnectRedirectUri(platform),
+      ]);
       if (existingId) setClientId(existingId);
       if (existingSecret) setClientSecret(existingSecret);
+      setRedirectUri(uri);
     } finally {
       setLoadingKeys(false);
+    }
+  };
+
+  const copyRedirectUri = async () => {
+    if (!redirectUri) return;
+    try {
+      await navigator.clipboard.writeText(redirectUri);
+      setCopiedUri(true);
+      setTimeout(() => setCopiedUri(false), 2000);
+    } catch {
+      setModalError("Could not copy automatically — select the URL and copy it manually.");
     }
   };
 
@@ -184,7 +262,7 @@ export default function AccountsPage() {
               {connectedPlatform ? (
                 <><CheckCircle2 className="size-4 shrink-0" /> Connected to <span className="font-semibold capitalize">{connectedPlatform}</span>!</>
               ) : (
-                <><XCircle className="size-4 shrink-0" /> Connection failed: <span className="font-medium">{decodeURIComponent(errorParam ?? "unknown")}</span></>
+                <><XCircle className="size-4 shrink-0" /> Connection failed: <span className="font-medium">{describeConnectError(safeDecode(errorParam ?? "unknown"))}</span></>
               )}
             </motion.div>
           )}
@@ -337,6 +415,12 @@ export default function AccountsPage() {
                 </div>
               ) : (
                 <>
+                  {selectedMeta?.auth.credentialHint && (
+                    <p className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                      <span>{selectedMeta.auth.credentialHint}</span>
+                    </p>
+                  )}
                   <div className="space-y-2">
                     <Label htmlFor="modal-clientId">Client ID</Label>
                     <Input id="modal-clientId" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="e.g., 1234567890123456" />
@@ -345,6 +429,24 @@ export default function AccountsPage() {
                     <Label htmlFor="modal-clientSecret">Client Secret</Label>
                     <Input id="modal-clientSecret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="e.g., abcdef1234567890abcdef1234567890" />
                   </div>
+                  {redirectUri && (
+                    <div className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-3">
+                      <p className="text-xs text-muted-foreground">
+                        Register this exact URL as a valid OAuth redirect URI in the provider&#39;s app settings
+                        (Threads: Use cases → Threads → Settings → Client OAuth Settings). Providers compare it
+                        character for character, including any trailing slash.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="min-w-0 flex-1 break-all rounded bg-background px-2 py-1.5 text-[11px] leading-relaxed">
+                          {redirectUri}
+                        </code>
+                        <Button variant="ghost" size="sm" className="gap-1 rounded-xl shrink-0" onClick={copyRedirectUri}>
+                          {copiedUri ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
+                          {copiedUri ? "Copied" : "Copy"}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   <AnimatePresence mode="wait">
                     {modalError && <motion.p key="err" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1.5"><XCircle className="size-3.5 shrink-0" /> {modalError}</motion.p>}
                     {modalSuccess && <motion.p key="ok" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="size-3.5 shrink-0" /> {modalSuccess}</motion.p>}

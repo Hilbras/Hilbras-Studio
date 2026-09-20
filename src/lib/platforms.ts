@@ -42,6 +42,11 @@ export interface PlatformSpec {
     tokenAuth?: "body" | "basic";
     /** Extra headers some providers require. */
     extraHeaders?: Record<string, string>;
+    /**
+     * Shown above the credential fields in Settings → Accounts for providers
+     * where the wrong pair is easy to paste (Meta issues more than one app ID).
+     */
+    credentialHint?: string;
   };
   /** Content capabilities — the facts the AI adapts copy against. */
   content: {
@@ -113,10 +118,14 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {
     auth: {
       clientIdEnv: "THREADS_CLIENT_ID",
       clientSecretEnv: "THREADS_CLIENT_SECRET",
-      // Threads uses Meta's OAuth (same app as Instagram)
+      // Threads authorizes through Meta's OAuth engine, but with its own app ID:
+      // one Meta app issues two pairs, and graph.threads.net only accepts the
+      // Threads one.
       authorizeUrl: "https://threads.net/oauth/authorize",
       tokenUrl: "https://graph.threads.net/oauth/access_token",
       scopes: ["threads_basic", "threads_content_publish"],
+      credentialHint:
+        "A Meta app issues two credential pairs. Use the Threads app ID and secret from the app's Threads use case (Settings → Threads) — the Facebook/Instagram pair is rejected by the Threads API.",
     },
     content: {
       mediaTypes: ["text", "image", "video"],

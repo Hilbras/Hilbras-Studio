@@ -13,23 +13,33 @@ import type { NextRequest } from "next/server";
  */
 export function requestOrigin(req: NextRequest): string {
   // Production: use the hardcoded env var — always correct
+  return originFromHeaders(req.headers) || new URL(req.url).origin;
+}
+
+/**
+ * Same resolution as `requestOrigin`, for server components and server actions
+ * where only `headers()` is available (there is no `NextRequest`).
+ *
+ * Needed because the redirect URI shown to the user — the string they have to
+ * register with the provider — must be the one the request itself will carry.
+ * A mismatch, down to a trailing slash, comes back as error 1349168 "URL Blocked".
+ */
+export function originFromHeaders(headers: Headers): string {
+  // Production: use the hardcoded env var — always correct
   if (process.env.APP_URL) {
     return process.env.APP_URL.replace(/\/+$/, "");
   }
 
   // Local dev / tunnels: derive from headers
-  const url = new URL(req.url);
-
   const proto =
-    req.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ||
-    url.protocol.replace(":", "");
+    headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "http";
 
   const host =
-    req.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
-    req.headers.get("host") ||
-    url.host;
+    headers.get("x-forwarded-host")?.split(",")[0]?.trim() ||
+    headers.get("host") ||
+    "";
 
-  return `${proto}://${host}`;
+  return host ? `${proto}://${host}` : "";
 }
 
 /**

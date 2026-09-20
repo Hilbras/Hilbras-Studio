@@ -3,6 +3,7 @@ import { getSessionUser } from "@/lib/session";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
 import { readPlatformAppCredentials } from "@/lib/platform-credentials";
+import { verifyAppCredentials } from "@/lib/platform-app-check";
 
 export async function GET(
   req: NextRequest,
@@ -25,6 +26,19 @@ export async function GET(
     );
   }
   const { clientId } = credentials;
+
+  // Check the pair before handing the browser to the provider. A wrong app ID
+  // (typically the Instagram half of a Meta app pasted into the Threads fields)
+  // otherwise ends on the provider's own error page — Meta's tells the user only
+  // that "No app ID was sent with the request", which points at nothing they can
+  // fix. An unreachable provider is not an invalid one, so anything but a
+  // definite rejection still goes ahead.
+  const verdict = await verifyAppCredentials(platform.id, credentials);
+  if (verdict.status === "invalid") {
+    return NextResponse.redirect(
+      new URL(`/accounts?error=${encodeURIComponent(verdict.code)}`, req.url)
+    );
+  }
 
   // The Referer is attacker-controllable, so only its path is kept as the
   // post-callback destination (see `safeReturnPath`).

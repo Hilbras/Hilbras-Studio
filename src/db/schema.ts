@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, unique } from "drizzle-orm/pg-core";
 
 /**
  * users — application accounts for Hilbras Studio.
@@ -72,7 +72,7 @@ export const storedCredentials = pgTable("stored_credentials", {
   label: text("label"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [unique().on(t.userId, t.keyName)]);
 
 export type StoredCredential = typeof storedCredentials.$inferSelect;
 export type NewStoredCredential = typeof storedCredentials.$inferInsert;

@@ -1,0 +1,1 @@
+ALTER TABLE "stored_credentials" ADD CONSTRAINT "stored_credentials_user_id_key_name_unique" UNIQUE("user_id","key_name");

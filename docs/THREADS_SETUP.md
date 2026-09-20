@@ -84,6 +84,12 @@ While the app is unpublished, only people with a role on it can authorize:
    permissions** on threads.net (or in the Threads app). The invitation is *not*
    active until they accept it
 
+   Being the app's owner is not a substitute: the Threads API matches the
+   **Threads profile** that authorized against the tester list, not the Facebook
+   account that owns the app. If a reconnect still lands on
+   `threads_permissions_not_granted`, the profile itself is not on the tester
+   list yet — add it as a **Threads Tester** and accept the invitation.
+
 Two consequences worth knowing before you publish:
 
 - Meta still returns an access token when the grant ends up empty, so a Threads

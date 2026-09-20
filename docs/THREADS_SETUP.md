@@ -50,11 +50,16 @@ Then go to `/accounts` → Click "Connect" on Threads.
 - You need an Instagram Professional (Business/Creator) account first
 - The Threads connection shares the same Meta app as Instagram
 - For production, submit both apps for review
+- 🔑 The code exchange returns a **short-lived (1 hour)** token; Hilbras Studio upgrades
+  it to a **long-lived (60 day)** token via `graph.threads.net/access_token`
+  (`th_exchange_token`) before storing it, so the connection survives past the first hour
 
 ## Troubleshooting
 
 | Error | Fix |
 |-------|-----|
-| "platform credentials not configured" | Check `THREADS_CLIENT_ID` and `THREADS_CLIENT_SECRET` are set |
+| "platform credentials not configured" / `credentials_missing` | Check `THREADS_CLIENT_ID` and `THREADS_CLIENT_SECRET` are set, or save them in **Settings → Accounts** as the signed-in user |
 | "missing_code_or_state" | Make sure redirect URI is registered in Meta app |
 | "thread_not_connected" | You need an Instagram Professional account first |
+| Publishing fails right after connecting, then again an hour later | Long-lived exchange failed — check the server log for `[threads] long-lived token exchange failed` (usually a wrong app secret) |
+| Reconnecting an account created duplicates before | Reconnect now replaces the stored connection for that platform instead of appending |

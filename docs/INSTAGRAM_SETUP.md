@@ -9,15 +9,19 @@
 ## Step 2: Add Instagram Product
 1. In your app dashboard, click "Add Product"
 2. Find "Instagram" → Click "Set Up"
-3. This adds Instagram Basic Display + Instagram Graph API
+3. Choose the **"API setup with Instagram login"** flow (Content publishing + comment
+   moderation for professional accounts). The retired *Instagram Basic Display* product
+   is read-only and cannot publish.
 
 ## Step 3: Get Credentials
-1. Go to "Settings" → "Basic" in the left sidebar
-2. Copy your **App ID** and **App Secret**
-3. You'll need these for `INSTAGRAM_CLIENT_ID` and `INSTAGRAM_CLIENT_SECRET`
+1. Go to **Instagram** → **API setup with Instagram login**
+2. Open **3. Set up Instagram business login** → **Business login settings**
+3. Copy the **Instagram app ID** and **Instagram app secret**
+4. You'll need these for `INSTAGRAM_CLIENT_ID` and `INSTAGRAM_CLIENT_SECRET`
+   (or save them in the app under Settings → Accounts, which stores them per user)
 
 ## Step 4: Configure Redirect URI
-1. Go to "Instagram" → "Basic Display" settings
+1. In **Business login settings**, find **OAuth redirect URIs**
 2. Add redirect URI: `http://localhost:3000/api/connect/instagram/callback`
 3. For production: `https://yourdomain.com/api/connect/instagram/callback`
 

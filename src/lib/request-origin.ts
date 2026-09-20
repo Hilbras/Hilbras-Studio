@@ -31,3 +31,28 @@ export function requestOrigin(req: NextRequest): string {
 
   return `${proto}://${host}`;
 }
+
+/**
+ * Normalise a redirect target that came from an untrusted source (the Referer
+ * header or the OAuth `state` payload) into a safe same-origin path.
+ *
+ * Only the path and query survive — an absolute or protocol-relative URL from
+ * another origin collapses to its path instead of turning the OAuth callback
+ * into an open redirect. Anything unparseable falls back to the default.
+ */
+export function safeReturnPath(
+  raw: string | null | undefined,
+  fallback = "/accounts"
+): string {
+  if (!raw) return fallback;
+
+  try {
+    // Resolving against a placeholder base keeps relative paths intact while
+    // forcing absolute URLs to expose (and then drop) their origin.
+    const parsed = new URL(raw, "http://internal.invalid");
+    const path = `${parsed.pathname}${parsed.search}`;
+    return path.startsWith("/") ? path : fallback;
+  } catch {
+    return fallback;
+  }
+}

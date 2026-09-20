@@ -5,7 +5,6 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { Suspense } from "react";
-import dynamic from "next/dynamic";
 
 import {
   Card,
@@ -27,14 +26,10 @@ import {
 } from "@/app/actions/dashboard";
 import {
   StatCardsClient,
+  LazyWeeklyChart,
   RecentActivityClient,
   ConnectedAccountsClient,
 } from "./dashboard-clients";
-
-const WeeklyChartClient = dynamic(
-  () => import("./dashboard-clients").then((m) => m.WeeklyChartClient),
-  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
-);
 
 export default async function DashboardPage() {
   const [stats, activity, chartData, accounts] = await Promise.all([
@@ -118,7 +113,7 @@ export default async function DashboardPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Suspense fallback={<div className="h-72 animate-pulse rounded-xl bg-muted" />}>
-            <WeeklyChartClient data={chartData} />
+            <LazyWeeklyChart data={chartData} />
           </Suspense>
             <RecentActivityClient activity={activity} />
           </div>

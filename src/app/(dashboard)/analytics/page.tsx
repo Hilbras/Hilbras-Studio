@@ -1,6 +1,4 @@
 import { Download, TrendingUp } from "lucide-react";
-import { Suspense } from "react";
-import dynamic from "next/dynamic";
 
 import {
   Card,
@@ -17,23 +15,12 @@ import { MagneticButton } from "@/components/motion/magnetic-button";
 import { BlurFade } from "@/components/motion/blur-fade";
 import { getAnalyticsData } from "@/app/actions/analytics";
 import { getWeeklyChartData } from "@/app/actions/dashboard";
-
-const ReachChartClient = dynamic(
-  () => import("./analytics-clients").then((m) => m.ReachChartClient),
-  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
-);
-const PlatformBreakdownClient = dynamic(
-  () => import("./analytics-clients").then((m) => m.PlatformBreakdownClient),
-  { ssr: false, loading: () => <div className="h-56 animate-pulse rounded-xl bg-muted" /> }
-);
-const EngagementChartClient = dynamic(
-  () => import("./analytics-clients").then((m) => m.EngagementChartClient),
-  { ssr: false, loading: () => <div className="h-72 animate-pulse rounded-xl bg-muted" /> }
-);
-const TopPostsClient = dynamic(
-  () => import("./analytics-clients").then((m) => m.TopPostsClient),
-  { ssr: false, loading: () => <div className="h-48 animate-pulse rounded-xl bg-muted" /> }
-);
+import {
+  LazyReachChart,
+  LazyPlatformBreakdown,
+  LazyEngagementChart,
+  TopPostsClient,
+} from "./analytics-clients";
 
 export default async function AnalyticsPage() {
   const [analyticsData, weeklyChart] = await Promise.all([
@@ -82,7 +69,7 @@ export default async function AnalyticsPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <ReachChartClient data={weeklyChart} />
+                  <LazyReachChart data={weeklyChart} />
                 </CardContent>
               </Card>
             </BlurFade>
@@ -94,7 +81,7 @@ export default async function AnalyticsPage() {
                   <CardDescription>Post share by platform</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <PlatformBreakdownClient
+                  <LazyPlatformBreakdown
                     data={analyticsData.platformBreakdown}
                   />
                 </CardContent>
@@ -110,7 +97,7 @@ export default async function AnalyticsPage() {
                 <CardDescription>Likes, comments, and shares</CardDescription>
               </CardHeader>
               <CardContent>
-                <EngagementChartClient
+                <LazyEngagementChart
                   data={analyticsData.engagementByPlatform}
                 />
               </CardContent>

@@ -34,6 +34,15 @@ const signInSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
+/**
+ * Sign-in brute force: one uniform failure message (no account enumeration),
+ * bcrypt-cost timing for missing accounts, and a per-account lockout after
+ * MAX_FAILED_LOGINS wrong passwords.
+ */
+const GENERIC_LOGIN_ERROR = "Invalid email or password.";
+const MAX_FAILED_LOGINS = 10;
+const LOCKOUT_MS = 15 * 60_000;
+
 /** Create an account, log the user in, and redirect to dashboard. */
 export async function signUpAction(
   _prev: AuthFormState,
@@ -81,8 +90,9 @@ export async function signUpAction(
 
     await createSession(userId);
     return { success: true };
-  } catch (e: any) {
-    return { error: e?.message?.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    return { error: message.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
   }
 }
 
@@ -107,7 +117,12 @@ export async function signInAction(
 
   try {
     const [user] = await db
-      .select({ id: users.id, passwordHash: users.passwordHash })
+      .select({
+        id: users.id,
+        passwordHash: users.passwordHash,
+        failedLoginAttempts: users.failedLoginAttempts,
+        loginLockedUntil: users.loginLockedUntil,
+      })
       .from(users)
       .where(
         identifier.includes("@")
@@ -116,19 +131,57 @@ export async function signInAction(
       )
       .limit(1);
 
+    // Burn the same bcrypt cost as a real compare so a missing account can't
+    // be distinguished from a wrong password by response time, and answer
+    // with the same message as a wrong password.
     if (!user) {
-      return { error: "No account found with that email or username" };
+      await bcrypt.hash(password, 10);
+      return { error: GENERIC_LOGIN_ERROR };
     }
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) {
-      return { error: "Incorrect password. Please try again." };
+    if (valid) {
+      // Correct credentials clear any lock — a lockout can never keep the
+      // real owner out of their own account.
+      if (user.failedLoginAttempts > 0 || user.loginLockedUntil) {
+        await db
+          .update(users)
+          .set({ failedLoginAttempts: 0, loginLockedUntil: null })
+          .where(eq(users.id, user.id));
+      }
+      await createSession(user.id);
+      return { success: true };
     }
 
-    await createSession(user.id);
-    return { success: true };
-  } catch (e: any) {
-    return { error: e?.message?.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
+    const now = Date.now();
+    const lockedUntilMs = user.loginLockedUntil?.getTime() ?? 0;
+    if (lockedUntilMs > now) {
+      // Only reachable with a wrong password while locked; the wait time is
+      // disclosed only after ten failures already proved the account exists.
+      const minutes = Math.max(1, Math.ceil((lockedUntilMs - now) / 60_000));
+      return {
+        error: `Too many failed attempts — try again in ${minutes} minute${
+          minutes === 1 ? "" : "s"
+        }.`,
+      };
+    }
+
+    // An expired lock starts a fresh window before this failure counts.
+    const attempts =
+      (user.loginLockedUntil ? 0 : user.failedLoginAttempts) + 1;
+    await db
+      .update(users)
+      .set({
+        failedLoginAttempts: attempts,
+        loginLockedUntil:
+          attempts >= MAX_FAILED_LOGINS ? new Date(now + LOCKOUT_MS) : null,
+      })
+      .where(eq(users.id, user.id));
+
+    return { error: GENERIC_LOGIN_ERROR };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "";
+    return { error: message.includes("DATABASE_URL") ? "Database not configured" : "Something went wrong. Please try again." };
   }
 }
 

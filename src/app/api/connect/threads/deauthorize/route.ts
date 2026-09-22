@@ -26,30 +26,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing signed_request" }, { status: 400 });
   }
 
-  const secrets = await readThreadsAppSecrets();
-  if (secrets.length === 0) {
+  const candidates = await readThreadsAppSecrets();
+  if (candidates.length === 0) {
     return NextResponse.json(
       { error: "app secret not configured" },
       { status: 500 }
     );
   }
 
-  const payload = verifyThreadsSignedRequest(signedRequest, secrets);
-  const userId =
-    payload && typeof payload.user_id === "string" ? payload.user_id : null;
+  const verified = verifyThreadsSignedRequest(signedRequest, candidates);
+  const threadsUserId =
+    verified && typeof verified.payload.user_id === "string"
+      ? verified.payload.user_id
+      : null;
 
-  if (!userId) {
+  if (!verified || !threadsUserId) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
-  await db
-    .delete(socialAccounts)
-    .where(
-      and(
-        eq(socialAccounts.platform, "threads"),
-        eq(socialAccounts.platformAccountId, userId)
-      )
-    );
+  const conditions = [
+    eq(socialAccounts.platform, "threads"),
+    eq(socialAccounts.platformAccountId, threadsUserId),
+  ];
+  // A tenant's own saved secret may only ever touch that tenant's rows; the
+  // deployment-level env secret (owner null) is trusted across the deploy.
+  if (verified.ownerUserId !== null) {
+    conditions.push(eq(socialAccounts.userId, verified.ownerUserId));
+  }
+  await db.delete(socialAccounts).where(and(...conditions));
 
   return new NextResponse(null, { status: 200 });
 }

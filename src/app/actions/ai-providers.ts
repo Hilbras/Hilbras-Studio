@@ -9,6 +9,8 @@ import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
 import { BUILTIN_PROVIDER_ID, getBuiltinProviderConfig } from "@/lib/ai";
+import { formatProviderHttpError } from "@/lib/ai-sdk";
+import { assertPublicProviderUrl } from "@/lib/net-guard";
 
 export interface AiProviderItem {
   id: string;
@@ -71,6 +73,16 @@ export async function saveAiProviderAction(
 
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  // SSRF: the server fetches this URL on every AI call — refuse anything
+  // that points at localhost or a private network before it's ever stored.
+  try {
+    await assertPublicProviderUrl(parsed.data.baseUrl);
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : "Provider URL not allowed",
+    };
   }
 
   const { name, baseUrl, apiKey, apiFormat, modelId } = parsed.data;
@@ -247,6 +259,7 @@ async function pingEndpoint(target: PingTarget, start: number) {
   const baseUrl = target.baseUrl.replace(/\/+$/, "");
 
   try {
+    await assertPublicProviderUrl(baseUrl);
     if (target.apiFormat === "anthropic") {
       const res = await fetch(`${baseUrl}/messages`, {
         method: "POST",
@@ -263,7 +276,7 @@ async function pingEndpoint(target: PingTarget, start: number) {
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        return { ok: false, error: `${res.status}: ${text.slice(0, 120)}` };
+        return { ok: false, error: formatProviderHttpError(res.status, text) };
       }
       return { ok: true, latencyMs: Date.now() - start };
     }
@@ -283,7 +296,7 @@ async function pingEndpoint(target: PingTarget, start: number) {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      return { ok: false, error: `${res.status}: ${text.slice(0, 120)}` };
+      return { ok: false, error: formatProviderHttpError(res.status, text) };
     }
     return { ok: true, latencyMs: Date.now() - start };
   } catch (err) {

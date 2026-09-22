@@ -14,6 +14,9 @@ export const users = pgTable("users", {
    */
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  /** Sign-in brute-force lockout — driven by signInAction. */
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  loginLockedUntil: timestamp("login_locked_until"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

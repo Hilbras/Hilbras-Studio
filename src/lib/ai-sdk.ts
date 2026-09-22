@@ -5,6 +5,8 @@
  * without vendor-specific dependencies.
  */
 
+import { assertPublicProviderUrl } from "@/lib/net-guard";
+
 export type ApiFormat = "openai" | "anthropic";
 
 export interface ProviderConfig {
@@ -23,6 +25,21 @@ export type ChatMessage = {
 interface AnthropicMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+/**
+ * Single-line, length-capped rendering of an upstream error body. Response
+ * fragments are genuinely useful when debugging a pasted base URL, so they
+ * stay — but control characters are stripped and the body never exceeds
+ * 120 characters.
+ */
+export function formatProviderHttpError(status: number, body: string): string {
+  const clean = body
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return clean ? `HTTP ${status}: ${clean}` : `HTTP ${status}`;
 }
 
 /* ── OpenAI format ──────────────────────────────────────────── */
@@ -52,7 +69,7 @@ async function openaiChatCompletion(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`OpenAI API error ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(formatProviderHttpError(res.status, text));
   }
 
   const data = (await res.json()) as {
@@ -87,7 +104,7 @@ async function* openaiStreamChat(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`OpenAI API error ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(formatProviderHttpError(res.status, text));
   }
 
   const reader = res.body?.getReader();
@@ -158,7 +175,7 @@ async function anthropicChatCompletion(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Anthropic API error ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(formatProviderHttpError(res.status, text));
   }
 
   const data = (await res.json()) as {
@@ -200,7 +217,7 @@ async function* anthropicStreamChat(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Anthropic API error ${res.status}: ${text.slice(0, 200)}`);
+    throw new Error(formatProviderHttpError(res.status, text));
   }
 
   const reader = res.body?.getReader();
@@ -251,6 +268,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   opts?: { maxTokens?: number; temperature?: number }
 ): Promise<string> {
+  await assertPublicProviderUrl(config.baseUrl);
   if (config.apiFormat === "anthropic") {
     return anthropicChatCompletion(config, messages, opts);
   }
@@ -265,6 +283,7 @@ export async function* streamChat(
   messages: ChatMessage[],
   opts?: { maxTokens?: number; temperature?: number }
 ): AsyncGenerator<string> {
+  await assertPublicProviderUrl(config.baseUrl);
   if (config.apiFormat === "anthropic") {
     yield* anthropicStreamChat(config, messages, opts);
     return;

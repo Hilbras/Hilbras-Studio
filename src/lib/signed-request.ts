@@ -44,6 +44,22 @@ export function parseSignedRequest(
   }
 }
 
+/** A candidate secret and, for UI-saved secrets, the tenant that owns it. */
+export interface ThreadsSecretCandidate {
+  secret: string;
+  /**
+   * The user who saved this secret via the UI, or null for the
+   * deployment-level `THREADS_CLIENT_SECRET`. Destructive callbacks verified
+   * with a tenant's secret must stay scoped to that tenant's rows.
+   */
+  ownerUserId: string | null;
+}
+
+export interface VerifiedThreadsRequest {
+  payload: Record<string, unknown>;
+  ownerUserId: string | null;
+}
+
 /**
  * Every Threads app secret a callback could legitimately have been signed with,
  * most recently saved first.
@@ -57,46 +73,55 @@ export function parseSignedRequest(
  *
  * Both are collected, and the signature is checked against each in turn. That
  * also means a secret rotated in the UI keeps verifying callbacks signed with
- * the previous secret until Meta switches over.
+ * the previous secret until Meta switches over. Each candidate carries its
+ * owner so callers can scope deletes — a tenant's secret must never act on
+ * another tenant's connection.
  */
-export async function readThreadsAppSecrets(): Promise<string[]> {
+export async function readThreadsAppSecrets(): Promise<ThreadsSecretCandidate[]> {
   const rows = await db
-    .select({ encryptedValue: storedCredentials.encryptedValue })
+    .select({
+      encryptedValue: storedCredentials.encryptedValue,
+      userId: storedCredentials.userId,
+    })
     .from(storedCredentials)
     .where(eq(storedCredentials.keyName, "threads_client_secret"))
     .orderBy(desc(storedCredentials.updatedAt));
 
-  const secrets: string[] = [];
-  const add = (secret: string | null | undefined) => {
+  const candidates: ThreadsSecretCandidate[] = [];
+  const add = (secret: string | null | undefined, ownerUserId: string | null) => {
     const trimmed = secret?.trim();
-    if (trimmed && !secrets.includes(trimmed)) secrets.push(trimmed);
+    if (!trimmed) return;
+    if (candidates.some((c) => c.secret === trimmed)) return;
+    candidates.push({ secret: trimmed, ownerUserId });
   };
 
   for (const row of rows) {
     if (!row.encryptedValue) continue;
     try {
-      add(decryptSecret(row.encryptedValue));
+      add(decryptSecret(row.encryptedValue), row.userId ?? null);
     } catch {
       // Row can't be decrypted (e.g. the encryption key changed) — skip it
       // rather than failing every candidate.
     }
   }
 
-  add(process.env.THREADS_CLIENT_SECRET);
-  return secrets;
+  add(process.env.THREADS_CLIENT_SECRET, null);
+  return candidates;
 }
 
 /**
  * Verify a Meta `signed_request` against any of the candidate secrets and
- * return its payload, or null when none of them match.
+ * return its payload plus the owning tenant, or null when none match.
  */
 export function verifyThreadsSignedRequest(
   signedRequest: string,
-  secrets: string[]
-): Record<string, unknown> | null {
-  for (const secret of secrets) {
-    const payload = parseSignedRequest(signedRequest, secret);
-    if (payload) return payload;
+  candidates: ThreadsSecretCandidate[]
+): VerifiedThreadsRequest | null {
+  for (const candidate of candidates) {
+    const payload = parseSignedRequest(signedRequest, candidate.secret);
+    if (payload) {
+      return { payload, ownerUserId: candidate.ownerUserId };
+    }
   }
   return null;
 }

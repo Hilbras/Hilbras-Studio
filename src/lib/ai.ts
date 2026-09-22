@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
@@ -25,86 +25,118 @@ You help users create, adapt, and schedule content across social platforms.
 Be concise, creative, and platform-aware.
 When asked to create posts, adapt tone per platform rules.`;
 
-/* ── Provider resolution ────────────────────────────────────── */
+/* ── Built-in default model ─────────────────────────────────── */
 
 /**
- * Resolve the active AI provider for the current user.
- * Priority: DB default provider → first DB provider → env fallback.
+ * Stable id of the built-in "Hilbras AI" model.
+ * Not a DB row — it always exists, and users can neither edit nor remove it.
+ * It is active whenever no user-added provider is selected.
  */
+export const BUILTIN_PROVIDER_ID = "builtin";
+
+/**
+ * Config for the built-in model. Server-side only: the key lives in env vars
+ * and is never sent to the client.
+ *
+ * `HILBRAS_AI_*` wins; otherwise it falls back to the legacy
+ * `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` pair.
+ * Returns null when the server has no key configured.
+ */
+export function getBuiltinProviderConfig(): ProviderConfig | null {
+  const legacyAnthropic =
+    !!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY;
+
+  const apiKey =
+    process.env.HILBRAS_AI_API_KEY ??
+    process.env.OPENAI_API_KEY ??
+    process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return null;
+
+  const formatOverride = process.env.HILBRAS_AI_API_FORMAT;
+  const apiFormat: ProviderConfig["apiFormat"] =
+    formatOverride === "anthropic" || formatOverride === "openai"
+      ? formatOverride
+      : process.env.HILBRAS_AI_BASE_URL || !legacyAnthropic
+        ? "openai"
+        : "anthropic";
+
+  const baseUrl =
+    process.env.HILBRAS_AI_BASE_URL ??
+    (apiFormat === "anthropic"
+      ? "https://api.anthropic.com/v1"
+      : "https://api.openai.com/v1");
+
+  const modelId =
+    process.env.HILBRAS_AI_MODEL_ID ??
+    (apiFormat === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o-mini");
+
+  return { name: "Hilbras AI", baseUrl, apiKey, apiFormat, modelId };
+}
+
+/* ── Provider resolution ────────────────────────────────────── */
+
+function rowToConfig(row: {
+  name: string;
+  baseUrl: string;
+  apiKeyEnc: string;
+  apiFormat: string;
+  modelId: string;
+}): ProviderConfig {
+  return {
+    name: row.name,
+    baseUrl: row.baseUrl,
+    apiKey: decryptSecret(row.apiKeyEnc),
+    apiFormat: row.apiFormat as ProviderConfig["apiFormat"],
+    modelId: row.modelId,
+  };
+}
+
+/**
+ * Resolve the active AI provider for a user.
+ *
+ * Active selection lives on `ai_providers.is_default`:
+ * - a row is default  → that provider is active;
+ * - no row is default → the built-in model is active (the initial state).
+ *
+ * Falls back further when the built-in model has no server key.
+ */
+async function resolveForUser(userId: string): Promise<ProviderConfig | null> {
+  // 1. A provider the user explicitly selected
+  const [active] = await db
+    .select()
+    .from(aiProviders)
+    .where(and(eq(aiProviders.userId, userId), eq(aiProviders.isDefault, true)))
+    .limit(1);
+  if (active) return rowToConfig(active);
+
+  // 2. Built-in default model
+  const builtin = getBuiltinProviderConfig();
+  if (builtin) return builtin;
+
+  // 3. Built-in unavailable → any provider the user added
+  const [anyRow] = await db
+    .select()
+    .from(aiProviders)
+    .where(eq(aiProviders.userId, userId))
+    .orderBy(desc(aiProviders.updatedAt))
+    .limit(1);
+  if (anyRow) return rowToConfig(anyRow);
+
+  return null;
+}
+
+/** Resolve the active provider for the current session. */
 export async function resolveProvider(): Promise<ProviderConfig | null> {
   const user = await getSessionUser();
   if (!user) return null;
-
-  // 1. Try the user's default provider
-  const [defaultRow] = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, user.id))
-    .orderBy(desc(aiProviders.isDefault), desc(aiProviders.updatedAt))
-    .limit(1);
-
-  if (defaultRow) {
-    const apiKey = decryptSecret(defaultRow.apiKeyEnc);
-    return {
-      name: defaultRow.name,
-      baseUrl: defaultRow.baseUrl,
-      apiKey,
-      apiFormat: defaultRow.apiFormat as ProviderConfig["apiFormat"],
-      modelId: defaultRow.modelId,
-    };
-  }
-
-  // 2. Env fallback
-  const envKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  if (!envKey) return null;
-
-  const isAnthropic = !!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY;
-  return {
-    name: isAnthropic ? "Anthropic (env)" : "OpenAI (env)",
-    baseUrl: isAnthropic
-      ? "https://api.anthropic.com/v1"
-      : "https://api.openai.com/v1",
-    apiKey: envKey,
-    apiFormat: isAnthropic ? "anthropic" : "openai",
-    modelId: isAnthropic ? "claude-sonnet-4-20250514" : "gpt-4o-mini",
-  };
+  return resolveForUser(user.id);
 }
 
 /**
  * Resolve provider without session (for server actions that pass context).
  */
 export async function resolveProviderForUser(userId: string): Promise<ProviderConfig | null> {
-  const [defaultRow] = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, userId))
-    .orderBy(desc(aiProviders.isDefault), desc(aiProviders.updatedAt))
-    .limit(1);
-
-  if (defaultRow) {
-    const apiKey = decryptSecret(defaultRow.apiKeyEnc);
-    return {
-      name: defaultRow.name,
-      baseUrl: defaultRow.baseUrl,
-      apiKey,
-      apiFormat: defaultRow.apiFormat as ProviderConfig["apiFormat"],
-      modelId: defaultRow.modelId,
-    };
-  }
-
-  const envKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  if (!envKey) return null;
-
-  const isAnthropic = !!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY;
-  return {
-    name: isAnthropic ? "Anthropic (env)" : "OpenAI (env)",
-    baseUrl: isAnthropic
-      ? "https://api.anthropic.com/v1"
-      : "https://api.openai.com/v1",
-    apiKey: envKey,
-    apiFormat: isAnthropic ? "anthropic" : "openai",
-    modelId: isAnthropic ? "claude-sonnet-4-20250514" : "gpt-4o-mini",
-  };
+  return resolveForUser(userId);
 }
 
 /* ── Public API ─────────────────────────────────────────────── */

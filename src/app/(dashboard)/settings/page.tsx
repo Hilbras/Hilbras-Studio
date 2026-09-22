@@ -1,11 +1,10 @@
 import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { userPreferences, aiProviders } from "@/db/schema";
+import { userPreferences } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
-import { decryptSecret, maskSecret } from "@/lib/crypto";
+import { listAiProviders } from "@/app/actions/ai-providers";
 import { SettingsClient } from "./settings-client";
-import type { AiProviderItem } from "@/app/actions/ai-providers";
 
 export default async function SettingsPage() {
   const user = (await getSessionUser())!;
@@ -27,31 +26,8 @@ export default async function SettingsPage() {
       .then((rows) => rows[0]);
   }
 
-  // AI providers
-  const providerRows = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, user.id));
-
-  const providers: AiProviderItem[] = providerRows.map((row) => {
-    let apiKeyMasked = "••••••••••••";
-    try {
-      const decrypted = decryptSecret(row.apiKeyEnc);
-      apiKeyMasked = maskSecret(decrypted);
-    } catch {
-      // keep default
-    }
-    return {
-      id: row.id,
-      name: row.name,
-      baseUrl: row.baseUrl,
-      apiKeyMasked,
-      apiFormat: row.apiFormat,
-      modelId: row.modelId,
-      isDefault: row.isDefault,
-      createdAt: row.createdAt.toISOString(),
-    };
-  });
+  // AI providers — built-in model first, then the user's own
+  const providers = await listAiProviders();
 
   return (
     <SettingsClient

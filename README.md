@@ -59,6 +59,19 @@ See [`.env.example`](.env.example) for the full list. Required:
 
 Platform credentials are configured per-user in the UI (Settings → Accounts) and stored encrypted in the database, or supplied as `{PLATFORM}_CLIENT_ID` / `{PLATFORM}_CLIENT_SECRET` env vars.
 
+### Built-in AI model
+
+Settings → AI Provider always shows a built-in model (**Hilbras AI**) that users can select but can neither edit nor remove. It is configured server-side only:
+
+| Variable | Description |
+|----------|-------------|
+| `HILBRAS_AI_API_KEY` | API key for the built-in model (falls back to `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
+| `HILBRAS_AI_BASE_URL` | Optional — defaults to `https://api.openai.com/v1` |
+| `HILBRAS_AI_API_FORMAT` | Optional — `openai` (default) or `anthropic` |
+| `HILBRAS_AI_MODEL_ID` | Optional — defaults to `gpt-4o-mini` (or `claude-sonnet-4-20250514` for Anthropic) |
+
+Users can add their own providers and switch the active model with the **Active model** selector; the built-in one is active until they pick another.
+
 ## Scheduled posts
 
 Queued posts are published by `src/lib/scheduled-posts.ts`, triggered by Vercel

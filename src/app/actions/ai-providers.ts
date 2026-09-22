@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
+import { BUILTIN_PROVIDER_ID, getBuiltinProviderConfig } from "@/lib/ai";
 
 export interface AiProviderItem {
   id: string;
@@ -17,6 +18,10 @@ export interface AiProviderItem {
   apiFormat: string;
   modelId: string;
   isDefault: boolean;
+  /** Built-in model: always present, never editable or removable. */
+  isSystem?: boolean;
+  /** Built-in model with no server-side key configured. */
+  unavailable?: boolean;
   createdAt: string;
 }
 
@@ -69,12 +74,13 @@ export async function saveAiProviderAction(
 
   // Check if this is an insert or update
   const existing = await db
-    .select({ id: aiProviders.id })
+    .select({ id: aiProviders.id, isDefault: aiProviders.isDefault })
     .from(aiProviders)
     .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
     .limit(1);
 
   if (existing.length > 0) {
+    // Never silently deactivate on edit: only take the default slot when asked.
     await db
       .update(aiProviders)
       .set({
@@ -83,17 +89,13 @@ export async function saveAiProviderAction(
         apiKeyEnc: encrypted,
         apiFormat,
         modelId,
-        isDefault: makeDefault,
+        isDefault: makeDefault || existing[0].isDefault,
         updatedAt: new Date(),
       })
       .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
   } else {
-    // If this is the first provider, make it default automatically
-    const count = await db
-      .select({ count: aiProviders.id })
-      .from(aiProviders)
-      .where(eq(aiProviders.userId, session.id));
-
+    // New providers are not auto-selected — the built-in model stays active
+    // until the user picks this one.
     await db.insert(aiProviders).values({
       id,
       userId: session.id,
@@ -102,7 +104,7 @@ export async function saveAiProviderAction(
       apiKeyEnc: encrypted,
       apiFormat,
       modelId,
-      isDefault: makeDefault || count.length === 0,
+      isDefault: makeDefault,
     });
   }
 
@@ -116,6 +118,11 @@ export async function deleteAiProviderAction(
   const session = await getSessionUser();
   if (!session) return { ok: false, error: "Not signed in" };
 
+  if (id === BUILTIN_PROVIDER_ID) {
+    return { ok: false, error: "The built-in model cannot be removed" };
+  }
+
+  // Deleting the active provider simply reverts the active model to the built-in one.
   await db
     .delete(aiProviders)
     .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
@@ -123,7 +130,7 @@ export async function deleteAiProviderAction(
   return { ok: true };
 }
 
-/** List all AI providers for the current user. */
+/** List all AI providers for the current user, built-in model first. */
 export async function listAiProviders(): Promise<AiProviderItem[]> {
   const session = await getSessionUser();
   if (!session) return [];
@@ -134,16 +141,34 @@ export async function listAiProviders(): Promise<AiProviderItem[]> {
     .where(eq(aiProviders.userId, session.id))
     .orderBy(desc(aiProviders.isDefault), desc(aiProviders.updatedAt));
 
-  return rows.map((row) => {
+  const active = rows.find((row) => row.isDefault);
+
+  const builtin = getBuiltinProviderConfig();
+  const items: AiProviderItem[] = [
+    {
+      id: BUILTIN_PROVIDER_ID,
+      name: "Hilbras AI",
+      baseUrl: builtin?.baseUrl ?? "",
+      apiKeyMasked: builtin ? "Server-managed" : "Not configured",
+      apiFormat: builtin?.apiFormat ?? "openai",
+      modelId: builtin?.modelId ?? "—",
+      // Built-in is active while no user provider is selected.
+      isDefault: !active,
+      isSystem: true,
+      unavailable: !builtin,
+      createdAt: "",
+    },
+  ];
+
+  for (const row of rows) {
     let apiKeyMasked = "••••••••••••";
     try {
-      const decrypted = decryptSecret(row.apiKeyEnc);
-      apiKeyMasked = maskSecret(decrypted);
+      apiKeyMasked = maskSecret(decryptSecret(row.apiKeyEnc));
     } catch {
       // keep default masked
     }
 
-    return {
+    items.push({
       id: row.id,
       name: row.name,
       baseUrl: row.baseUrl,
@@ -152,16 +177,37 @@ export async function listAiProviders(): Promise<AiProviderItem[]> {
       modelId: row.modelId,
       isDefault: row.isDefault,
       createdAt: row.createdAt.toISOString(),
-    };
-  });
+    });
+  }
+
+  return items;
 }
 
-/** Set a provider as the default (unset others). */
+/**
+ * Select the active model: pass BUILTIN_PROVIDER_ID for the built-in model,
+ * or the id of a user-added provider.
+ */
 export async function setDefaultAiProviderAction(
   id: string
 ): Promise<{ ok: boolean; error?: string }> {
   const session = await getSessionUser();
   if (!session) return { ok: false, error: "Not signed in" };
+
+  if (id === BUILTIN_PROVIDER_ID) {
+    // No user provider selected → the built-in model is active.
+    await db
+      .update(aiProviders)
+      .set({ isDefault: false, updatedAt: new Date() })
+      .where(eq(aiProviders.userId, session.id));
+    return { ok: true };
+  }
+
+  const [row] = await db
+    .select({ id: aiProviders.id })
+    .from(aiProviders)
+    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
+    .limit(1);
+  if (!row) return { ok: false, error: "Provider not found" };
 
   // Unset all defaults
   await db
@@ -178,38 +224,22 @@ export async function setDefaultAiProviderAction(
   return { ok: true };
 }
 
-/** Send a minimal request to the provider to verify connectivity. */
-export async function testPingProviderAction(
-  id: string
-): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
-  const session = await getSessionUser();
-  if (!session) return { ok: false, error: "Not signed in" };
+type PingTarget = { baseUrl: string; apiFormat: string; modelId: string; apiKey: string };
 
-  const [row] = await db
-    .select()
-    .from(aiProviders)
-    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
-    .limit(1);
-
-  if (!row) return { ok: false, error: "Provider not found" };
-
-  const apiKey = decryptSecret(row.apiKeyEnc);
-  const baseUrl = row.baseUrl.replace(/\/+$/, "");
-  const apiFormat = row.apiFormat;
-
-  const start = Date.now();
+async function pingEndpoint(target: PingTarget, start: number) {
+  const baseUrl = target.baseUrl.replace(/\/+$/, "");
 
   try {
-    if (apiFormat === "anthropic") {
+    if (target.apiFormat === "anthropic") {
       const res = await fetch(`${baseUrl}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
+          "x-api-key": target.apiKey,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: row.modelId,
+          model: target.modelId,
           max_tokens: 1,
           messages: [{ role: "user", content: "hi" }],
         }),
@@ -226,10 +256,10 @@ export async function testPingProviderAction(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${target.apiKey}`,
       },
       body: JSON.stringify({
-        model: row.modelId,
+        model: target.modelId,
         max_tokens: 1,
         messages: [{ role: "user", content: "hi" }],
       }),
@@ -243,4 +273,38 @@ export async function testPingProviderAction(
     const msg = err instanceof Error ? err.message : "Network error";
     return { ok: false, error: msg };
   }
+}
+
+/** Send a minimal request to the provider to verify connectivity. */
+export async function testPingProviderAction(
+  id: string
+): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
+  const session = await getSessionUser();
+  if (!session) return { ok: false, error: "Not signed in" };
+
+  if (id === BUILTIN_PROVIDER_ID) {
+    const builtin = getBuiltinProviderConfig();
+    if (!builtin) {
+      return { ok: false, error: "Hilbras AI is not configured on this server" };
+    }
+    return pingEndpoint(builtin, Date.now());
+  }
+
+  const [row] = await db
+    .select()
+    .from(aiProviders)
+    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
+    .limit(1);
+
+  if (!row) return { ok: false, error: "Provider not found" };
+
+  return pingEndpoint(
+    {
+      baseUrl: row.baseUrl,
+      apiFormat: row.apiFormat,
+      modelId: row.modelId,
+      apiKey: decryptSecret(row.apiKeyEnc),
+    },
+    Date.now()
+  );
 }

@@ -20,7 +20,6 @@ import {
   User,
   Palette,
   Brain,
-  Check,
   Loader2,
   Lock,
   Pencil,
@@ -123,9 +122,13 @@ export function SettingsClient({ user, preferences, providers = [] }: {
 
   const refreshProviders = async () => { setLocalProviders(await listAiProviders()); };
   const handleDeleteProvider = async (id: string) => { await deleteAiProviderAction(id); await refreshProviders(); setViewingProvider(null); };
-  const handleSetDefaultProvider = async (id: string) => { await setDefaultAiProviderAction(id); await refreshProviders(); };
+  const handleActivateProvider = async (id: string) => { await setDefaultAiProviderAction(id); await refreshProviders(); };
   const handlePrefToggle = (key: keyof Prefs) => { const v = !prefs[key]; setPrefs((p) => ({ ...p, [key]: v })); updatePreferencesAction({ ...prefs, [key]: v }); };
   const handlePing = async (id: string) => { setPinging(id); const r = await testPingProviderAction(id); setPingResult((prev) => ({ ...prev, [id]: r })); setPinging(null); };
+
+  const activeId = localProviders.find((p) => p.isDefault)?.id ?? localProviders[0]?.id ?? "";
+  const hasCustomProviders = localProviders.some((p) => !p.isSystem);
+  const builtinUnconfigured = localProviders.some((p) => p.isSystem && p.unavailable);
 
   return (
     <div className="relative">
@@ -226,6 +229,30 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                      {/* Active model — the built-in one can't be removed or edited */}
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ai-active" className="text-xs">Active model</Label>
+                        <select
+                          id="ai-active"
+                          value={activeId}
+                          onChange={(e) => handleActivateProvider(e.target.value)}
+                          className="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-gold-500/30"
+                        >
+                          {localProviders.map((p) => (
+                            <option key={p.id} value={p.id} disabled={p.unavailable}>
+                              {p.name} · {p.modelId}
+                              {p.isSystem ? " (built-in)" : ""}
+                              {p.unavailable ? " — not configured" : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {builtinUnconfigured && (
+                          <p className="text-[10px] text-amber-500">
+                            The built-in model needs a key on this server (HILBRAS_AI_API_KEY).
+                          </p>
+                        )}
+                      </div>
+
                       <form
                         action={async (formData: FormData) => {
                           const r = await saveAiProviderAction(aiProviderState, formData);
@@ -267,12 +294,6 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-                            <input type="checkbox" name="isDefault" className="size-3.5 rounded border-border accent-gold-500" defaultChecked={editingProvider?.isDefault ?? localProviders.length === 0} />
-                            Default
-                          </label>
-                        </div>
-                        <div className="flex items-center gap-2">
                           <MagneticButton strength={0.1}>
                             <Button type="submit" variant="gold" size="sm" disabled={aiProviderPending} className="rounded-lg gap-1 text-xs">
                               {aiProviderPending && <Loader2 className="size-3 animate-spin" />}
@@ -283,49 +304,55 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                         </div>
                       </form>
 
-                      {localProviders.length === 0 ? (
-                        <div className="py-4 text-center text-xs text-muted-foreground">
-                          <Sparkles className="size-6 mx-auto mb-1 text-gold-500/50" />
-                          <p>No providers yet. Add one above.</p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {localProviders.map((p) => (
-                            <div key={p.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-border bg-card hover:border-gold-500/30 transition-colors">
-                              <div className="w-7 h-7 rounded-lg bg-gold-500/10 flex items-center justify-center shrink-0">
-                                <Sparkles className="size-3.5 text-gold-500" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5">
-                                  <p className="text-xs font-medium truncate">{p.name}</p>
-                                  {p.isDefault && <Badge variant="gold" className="text-[9px] px-1 py-0">Default</Badge>}
-                                  {pingResult[p.id] && (
-                                    <Badge variant={pingResult[p.id].ok ? "gold" : "outline"} className="text-[9px] px-1 py-0 gap-0.5">
-                                      {pingResult[p.id].ok ? <Wifi className="size-2" /> : <WifiOff className="size-2" />}
-                                      {pingResult[p.id].ok ? `${pingResult[p.id].latencyMs}ms` : "Fail"}
-                                    </Badge>
-                                  )}
-                                </div>
-                                <p className="text-[10px] text-muted-foreground truncate">{p.modelId} · {p.apiFormat}</p>
-                              </div>
-                              <div className="flex items-center gap-0.5">
-                                <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Test" disabled={pinging === p.id} onClick={() => handlePing(p.id)}>
-                                  {pinging === p.id ? <Loader2 className="size-3 animate-spin" /> : <Wifi className="size-3" />}
-                                </Button>
-                                {!p.isDefault && (
-                                  <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Default" onClick={() => handleSetDefaultProvider(p.id)}>
-                                    <Check className="size-3" />
-                                  </Button>
-                                )}
-                                <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Edit" onClick={() => { setEditingProvider(p); setViewingProvider(p); }}>
-                                  <Pencil className="size-3" />
-                                </Button>
-                                <Button variant="ghost" size="icon" className="size-7 rounded-lg hover:bg-red-500/10 hover:text-red-500" title="Delete" onClick={() => handleDeleteProvider(p.id)}>
-                                  <Trash2 className="size-3" />
-                                </Button>
-                              </div>
+                      <div className="space-y-2">
+                        {localProviders.map((p) => (
+                          <div key={p.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-border bg-card hover:border-gold-500/30 transition-colors">
+                            <div className="w-7 h-7 rounded-lg bg-gold-500/10 flex items-center justify-center shrink-0">
+                              {p.isSystem ? <Lock className="size-3.5 text-gold-500" /> : <Sparkles className="size-3.5 text-gold-500" />}
                             </div>
-                          ))}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <p className="text-xs font-medium truncate">{p.name}</p>
+                                {p.isDefault ? (
+                                  <Badge variant="gold" className="text-[9px] px-1 py-0">Active</Badge>
+                                ) : p.isSystem ? (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0">Built-in</Badge>
+                                ) : null}
+                                {p.unavailable && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 text-amber-500">Not configured</Badge>
+                                )}
+                                {pingResult[p.id] && (
+                                  <Badge variant={pingResult[p.id].ok ? "gold" : "outline"} className="text-[9px] px-1 py-0 gap-0.5">
+                                    {pingResult[p.id].ok ? <Wifi className="size-2" /> : <WifiOff className="size-2" />}
+                                    {pingResult[p.id].ok ? `${pingResult[p.id].latencyMs}ms` : "Fail"}
+                                  </Badge>
+                                )}
+                              </div>
+                              <p className="text-[10px] text-muted-foreground truncate">
+                                {p.modelId} · {p.isSystem ? "managed by the server" : p.apiFormat}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-0.5">
+                              <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Test" disabled={pinging === p.id} onClick={() => handlePing(p.id)}>
+                                {pinging === p.id ? <Loader2 className="size-3 animate-spin" /> : <Wifi className="size-3" />}
+                              </Button>
+                              {!p.isSystem && (
+                                <>
+                                  <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Edit" onClick={() => { setEditingProvider(p); setViewingProvider(p); }}>
+                                    <Pencil className="size-3" />
+                                  </Button>
+                                  <Button variant="ghost" size="icon" className="size-7 rounded-lg hover:bg-red-500/10 hover:text-red-500" title="Delete" onClick={() => handleDeleteProvider(p.id)}>
+                                    <Trash2 className="size-3" />
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      {!hasCustomProviders && (
+                        <div className="py-2 text-center text-xs text-muted-foreground">
+                          <p>No custom providers yet. Add one above to switch away from the built-in model.</p>
                         </div>
                       )}
                       <p className="text-[10px] text-muted-foreground">Keys encrypted with AES-256-GCM.</p>
@@ -390,7 +417,7 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                   </div>
                   <div>
                     <h2 className="font-semibold">{viewingProvider.name}</h2>
-                    <p className="text-xs text-muted-foreground">{viewingProvider.isDefault ? "Default provider" : "Provider"}</p>
+                    <p className="text-xs text-muted-foreground">{viewingProvider.isDefault ? "Active provider" : "Provider"}</p>
                   </div>
                 </div>
                 <button onClick={() => setViewingProvider(null)} className="p-1.5 rounded-lg hover:bg-accent transition-colors">

@@ -15,6 +15,13 @@
       "when": 1789916223614,
       "tag": "0001_dapper_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790096642151,
+      "tag": "0002_cynical_master_mold",
+      "breakpoints": true
     }
   ]
 }

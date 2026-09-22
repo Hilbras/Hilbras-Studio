@@ -6,6 +6,7 @@ import {
   Sparkles,
   Send,
   ImagePlus,
+  Link,
   Hash,
   Calendar,
   Loader2,
@@ -72,6 +73,9 @@ export default function ComposerPage() {
   const [imageUrl, setImageUrl] = React.useState("");
   /** Lets the media button jump to the field that publishes actually read. */
   const mediaInputRef = React.useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = React.useState(false);
+  const [uploadError, setUploadError] = React.useState("");
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [publishing, setPublishing] = React.useState(false);
   const [publishResults, setPublishResults] = React.useState<
     Array<{ platform: string; success: boolean; postId?: string; error?: string; url?: string }>
@@ -103,6 +107,43 @@ export default function ComposerPage() {
 
   const toggle = (p: Platform) =>
     setSelected((s) => (s.includes(p) ? s.filter((x) => x !== p) : [...s, p]));
+
+  // Upload a local image; the server stores it and returns a public URL,
+  // which fills the same field the URL flow uses — publish is unchanged.
+  const handleUploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked after a failure
+    if (!file) return;
+    setUploadError("");
+    if (!file.type.startsWith("image/")) {
+      setUploadError("Only images can be uploaded.");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setUploadError("Image is over 4 MB — compress it or use a URL instead.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/media", { method: "POST", body: fd });
+      const body = (await res.json().catch(() => ({}))) as {
+        url?: string;
+        error?: string;
+      };
+      if (!res.ok || !body.url) {
+        throw new Error(body.error || `Upload failed (${res.status})`);
+      }
+      setImageUrl(body.url);
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : "Upload failed — try again."
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
 
   // AI generate
   const handleGenerate = async () => {
@@ -259,13 +300,34 @@ export default function ComposerPage() {
 
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif"
+                          className="hidden"
+                          onChange={handleUploadFile}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1 rounded-xl"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={uploading}
+                        >
+                          {uploading ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <ImagePlus className="size-3" />
+                          )}
+                          {uploading ? "Uploading..." : "Upload Image"}
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"
                           className="gap-1 rounded-xl"
                           onClick={() => mediaInputRef.current?.focus()}
                         >
-                          <ImagePlus className="size-3" /> Add Media URL
+                          <Link className="size-3" /> Media URL
                         </Button>
                         <span className="text-[10px] text-muted-foreground">
                           {draft.length} characters
@@ -288,9 +350,41 @@ export default function ComposerPage() {
               <Card className="hover:shadow-lg transition-shadow duration-300">
                 <CardContent className="p-4">
                   <Label htmlFor="mediaUrl" className="text-xs text-muted-foreground flex items-center gap-1.5 mb-1.5">
-                    <Film className="size-3" /> Media URL — required for Instagram, and for Threads image/video posts
+                    <Film className="size-3" /> Media — upload an image or paste a URL (required for Instagram and Threads media posts)
                   </Label>
                   <Input ref={mediaInputRef} id="mediaUrl" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} placeholder="https://example.com/image.jpg — a .mp4/.mov link posts as Threads video" className="rounded-xl text-sm" />
+                  {(imageUrl || uploadError) && (
+                    <div className="flex items-center gap-3 mt-2">
+                      {imageUrl && (
+                        // Arbitrary user-pasted hosts can't be whitelisted for
+                        // next/image; this is a 56px preview, not an asset.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={imageUrl}
+                          alt="Media preview"
+                          className="h-14 w-14 rounded-lg object-cover border border-border"
+                          onError={(e) => {
+                            // External URLs that refuse hotlinking just skip
+                            // the thumbnail; the URL itself stays valid.
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      )}
+                      {imageUrl && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1 rounded-xl text-muted-foreground"
+                          onClick={() => setImageUrl("")}
+                        >
+                          <XCircle className="size-3" /> Clear
+                        </Button>
+                      )}
+                      {uploadError && (
+                        <p className="text-xs text-red-500">{uploadError}</p>
+                      )}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </BlurFade>
@@ -488,7 +582,7 @@ export default function ComposerPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2 text-xs text-muted-foreground">
-                  <p>• Instagram requires an image URL for posts</p>
+                  <p>• Instagram requires an image — upload one or paste a URL</p>
                   <p>• X supports text up to 280 characters</p>
                   <p>• Schedule posts for optimal engagement times</p>
                   <p>• Use the AI to generate hashtags automatically</p>

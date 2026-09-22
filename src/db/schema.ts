@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, unique } from "drizzle-orm/pg-core";
+import { customType, pgTable, text, timestamp, boolean, integer, unique } from "drizzle-orm/pg-core";
 
 /**
  * users — application accounts for Hilbras Studio.
@@ -127,3 +127,29 @@ export const aiProviders = pgTable("ai_providers", {
 
 export type AiProvider = typeof aiProviders.$inferSelect;
 export type NewAiProvider = typeof aiProviders.$inferInsert;
+
+/** Raw bytes — node-postgres maps bytea to/from Buffer. */
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => "bytea",
+});
+
+/**
+ * media_assets — images uploaded from the Composer.
+ *
+ * Meta's publish endpoints fetch `image_url` server-side at publish time, so
+ * an upload needs a durable public URL. These rows back GET /api/media/[id],
+ * which serves the bytes; the stored URL is what goes into posts.image_url.
+ */
+export const mediaAssets = pgTable("media_assets", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  filename: text("filename").notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  data: bytea("data").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type MediaAsset = typeof mediaAssets.$inferSelect;

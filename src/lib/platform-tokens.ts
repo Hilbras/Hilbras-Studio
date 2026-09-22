@@ -11,7 +11,7 @@
  * Docs:
  *   Instagram  GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token
  *   Threads    GET https://graph.threads.net/access_token?grant_type=th_exchange_token
- *   Facebook   GET https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token
+ *   Facebook   GET https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token
  */
 
 export interface LongLivedToken {
@@ -27,7 +27,16 @@ interface MetaTokenResponse {
 }
 
 const EXCHANGE_ENDPOINTS: Partial<
-  Record<string, { url: string; grantType: string; usesClientId?: boolean }>
+  Record<
+    string,
+    {
+      url: string;
+      grantType: string;
+      /** Query parameter that carries the token — `access_token` everywhere except Facebook. */
+      tokenParam?: string;
+      usesClientId?: boolean;
+    }
+  >
 > = {
   instagram: {
     url: "https://graph.instagram.com/access_token",
@@ -38,8 +47,11 @@ const EXCHANGE_ENDPOINTS: Partial<
     grantType: "th_exchange_token",
   },
   facebook: {
-    url: "https://graph.facebook.com/v21.0/oauth/access_token",
+    url: "https://graph.facebook.com/v26.0/oauth/access_token",
     grantType: "fb_exchange_token",
+    // Meta answers `access_token=` with "fb_exchange_token parameter not
+    // specified" — the exchanged token goes under its own parameter name.
+    tokenParam: "fb_exchange_token",
     usesClientId: true,
   },
 };
@@ -222,7 +234,7 @@ export async function exchangeForLongLivedToken(
   const url = new URL(endpoint.url);
   url.searchParams.set("grant_type", endpoint.grantType);
   url.searchParams.set("client_secret", clientSecret);
-  url.searchParams.set("access_token", shortLivedToken);
+  url.searchParams.set(endpoint.tokenParam ?? "access_token", shortLivedToken);
   if (endpoint.usesClientId && clientId) {
     url.searchParams.set("client_id", clientId);
   }

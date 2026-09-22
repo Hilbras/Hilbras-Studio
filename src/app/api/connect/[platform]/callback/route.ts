@@ -86,22 +86,42 @@ export async function GET(
   const codeVerifier = req.cookies.get(verifierCookieName)?.value ?? "";
   if (!codeVerifier) return fail("missing_pkce_verifier");
 
-  // Token exchange
-  const tokenHeaders: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
-  if (platform.auth.extraHeaders) Object.assign(tokenHeaders, platform.auth.extraHeaders);
+  // Token exchange. Meta documents Facebook's `/oauth/access_token` as a GET
+  // with the parameters in the query string (manual-flow + PKCE guides) and no
+  // grant_type; Threads and Instagram document the form-encoded POST with
+  // grant_type that is the default below. The PKCE verifier is only required
+  // when no client_secret is sent, so its absence on the Facebook branch is
+  // per the docs, not a dropped safeguard.
+  const redirectUri = `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`;
+  const useGet = platform.auth.tokenMethod === "get";
 
-  const tokenRes = await fetch(platform.auth.tokenUrl, {
-    method: "POST",
-    headers: tokenHeaders,
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      grant_type: "authorization_code",
-      code,
-      redirect_uri: `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`,
-      code_verifier: codeVerifier,
-    }).toString(),
-  });
+  const tokenRes = useGet
+    ? await fetch(
+        (() => {
+          const u = new URL(platform.auth.tokenUrl);
+          u.searchParams.set("client_id", clientId);
+          u.searchParams.set("redirect_uri", redirectUri);
+          u.searchParams.set("client_secret", clientSecret);
+          u.searchParams.set("code", code);
+          return u.toString();
+        })(),
+        { headers: platform.auth.extraHeaders },
+      )
+    : await fetch(platform.auth.tokenUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          ...platform.auth.extraHeaders,
+        },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+          code_verifier: codeVerifier,
+        }).toString(),
+      });
 
   if (!tokenRes.ok) {
     return fail(`token_exchange_failed:${tokenRes.status}`);
@@ -187,7 +207,7 @@ export async function GET(
     // the display name) straight from the Graph API instead of storing
     // "unknown".
     const profileRes = await fetch(
-      `https://graph.facebook.com/v21.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
+      `https://graph.facebook.com/v26.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
     );
     if (profileRes.ok) {
       const profile = (await profileRes.json()) as { id?: string; name?: string };

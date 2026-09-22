@@ -40,6 +40,13 @@ export interface PlatformSpec {
     /** X uses PKCE; Reddit authenticates the token call with HTTP Basic. */
     usesPkce?: boolean;
     tokenAuth?: "body" | "basic";
+    /**
+     * HTTP method for the authorization-code exchange. Meta documents Facebook's
+     * `/oauth/access_token` as a **GET** with the parameters in the query
+     * string (manual-flow guide and the PKCE guide both), while Threads and
+     * Instagram document the form-encoded POST this code defaults to.
+     */
+    tokenMethod?: "get" | "post";
     /** Extra headers some providers require. */
     extraHeaders?: Record<string, string>;
     /**
@@ -91,8 +98,11 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {
     auth: {
       clientIdEnv: "FACEBOOK_CLIENT_ID",
       clientSecretEnv: "FACEBOOK_CLIENT_SECRET",
-      authorizeUrl: "https://www.facebook.com/v21.0/dialog/oauth",
-      tokenUrl: "https://graph.facebook.com/v21.0/oauth/access_token",
+      authorizeUrl: "https://www.facebook.com/v26.0/dialog/oauth",
+      tokenUrl: "https://graph.facebook.com/v26.0/oauth/access_token",
+      // Meta's manual-flow guide specifies GET with query parameters for this
+      // endpoint — not the form-encoded POST Threads/Instagram use.
+      tokenMethod: "get",
       scopes: [
         "pages_show_list",
         "pages_read_engagement",

@@ -47,9 +47,9 @@ import { BlurFade } from "@/components/motion/blur-fade";
 import { Ripple } from "@/components/motion/ripple";
 import { OrbitingDots } from "@/components/motion/orbiting-dots";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
-import { processAssistantMessage } from "@/app/actions/ai";
+import { improvePostAction, generateHashtagsAction } from "@/app/actions/ai";
 import { publishToAllNowAction } from "@/app/actions/publish";
-import { createPostAction, listPosts, deletePost, recordPublishOutcome, getConnectedPlatforms, getConfiguredPlatforms } from "@/app/actions/posts";
+import { createPostAction, listPosts, deletePost, recordPublishOutcome, getConnectedPlatforms, getConfiguredPlatforms, type PostItem } from "@/app/actions/posts";
 
 const AI_SUGGESTIONS = [
   { icon: Lightbulb, text: "Product launch announcement" },
@@ -87,8 +87,10 @@ export default function ComposerPage() {
   const [scheduledTime, setScheduledTime] = React.useState("09:00");
 
   // Post queue
-  const [posts, setPosts] = React.useState<any[]>([]);
+  const [posts, setPosts] = React.useState<PostItem[]>([]);
   const [showQueue, setShowQueue] = React.useState(false);
+  /** AI tool failures — kept out of the draft so they can't be published. */
+  const [aiError, setAiError] = React.useState("");
 
   // Load connected + configured platforms from database + posts
   React.useEffect(() => {
@@ -145,19 +147,22 @@ export default function ComposerPage() {
     }
   };
 
-  // AI generate
+  // Improve the post in the editor (or write a fresh one when it's empty).
+  // This is an editor tool, not a chat: the result must be pure post text,
+  // which improvePostAction guarantees — so errors get their own line instead
+  // of landing in the draft where they could be published by accident.
   const handleGenerate = async () => {
     setLoading(true);
+    setAiError("");
     try {
-      const prompt = draft.trim() || "Create a professional social media post for a tech brand";
-      const result = await processAssistantMessage([], prompt);
+      const result = await improvePostAction(draft, selected);
       if (result.error) {
-        setDraft(`Error: ${result.error}`);
+        setAiError(result.error);
       } else {
         setDraft(result.content);
       }
-    } catch (e: any) {
-      setDraft(`Error: ${e.message}`);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "AI request failed.");
     } finally {
       setLoading(false);
     }
@@ -167,13 +172,16 @@ export default function ComposerPage() {
   const handleGenerateHashtags = async () => {
     if (!draft.trim()) return;
     setLoading(true);
+    setAiError("");
     try {
-      const result = await processAssistantMessage([], `Suggest 5-8 relevant hashtags for this social media post: "${draft}" — just list them, nothing else.`);
-      if (!result.error) {
+      const result = await generateHashtagsAction(draft);
+      if (result.error) {
+        setAiError(result.error);
+      } else if (result.content) {
         setDraft(draft + "\n\n" + result.content);
       }
-    } catch (e: any) {
-      console.error(e);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "AI request failed.");
     } finally {
       setLoading(false);
     }
@@ -210,8 +218,8 @@ export default function ComposerPage() {
       }
 
       listPosts().then(setPosts);
-    } catch (e: any) {
-      setPublishResults([{ platform: "all", success: false, error: e.message }]);
+    } catch (e) {
+      setPublishResults([{ platform: "all", success: false, error: e instanceof Error ? e.message : "Publish failed." }]);
     } finally {
       setPublishing(false);
     }
@@ -261,7 +269,7 @@ export default function ComposerPage() {
                     <MagneticButton strength={0.15}>
                       <Button variant="gold" size="sm" className="gap-1 rounded-xl" onClick={handleGenerate} disabled={loading}>
                         {loading ? <Loader2 className="size-3 animate-spin" /> : <Wand2 className="size-3" />}
-                        Generate
+                        {draft.trim() ? "Improve Post" : "Generate"}
                       </Button>
                     </MagneticButton>
                     <MagneticButton strength={0.15}>
@@ -282,6 +290,9 @@ export default function ComposerPage() {
                       </motion.button>
                     ))}
                   </div>
+                  {aiError && (
+                    <p className="mt-2 text-xs text-red-500">{aiError}</p>
+                  )}
                 </CardContent>
               </Card>
             </BlurFade>

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { decryptSecret } from "@/lib/crypto";
+import { listMemories } from "@/lib/chat";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import {
   getDashboardStats,
@@ -157,22 +158,37 @@ function platformName(id: string): string {
 }
 
 /**
- * System prompt for the Assistant, with the current user's real data appended.
+ * System prompt for the Assistant: durable memory, real account data and an
+ * optional rolling summary of the conversation's older turns.
  *
- * The context queries resolve the session themselves and are best-effort:
- * if any of them fails, the base prompt is returned alone rather than
- * breaking the chat. Call from a request with a signed-in session.
+ * Every block is best-effort — if a query fails, the prompt is returned
+ * without it rather than breaking the chat. Call from an authenticated request.
  */
-export async function buildAssistantSystemPrompt(): Promise<string> {
+export async function buildAssistantSystemPrompt(opts?: { summary?: string }): Promise<string> {
   const RULES = `
 
 Rules:
+- A <memory> block may follow: durable facts about this user. Treat them as true and stay consistent with them.
 - A <user_context> block may follow with this user's real account data — use it when it helps.
+- A <conversation_summary> block may follow: earlier turns of this conversation, already remembered for you.
 - Never invent metrics, follower counts, engagement numbers, or dates that are not given.
 - If something is not tracked (impressions, likes, comments), say so plainly instead of guessing.
 - For connection or configuration issues, point the user to the right page (Accounts, Composer, Scheduler, Settings).`;
 
-  let context = "";
+  const blocks: string[] = [];
+
+  // Long-term memory — facts from every session, not just this one.
+  try {
+    const user = await getSessionUser();
+    if (user) {
+      const rows = await listMemories(user.id);
+      const facts = rows.map((m) => `- ${m.content}`);
+      if (facts.length) blocks.push(`<memory>\n${facts.join("\n")}\n</memory>`);
+    }
+  } catch {
+    // best-effort
+  }
+
   try {
     const [accounts, stats, weekly, activity] = await Promise.all([
       getConnectedAccountsWithDetails(),
@@ -208,12 +224,46 @@ Rules:
           .join("; ")}`
       );
     }
-    context = `\n\n<user_context>\n${lines.join("\n")}\n</user_context>`;
+    blocks.push(`<user_context>\n${lines.join("\n")}\n</user_context>`);
   } catch {
     // best-effort — the chat must not fail because context queries did
   }
 
-  return `${SYSTEM_PROMPT}${context}${RULES}`;
+  const summary = opts?.summary?.trim();
+  if (summary) blocks.push(`<conversation_summary>\n${summary}\n</conversation_summary>`);
+
+  const body = blocks.length ? `\n\n${blocks.join("\n\n")}` : "";
+  return `${SYSTEM_PROMPT}${body}${RULES}`;
+}
+
+/* ── Memory extraction / summarization ──────────────────────── */
+
+const MEMORY_SYSTEM = `You extract durable facts from a single chat message and store them in the user's long-term memory.
+A durable fact is about their brand, business, audience, products, voice, workflow, or an explicit preference — something that will still be true next week.
+Output strictly:
+- One fact per line, as a plain third-person statement ("The user's brand voice is casual and playful.").
+- No numbering, no bullets, no quotes, no commentary.
+- If the message contains nothing durable, output exactly: NONE`;
+
+/** Pull durable facts out of a user message — `[]` when there are none. */
+export async function extractMemories(message: string): Promise<string[]> {
+  const raw = await completeWithSystem(MEMORY_SYSTEM, message.slice(0, 4000));
+  const lines = raw
+    .split("\n")
+    .map((l) => l.replace(/^[-*•]\s*|^\d+[.)]\s*/, "").trim())
+    .filter((l) => l.length > 3 && !/^none\.?$/i.test(l))
+    .slice(0, 5);
+  return lines;
+}
+
+const SUMMARY_SYSTEM = `You summarize a segment of an ongoing chat so the conversation can continue without the earlier turns.
+Cover: facts about the user, decisions made, drafts written, and open threads.
+Output ONLY the summary, at most 180 words, no preamble or labels.`;
+
+/** Compress old turns into text that can stand in for them in context. */
+export async function summarizeSegment(segment: string): Promise<string> {
+  const raw = await completeWithSystem(SUMMARY_SYSTEM, segment.slice(0, 12000));
+  return raw.trim();
 }
 
 /** Which model the Assistant will answer with — safe to send to the client. */

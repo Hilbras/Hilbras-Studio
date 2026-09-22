@@ -50,6 +50,11 @@ import {
   type AiProviderItem,
   type AiProviderFormState,
 } from "@/app/actions/ai-providers";
+import {
+  deleteAssistantMemory,
+  clearAssistantMemories,
+  type MemoryItem,
+} from "@/app/actions/chat";
 
 type Prefs = {
   autoHashtags: boolean;
@@ -106,10 +111,11 @@ function StubbornInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <Input ref={ref} autoComplete="off" readOnly onFocus={handleFocus} onBlur={handleBlur} {...props} className={props.className} />;
 }
 
-export function SettingsClient({ user, preferences, providers = [] }: {
+export function SettingsClient({ user, preferences, providers = [], memories = [] }: {
   user: { name: string; email: string; username: string };
   preferences: Prefs;
   providers?: AiProviderItem[];
+  memories?: MemoryItem[];
 }) {
   const [profileState, profileAction, profilePending] = useActionState(updateProfileAction, {});
   const [passwordState, passwordAction, passwordPending] = useActionState(changePasswordAction, {});
@@ -123,6 +129,7 @@ export function SettingsClient({ user, preferences, providers = [] }: {
   const [activeMsg, setActiveMsg] = useState<AiProviderFormState>({});
   const [editingProvider, setEditingProvider] = useState<AiProviderItem | null>(null);
   const [viewingProvider, setViewingProvider] = useState<AiProviderItem | null>(null);
+  const [localMemories, setLocalMemories] = useState<MemoryItem[]>(memories);
   const [pingResult, setPingResult] = useState<Record<string, { ok: boolean; latencyMs?: number; error?: string }>>({});
   const [pinging, setPinging] = useState<string | null>(null);
 
@@ -139,6 +146,15 @@ export function SettingsClient({ user, preferences, providers = [] }: {
   };
   const handlePrefToggle = (key: keyof Prefs) => { const v = !prefs[key]; setPrefs((p) => ({ ...p, [key]: v })); updatePreferencesAction({ ...prefs, [key]: v }); };
   const handlePing = async (id: string) => { setPinging(id); const r = await testPingProviderAction(id); setPingResult((prev) => ({ ...prev, [id]: r })); setPinging(null); };
+  const forgetMemory = async (id: string) => {
+    await deleteAssistantMemory(id);
+    setLocalMemories((prev) => prev.filter((m) => m.id !== id));
+  };
+  const forgetAllMemories = async () => {
+    if (!window.confirm("Forget everything the Assistant remembers about you?")) return;
+    await clearAssistantMemories();
+    setLocalMemories([]);
+  };
 
   const activeId = localProviders.find((p) => p.isDefault)?.id ?? localProviders[0]?.id ?? "";
   const hasCustomProviders = localProviders.some((p) => !p.isSystem);
@@ -400,6 +416,45 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                           <Switch checked={prefs[key]} onCheckedChange={() => handlePrefToggle(key)} />
                         </div>
                       ))}
+                    </CardContent>
+                  </Card>
+                </Ripple></BlurFade>
+              </motion.div>
+
+              {/* Assistant Memory — long-term facts kept across chats */}
+              <motion.div variants={staggerItem} className="md:col-span-2">
+                <BlurFade delay={0.045}><Ripple className="rounded-xl">
+                  <Card>
+                    <CardHeader>
+                      <div className="flex items-start justify-between gap-3">
+                        <SectionHeader icon={Brain} title="Assistant Memory" desc="Facts the Assistant remembers in every chat. Extracted automatically — delete any you don't want kept." />
+                        {localMemories.length > 0 && (
+                          <Button variant="ghost" size="sm" className="text-xs text-red-500 hover:text-red-600 shrink-0" onClick={forgetAllMemories}>
+                            Forget all
+                          </Button>
+                        )}
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      {localMemories.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          Nothing saved yet — tell the Assistant things like your brand voice, audience, or products and it will remember them here.
+                        </p>
+                      ) : (
+                        localMemories.map((m) => (
+                          <div key={m.id} className="flex items-start gap-2 rounded-xl border border-border bg-muted/30 px-3 py-2">
+                            <p className="flex-1 text-xs leading-relaxed">{m.content}</p>
+                            <button
+                              type="button"
+                              title="Forget this"
+                              onClick={() => forgetMemory(m.id)}
+                              className="p-1 rounded text-muted-foreground hover:text-red-500 transition-colors shrink-0"
+                            >
+                              <Trash2 className="size-3.5" />
+                            </button>
+                          </div>
+                        ))
+                      )}
                     </CardContent>
                   </Card>
                 </Ripple></BlurFade>

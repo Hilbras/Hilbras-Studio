@@ -15,23 +15,33 @@ import { BlurFade } from "@/components/motion/blur-fade";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { TypingText } from "@/components/motion/typing-text";
 import { OrbitingDots } from "@/components/motion/orbiting-dots";
-import { Sparkles, Send, Bot, User, Wand2, Calendar, BarChart3 } from "lucide-react";
+import {
+  Sparkles,
+  Send,
+  Bot,
+  User,
+  Wand2,
+  Calendar,
+  BarChart3,
+  Plus,
+  ChevronDown,
+  MessageSquare,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import type { ActiveModelInfo } from "@/lib/ai";
+import {
+  listChatSessions,
+  loadChatSession,
+  renameChatSession,
+  deleteChatSession,
+  type ChatSessionItem,
+} from "@/app/actions/chat";
 
 interface ChatMessage {
   id: string;
   role: "user" | "ai";
   text: string;
-}
-
-// Convert to AI service format.
-// NOTE: a real mapping — `m.role as "user" | "assistant"` would only satisfy
-// the compiler and still send `"ai"` over the wire, which every API rejects.
-function toAiMessages(messages: ChatMessage[]) {
-  return messages.map((m) => ({
-    role: m.role === "user" ? ("user" as const) : ("assistant" as const),
-    content: m.text,
-  }));
 }
 
 const QUICK_PROMPTS = [
@@ -40,16 +50,29 @@ const QUICK_PROMPTS = [
   { icon: BarChart3, label: "How did my content perform?" },
 ];
 
-/** Only the last N turns go to the model — keeps requests bounded. */
-const MAX_HISTORY = 30;
-
 const WELCOME: ChatMessage = {
   id: "0",
   role: "ai",
   text: "Hi! I'm your social media copilot. Ask me to draft posts, analyze performance, or plan your week.",
 };
 
-export function AssistantClient({ model }: { model: ActiveModelInfo }) {
+function relativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const min = Math.floor(diffMs / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+export function AssistantClient({
+  model,
+  sessions = [],
+}: {
+  model: ActiveModelInfo;
+  sessions?: ChatSessionItem[];
+}) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([WELCOME]);
   const [input, setInput] = React.useState("");
   const [thinking, setThinking] = React.useState(false);
@@ -57,31 +80,93 @@ export function AssistantClient({ model }: { model: ActiveModelInfo }) {
   const [errorCode, setErrorCode] = React.useState<string | null>(null);
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
+  // Sessions — null means "unsaved new chat"; the id is minted on first send
+  // so the server can title it from the first message.
+  const [sessionList, setSessionList] = React.useState<ChatSessionItem[]>(sessions);
+  const [sessionId, setSessionId] = React.useState<string | null>(null);
+  const [activeTitle, setActiveTitle] = React.useState("New chat");
+  const [sessionsOpen, setSessionsOpen] = React.useState(false);
+
+  const refreshSessions = async () => setSessionList(await listChatSessions());
+
   // Keep the newest token in view while it streams in.
   React.useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, thinking]);
 
+  const startNewChat = () => {
+    if (thinking) return;
+    setSessionId(null);
+    setActiveTitle("New chat");
+    setMessages([WELCOME]);
+    setError(null);
+    setErrorCode(null);
+    setSessionsOpen(false);
+  };
+
+  const openSession = async (id: string) => {
+    if (thinking || id === sessionId) {
+      setSessionsOpen(false);
+      return;
+    }
+    const data = await loadChatSession(id);
+    setSessionsOpen(false);
+    if (!data) return;
+    setSessionId(id);
+    setActiveTitle(data.title);
+    setError(null);
+    setErrorCode(null);
+    setMessages(
+      data.messages.map((m) => ({
+        id: m.id,
+        role: m.role === "user" ? "user" : "ai",
+        text: m.content,
+      }))
+    );
+  };
+
+  const renameSessionById = async (id: string, current: string) => {
+    const next = window.prompt("Rename chat", current);
+    if (!next || !next.trim()) return;
+    const r = await renameChatSession(id, next);
+    if (r.ok) {
+      if (id === sessionId) setActiveTitle(next.trim());
+      await refreshSessions();
+    } else if (r.error) {
+      setError(r.error);
+    }
+  };
+
+  const removeSession = async (id: string) => {
+    if (!window.confirm("Delete this chat?")) return;
+    await deleteChatSession(id);
+    if (id === sessionId) startNewChat();
+    await refreshSessions();
+  };
+
   const send = async (text?: string) => {
     const msg = (text ?? input).trim();
     if (!msg || thinking) return;
 
+    const isNew = sessionId === null;
+    const id = sessionId ?? crypto.randomUUID();
     const userMsg: ChatMessage = { id: `u${Date.now()}`, role: "user", text: msg };
     const aiMsgId = `a${Date.now()}`;
-    const history = [...messages, userMsg];
 
-    setMessages([...history, { id: aiMsgId, role: "ai", text: "" }]);
+    setMessages((prev) => [...prev, userMsg, { id: aiMsgId, role: "ai", text: "" }]);
     setInput("");
     setThinking(true);
     setError(null);
     setErrorCode(null);
+    setSessionId(id);
+    if (isNew) setActiveTitle(msg.replace(/\s+/g, " ").slice(0, 60));
 
     try {
       const res = await fetch("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: toAiMessages(history).slice(-MAX_HISTORY) }),
+        body: JSON.stringify({ sessionId: id, message: msg }),
       });
 
       if (!res.ok || !res.body) {
@@ -103,9 +188,14 @@ export function AssistantClient({ model }: { model: ActiveModelInfo }) {
       }
 
       if (!acc.trim()) throw new Error("The model returned an empty response.");
+
+      // The session now exists server-side — surface it in the picker.
+      await refreshSessions();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
       setError(message);
+      // A brand-new chat that never reached the server stays "new".
+      if (isNew) setSessionId(null);
       setMessages((prev) =>
         prev.map((m) => (m.id === aiMsgId && !m.text ? { ...m, text: "Sorry — I couldn't complete that." } : m))
       );
@@ -123,13 +213,96 @@ export function AssistantClient({ model }: { model: ActiveModelInfo }) {
           initial={{ opacity: 0, y: -12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
+          className="flex flex-wrap items-end justify-between gap-3"
         >
-          <h1 className="text-2xl font-bold tracking-tight">
-            <WordReveal text="AI Assistant" />
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            <WordReveal text="Your copilot for everything social." delay={0.15} />
-          </p>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">
+              <WordReveal text="AI Assistant" />
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              <WordReveal text="Your copilot for everything social." delay={0.15} />
+            </p>
+          </div>
+
+          {/* Sessions */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-xl gap-1"
+              onClick={startNewChat}
+              disabled={thinking && !sessionId}
+            >
+              <Plus className="size-3.5" /> New chat
+            </Button>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setSessionsOpen((o) => !o)}
+                className="flex items-center gap-2 h-9 max-w-[15rem] rounded-xl border border-border bg-card px-3 text-sm text-muted-foreground hover:text-foreground hover:border-gold-500/30 transition-colors focus:outline-none focus:ring-2 focus:ring-gold-500/30"
+              >
+                <MessageSquare className="size-3.5 text-gold-500 shrink-0" />
+                <span className="truncate">{activeTitle}</span>
+                <ChevronDown className="size-3.5 shrink-0" />
+              </button>
+
+              <AnimatePresence>
+                {sessionsOpen && (
+                  <>
+                    <div className="fixed inset-0 z-30" onClick={() => setSessionsOpen(false)} />
+                    <motion.div
+                      initial={{ opacity: 0, y: -4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -4 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 z-40 mt-1.5 w-80 max-h-80 overflow-y-auto rounded-xl border border-border bg-card shadow-xl p-1.5"
+                    >
+                      {sessionList.length === 0 ? (
+                        <p className="p-3 text-xs text-muted-foreground">
+                          No chats yet — your conversations will be listed here.
+                        </p>
+                      ) : (
+                        sessionList.map((s) => (
+                          <div
+                            key={s.id}
+                            className={`group flex items-center gap-1 rounded-lg px-2 py-1.5 transition-colors ${
+                              s.id === sessionId ? "bg-gold-500/10" : "hover:bg-accent"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openSession(s.id)}
+                              className="flex-1 min-w-0 text-left"
+                            >
+                              <p className="text-xs font-medium truncate">{s.title}</p>
+                              <p className="text-[10px] text-muted-foreground">{relativeTime(s.updatedAt)}</p>
+                            </button>
+                            <button
+                              type="button"
+                              title="Rename"
+                              onClick={() => renameSessionById(s.id, s.title)}
+                              className="p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground transition-all"
+                            >
+                              <Pencil className="size-3" />
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete"
+                              onClick={() => removeSession(s.id)}
+                              className="p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all"
+                            >
+                              <Trash2 className="size-3" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
         </motion.div>
 
         {/* Chat area */}

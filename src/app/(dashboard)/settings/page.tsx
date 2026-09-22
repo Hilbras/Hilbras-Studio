@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { userPreferences } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { listAiProviders } from "@/app/actions/ai-providers";
+import { listAssistantMemories } from "@/app/actions/chat";
 import { SettingsClient } from "./settings-client";
 
 export default async function SettingsPage() {
@@ -29,6 +30,9 @@ export default async function SettingsPage() {
   // AI providers — built-in model first, then the user's own
   const providers = await listAiProviders();
 
+  // Long-term facts the Assistant remembers across chats
+  const memories = await listAssistantMemories();
+
   return (
     <SettingsClient
       user={{ name: user.name, email: user.email, username: user.username }}
@@ -39,6 +43,7 @@ export default async function SettingsPage() {
         engagementNotifications: prefs.engagementNotifications,
       }}
       providers={providers}
+      memories={memories}
     />
   );
 }

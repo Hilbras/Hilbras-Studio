@@ -2,37 +2,54 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getSessionUser } from "@/lib/session";
-import { resolveProvider, buildAssistantSystemPrompt } from "@/lib/ai";
+import {
+  resolveProvider,
+  buildAssistantSystemPrompt,
+  extractMemories,
+  summarizeSegment,
+} from "@/lib/ai";
 import { streamChat as sdkStream, type ChatMessage } from "@/lib/ai-sdk";
+import {
+  RECENT_CONTEXT,
+  ensureSession,
+  appendMessage,
+  loadMessages,
+  saveSummary,
+  touchSession,
+  recordMemories,
+} from "@/lib/chat";
 
 /**
  * Streaming chat for the Assistant.
  *
- * Returns `text/plain` and writes tokens as the active provider produces them
- * (server actions can only reply once, so the Assistant uses this route).
- * Pre-stream failures come back as JSON with a `code` the client can act on —
- * `NO_MODEL` means nothing is configured and links the user to Settings.
+ * The client sends ONE new message plus the session id it minted optimistically;
+ * history is read back from the database, so the context is authoritative
+ * rather than whatever the client claims. Returns `text/plain` and writes tokens
+ * as the active provider produces them (server actions can only reply once).
+ *
+ * While the reply streams: older turns are summarized once they age out of
+ * RECENT_CONTEXT, and durable facts are extracted into long-term memory —
+ * both awaited before the response closes so they survive the serverless tail.
  */
 
-const MAX_HISTORY = 40;
-const MAX_MESSAGE_CHARS = 8000;
-
 const bodySchema = z.object({
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant", "system"]),
-        content: z.string().min(1).max(MAX_MESSAGE_CHARS),
-      })
-    )
+  sessionId: z
+    .string()
     .min(1)
-    .max(MAX_HISTORY),
+    .max(64)
+    .regex(/^[A-Za-z0-9-]+$/, "Invalid session id"),
+  message: z.string().min(1, "Message is required").max(4000),
 });
 
 const encoder = new TextEncoder();
 
 function errorJson(error: string, code: string, status: number) {
   return NextResponse.json({ error, code }, { status });
+}
+
+/** Only messages worth remembering trigger an extraction call. */
+function worthExtracting(message: string): boolean {
+  return message.trim().split(/\s+/).length >= 6;
 }
 
 export async function POST(req: NextRequest) {
@@ -54,8 +71,10 @@ export async function POST(req: NextRequest) {
       400
     );
   }
+  const { sessionId, message } = parsed.data;
 
-  // The user's active model: built-in default or a selected provider.
+  // Resolve the model first: a missing provider must not persist a message
+  // the assistant can never answer.
   const provider = await resolveProvider();
   if (!provider) {
     return errorJson(
@@ -65,12 +84,49 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const system = await buildAssistantSystemPrompt();
-  const history: ChatMessage[] = [
-    { role: "system", content: system },
-    ...parsed.data.messages,
-  ];
+  const chat = await ensureSession(session.id, sessionId, message);
+  if (!chat) return errorJson("Chat not found.", "FORBIDDEN", 403);
 
+  await appendMessage(sessionId, "user", message);
+
+  // ── Context: recent turns verbatim, older ones summarized ──
+  const all = await loadMessages(sessionId);
+  let summary = chat.summary ?? "";
+  let summaryUpTo = chat.summaryUpTo ?? 0;
+
+  const olderCount = Math.max(0, all.length - RECENT_CONTEXT);
+  if (summaryUpTo < olderCount) {
+    const segment = all.slice(summaryUpTo, olderCount);
+    try {
+      const add = await summarizeSegment(
+        segment.map((m) => `${m.role}: ${m.content.slice(0, 500)}`).join("\n")
+      );
+      if (add) {
+        // Oldest text falls off the front so the block stays bounded.
+        summary = `${summary ? `${summary}\n\n` : ""}${add}`.slice(-4000);
+        summaryUpTo = olderCount;
+        await saveSummary(sessionId, summary, summaryUpTo);
+      }
+    } catch {
+      // summarization is best-effort — fall back to a shorter window
+    }
+  }
+
+  const system = await buildAssistantSystemPrompt({ summary });
+  const recent = all.slice(-RECENT_CONTEXT).map((m) => ({
+    role: m.role as "user" | "assistant",
+    content: m.content,
+  }));
+
+  // Extraction runs alongside the reply and is awaited before the stream
+  // closes — work started after close can be killed serverless.
+  const memoryTask = worthExtracting(message)
+    ? extractMemories(message)
+        .then((facts) => recordMemories(session.id, facts))
+        .catch(() => undefined)
+    : Promise.resolve();
+
+  const history: ChatMessage[] = [{ role: "system", content: system }, ...recent];
   const generator = sdkStream(provider, history);
 
   // Pull the first token before replying: a dead key or bad base URL should
@@ -79,8 +135,8 @@ export async function POST(req: NextRequest) {
   try {
     first = await generator.next();
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Provider request failed.";
-    return errorJson(message, "PROVIDER_ERROR", 502);
+    const message_ = err instanceof Error ? err.message : "Provider request failed.";
+    return errorJson(message_, "PROVIDER_ERROR", 502);
   }
 
   if (first.done || typeof first.value !== "string" || first.value.length === 0) {
@@ -90,18 +146,41 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(encoder.encode(firstChunk));
+      let full = firstChunk;
+      let alive = true;
+      const push = (text: string) => {
+        try {
+          controller.enqueue(encoder.encode(text));
+        } catch {
+          alive = false; // client navigated away
+        }
+      };
+
+      push(firstChunk);
       try {
-        for (;;) {
+        while (alive) {
           const result = await generator.next();
           if (result.done) break;
-          controller.enqueue(encoder.encode(result.value));
+          full += result.value;
+          push(result.value);
         }
       } catch {
         // Status is already 200 — tell the user in-band instead of dropping it.
-        controller.enqueue(encoder.encode("\n\n⚠️ The response was interrupted — try again."));
+        push("\n\n⚠️ The response was interrupted — try again.");
+      }
+
+      try {
+        await appendMessage(sessionId, "assistant", full.trim());
+        await touchSession(sessionId);
+        await memoryTask;
+      } catch {
+        // persistence failures must not break an already-delivered reply
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          // client already gone
+        }
       }
     },
   });

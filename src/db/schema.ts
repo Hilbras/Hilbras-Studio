@@ -1,4 +1,4 @@
-import { customType, pgTable, text, timestamp, boolean, integer, unique } from "drizzle-orm/pg-core";
+import { customType, pgTable, text, timestamp, boolean, integer, unique, index } from "drizzle-orm/pg-core";
 
 /**
  * users — application accounts for Hilbras Studio.
@@ -153,3 +153,65 @@ export const mediaAssets = pgTable("media_assets", {
 });
 
 export type MediaAsset = typeof mediaAssets.$inferSelect;
+
+/**
+ * chat_sessions — one Assistant conversation.
+ * `title` seeds from the first message; `summary`/`summaryUpTo` hold the
+ * rolling summary of turns that have aged out of the model's context window.
+ */
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull().default("New chat"),
+    /** Summarized text of all messages before index `summaryUpTo`. */
+    summary: text("summary").notNull().default(""),
+    /** How many of the oldest messages are already covered by `summary`. */
+    summaryUpTo: integer("summary_up_to").notNull().default(0),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [index("chat_sessions_user_idx").on(t.userId, t.updatedAt)]
+);
+
+export type ChatSession = typeof chatSessions.$inferSelect;
+
+/** chat_messages — persisted turns, reloaded when a session is reopened. */
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => chatSessions.id, { onDelete: "cascade" }),
+    /** user | assistant */
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("chat_messages_session_idx").on(t.sessionId, t.createdAt)]
+);
+
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
+
+/**
+ * memories — long-term facts about the user (brand voice, audience,
+ * products) extracted from chat and injected into every future prompt.
+ */
+export const memories = pgTable(
+  "memories",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [index("memories_user_idx").on(t.userId)]
+);
+
+export type Memory = typeof memories.$inferSelect;

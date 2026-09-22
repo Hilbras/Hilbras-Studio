@@ -1,14 +1,17 @@
 /**
  * Long-lived token upgrade for Meta platforms.
  *
- * The OAuth code exchange on Instagram (Instagram Login) and Threads returns a
- * short-lived user token that expires after one hour. A connection is only
- * durable once that token is exchanged for a long-lived one (60 days) —
- * otherwise every connected account stops working within the hour.
+ * The OAuth code exchange returns a short-lived user token that expires after
+ * one hour. A connection is only durable once that token is exchanged for a
+ * long-lived one (60 days) — otherwise every connected account stops working
+ * within the hour. Facebook uses the same endpoint as its code exchange, with
+ * `fb_exchange_token` in place of `authorization_code`, and additionally wants
+ * the `client_id` alongside the secret.
  *
  * Docs:
  *   Instagram  GET https://graph.instagram.com/access_token?grant_type=ig_exchange_token
  *   Threads    GET https://graph.threads.net/access_token?grant_type=th_exchange_token
+ *   Facebook   GET https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token
  */
 
 export interface LongLivedToken {
@@ -24,7 +27,7 @@ interface MetaTokenResponse {
 }
 
 const EXCHANGE_ENDPOINTS: Partial<
-  Record<string, { url: string; grantType: string }>
+  Record<string, { url: string; grantType: string; usesClientId?: boolean }>
 > = {
   instagram: {
     url: "https://graph.instagram.com/access_token",
@@ -33,6 +36,11 @@ const EXCHANGE_ENDPOINTS: Partial<
   threads: {
     url: "https://graph.threads.net/access_token",
     grantType: "th_exchange_token",
+  },
+  facebook: {
+    url: "https://graph.facebook.com/v21.0/oauth/access_token",
+    grantType: "fb_exchange_token",
+    usesClientId: true,
   },
 };
 
@@ -193,6 +201,11 @@ async function fetchToken(
 /**
  * Exchange a short-lived token for a long-lived one.
  *
+ * `clientId` is only passed for the endpoint that requires it (Facebook's
+ * `fb_exchange_token` wants the app id next to the secret; Instagram's and
+ * Threads' dedicated exchange endpoints reject extra parameters less
+ * predictably, so they get exactly what they document).
+ *
  * Returns null when the platform has no long-lived exchange or the upgrade
  * fails — callers keep the short-lived token, so the connection still works
  * (just for a shorter window) instead of failing outright.
@@ -200,7 +213,8 @@ async function fetchToken(
 export async function exchangeForLongLivedToken(
   platform: string,
   shortLivedToken: string,
-  clientSecret: string
+  clientSecret: string,
+  clientId?: string
 ): Promise<LongLivedToken | null> {
   const endpoint = EXCHANGE_ENDPOINTS[platform];
   if (!endpoint) return null;
@@ -209,6 +223,9 @@ export async function exchangeForLongLivedToken(
   url.searchParams.set("grant_type", endpoint.grantType);
   url.searchParams.set("client_secret", clientSecret);
   url.searchParams.set("access_token", shortLivedToken);
+  if (endpoint.usesClientId && clientId) {
+    url.searchParams.set("client_id", clientId);
+  }
 
   return fetchToken(platform, url.toString());
 }

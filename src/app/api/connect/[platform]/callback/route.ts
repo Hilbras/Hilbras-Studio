@@ -119,9 +119,9 @@ export async function GET(
     return fail("no_access_token");
   }
 
-  // Instagram and Threads issue a 1-hour token here. Upgrade it to the 60-day
-  // long-lived token now — otherwise the connection dies within the hour and
-  // publishing starts failing with an expired-token error.
+  // Instagram, Threads and Facebook issue a 1-hour token here. Upgrade it to
+  // the 60-day long-lived token now — otherwise the connection dies within the
+  // hour and publishing starts failing with an expired-token error.
   let accessToken = tokenData.access_token;
   let expiresIn = tokenData.expires_in ?? null;
 
@@ -129,7 +129,8 @@ export async function GET(
     const longLived = await exchangeForLongLivedToken(
       platform.id,
       accessToken,
-      clientSecret
+      clientSecret,
+      clientId
     );
     if (longLived) {
       accessToken = longLived.accessToken;
@@ -179,6 +180,19 @@ export async function GET(
       if (isThreadsPermissionError(errorPayload)) {
         return fail("threads_permissions_not_granted");
       }
+    }
+  } else if (platformIdStr === "facebook") {
+    // The code exchange does not reliably return a user id, and the publish
+    // path identifies the account through `/me/accounts` — so read the id (and
+    // the display name) straight from the Graph API instead of storing
+    // "unknown".
+    const profileRes = await fetch(
+      `https://graph.facebook.com/v21.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
+    );
+    if (profileRes.ok) {
+      const profile = (await profileRes.json()) as { id?: string; name?: string };
+      platformAccountId = profile.id;
+      profileUsername = profile.name;
     }
   }
 

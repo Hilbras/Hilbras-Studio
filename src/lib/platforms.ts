@@ -78,6 +78,8 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {
         "instagram_business_basic",
         "instagram_business_content_publish",
         "instagram_business_manage_comments",
+        // The inbox reads conversations; without this scope its IG tab is empty.
+        "instagram_business_manage_messages",
       ],
     },
     content: {

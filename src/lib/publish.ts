@@ -33,7 +33,7 @@ export interface PublishResult {
  * Posting an Instagram Login token to the Facebook host fails every time.
  */
 const GRAPH_FACEBOOK = "https://graph.facebook.com/v26.0";
-const GRAPH_INSTAGRAM = "https://graph.instagram.com/v21.0";
+const GRAPH_INSTAGRAM = "https://graph.instagram.com/v25.0";
 const GRAPH_THREADS = "https://graph.threads.net/v1.0";
 
 interface GraphError {

@@ -127,7 +127,18 @@ export async function GET(
     return fail(`token_exchange_failed:${tokenRes.status}`);
   }
 
-  const tokenData = (await tokenRes.json().catch(() => ({}))) as {
+  // Meta documents this response both flat and wrapped in `data` — Instagram's
+  // Business Login guide shows the wrapped form — so take whichever is there.
+  const rawToken = (await tokenRes.json().catch(() => ({}))) as Record<
+    string,
+    unknown
+  >;
+  const wrappedToken = (
+    rawToken.data as Array<Record<string, unknown>> | undefined
+  )?.[0];
+  const tokenData = (rawToken.access_token
+    ? rawToken
+    : (wrappedToken ?? rawToken)) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: number;
@@ -163,17 +174,28 @@ export async function GET(
   let platformAccountId: string | undefined;
 
   if (platformIdStr === "instagram") {
+    // `user_id` is the Instagram professional-account ID (`<IG_ID>`) that every
+    // publish endpoint takes; `id` is only the app-scoped ID. Meta's guide also
+    // shows the response wrapped in `data` — accept either shape.
     const profileRes = await fetch(
-      `https://graph.instagram.com/me?fields=username,account_type&access_token=${encodeURIComponent(accessToken)}`
+      `https://graph.instagram.com/me?fields=user_id,username,account_type&access_token=${encodeURIComponent(accessToken)}`
     );
     if (profileRes.ok) {
-      const profile = (await profileRes.json()) as {
-        username?: string;
+      const body = (await profileRes.json()) as {
+        data?: Array<{
+          id?: string;
+          user_id?: string;
+          username?: string;
+          account_type?: string;
+        }>;
         id?: string;
+        user_id?: string;
+        username?: string;
         account_type?: string;
       };
+      const profile = body.data?.[0] ?? body;
       profileUsername = profile.username;
-      platformAccountId = profile.id;
+      platformAccountId = profile.user_id ?? profile.id;
       if (profile.account_type === "NONE") {
         return fail("instagram_personal_only");
       }

@@ -65,7 +65,7 @@ async function fetchInstagramMessages(
 ): Promise<InboxMessage[]> {
   try {
     const res = await fetch(
-      `https://graph.instagram.com/v19.0/me/conversations?fields=messages{message,from,created_time}&access_token=${accessToken}`
+      `https://graph.instagram.com/v25.0/me/conversations?fields=messages{message,from,created_time}&access_token=${accessToken}`
     );
     if (!res.ok) return [];
     const data = await res.json();

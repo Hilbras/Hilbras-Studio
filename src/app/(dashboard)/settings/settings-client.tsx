@@ -132,17 +132,29 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
   const [localMemories, setLocalMemories] = useState<MemoryItem[]>(memories);
   const [pingResult, setPingResult] = useState<Record<string, { ok: boolean; latencyMs?: number; error?: string }>>({});
   const [pinging, setPinging] = useState<string | null>(null);
+  const [activatingProvider, setActivatingProvider] = useState<string | null>(null);
 
   const refreshProviders = async () => { setLocalProviders(await listAiProviders()); };
   const handleDeleteProvider = async (id: string) => { await deleteAiProviderAction(id); await refreshProviders(); setViewingProvider(null); };
   const handleActivateProvider = async (id: string) => {
     setActiveMsg({});
-    const r = await setDefaultAiProviderAction(id);
-    if (!r.ok) {
-      setActiveMsg({ error: r.error ?? "Could not switch the active model." });
-      return;
+    setActivatingProvider(id);
+    // Flip optimistically: the controlled select otherwise snaps back to the
+    // old value for the whole server round-trip, which reads as "didn't work".
+    const previous = localProviders;
+    setLocalProviders((ps) => ps.map((p) => ({ ...p, isDefault: p.id === id })));
+    try {
+      const r = await setDefaultAiProviderAction(id);
+      if (!r.ok) throw new Error(r.error ?? "Could not switch the active model.");
+      await refreshProviders();
+    } catch (err) {
+      setLocalProviders(previous);
+      setActiveMsg({
+        error: err instanceof Error ? err.message : "Could not switch the active model.",
+      });
+    } finally {
+      setActivatingProvider(null);
     }
-    await refreshProviders();
   };
   const handlePrefToggle = (key: keyof Prefs) => { const v = !prefs[key]; setPrefs((p) => ({ ...p, [key]: v })); updatePreferencesAction({ ...prefs, [key]: v }); };
   const handlePing = async (id: string) => { setPinging(id); const r = await testPingProviderAction(id); setPingResult((prev) => ({ ...prev, [id]: r })); setPinging(null); };
@@ -373,6 +385,27 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                               </p>
                             </div>
                             <div className="flex items-center gap-0.5">
+                              {activeId !== p.id ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 rounded-lg px-2 text-[10px] gap-1"
+                                  disabled={p.unavailable || activatingProvider !== null}
+                                  title={p.unavailable ? "The built-in model needs a key on this server" : "Make this the active model"}
+                                  onClick={() => handleActivateProvider(p.id)}
+                                >
+                                  {activatingProvider === p.id ? (
+                                    <Loader2 className="size-3 animate-spin" />
+                                  ) : (
+                                    <Sparkles className="size-3" />
+                                  )}
+                                  Set active
+                                </Button>
+                              ) : (
+                                <span className="px-2 text-[10px] font-medium text-gold-500" title="The Assistant uses this model">
+                                  In use
+                                </span>
+                              )}
                               <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Test" disabled={pinging === p.id} onClick={() => handlePing(p.id)}>
                                 {pinging === p.id ? <Loader2 className="size-3 animate-spin" /> : <Wifi className="size-3" />}
                               </Button>

@@ -2,13 +2,13 @@ import { eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import { userPreferences } from "@/db/schema";
-import { getSessionUser } from "@/lib/session";
+import { requireSessionUser } from "@/lib/session";
 import { listAiProviders } from "@/app/actions/ai-providers";
 import { listAssistantMemories } from "@/app/actions/chat";
 import { SettingsClient } from "./settings-client";
 
 export default async function SettingsPage() {
-  const user = (await getSessionUser())!;
+  const user = await requireSessionUser();
 
   // Preferences
   let prefs = (

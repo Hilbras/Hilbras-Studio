@@ -422,14 +422,14 @@ export function AssistantClient({
               </form>
               <div className="mt-2 flex items-center justify-between gap-2">
                 {model.configured ? (
-                  !model.isBuiltin ? (
-                    <Badge variant="gold" className="text-[10px] gap-1" title={`Answering with ${model.name} · ${model.modelId}`}>
-                      <Sparkles className="size-2.5" />
-                      {model.name} · {model.modelId}
-                    </Badge>
-                  ) : (
-                    <span />
-                  )
+                  <Badge
+                    variant="gold"
+                    className="text-[10px] gap-1"
+                    title={model.modelId ? `Answering with ${model.name} · ${model.modelId}` : `Answering with ${model.name}`}
+                  >
+                    <Sparkles className="size-2.5" />
+                    {model.modelId ? `${model.name} · ${model.modelId}` : model.name}
+                  </Badge>
                 ) : (
                   <a href="/settings" className="text-[10px] text-amber-500 hover:underline">
                     No model configured — open Settings

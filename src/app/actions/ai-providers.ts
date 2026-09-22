@@ -16,8 +16,13 @@ export interface AiProviderItem {
   baseUrl: string;
   apiKeyMasked: string;
   apiFormat: string;
+  /** Empty for the built-in model — its real model id never reaches the UI. */
   modelId: string;
   isDefault: boolean;
+  /** The built-in model: visible but locked — never editable or removable. */
+  isSystem?: boolean;
+  /** Built-in model with no server-side key configured. */
+  unavailable?: boolean;
   createdAt: string;
 }
 
@@ -104,6 +109,8 @@ export async function saveAiProviderAction(
       })
       .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
   } else {
+    // New providers are not auto-selected — the built-in model stays active
+    // until the user picks this one.
     await db.insert(aiProviders).values({
       id,
       userId: session.id,
@@ -114,20 +121,6 @@ export async function saveAiProviderAction(
       modelId,
       isDefault: makeDefault,
     });
-  }
-
-  // The server fallback model is hidden from the UI, so "nothing selected"
-  // would be invisible — activate on save when no provider is active yet.
-  const [anyActive] = await db
-    .select({ id: aiProviders.id })
-    .from(aiProviders)
-    .where(and(eq(aiProviders.userId, session.id), eq(aiProviders.isDefault, true)))
-    .limit(1);
-  if (!anyActive) {
-    await db
-      .update(aiProviders)
-      .set({ isDefault: true, updatedAt: new Date() })
-      .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
   }
 
   return { success: "Provider saved" };
@@ -144,38 +137,16 @@ export async function deleteAiProviderAction(
     return { ok: false, error: "The built-in model cannot be removed" };
   }
 
-  const [row] = await db
-    .select({ isDefault: aiProviders.isDefault })
-    .from(aiProviders)
-    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
-    .limit(1);
-  if (!row) return { ok: true };
-
+  // Deleting the active provider simply reverts the active model to the
+  // built-in one — which stays visible in the list with its radio checked.
   await db
     .delete(aiProviders)
     .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
 
-  // Deleting the active model must not silently fall back to the hidden
-  // server model — promote the most recently used remaining provider.
-  if (row.isDefault) {
-    const [next] = await db
-      .select({ id: aiProviders.id })
-      .from(aiProviders)
-      .where(eq(aiProviders.userId, session.id))
-      .orderBy(desc(aiProviders.updatedAt))
-      .limit(1);
-    if (next) {
-      await db
-        .update(aiProviders)
-        .set({ isDefault: true, updatedAt: new Date() })
-        .where(eq(aiProviders.id, next.id));
-    }
-  }
-
   return { ok: true };
 }
 
-/** List the current user's AI providers, active one first. */
+/** List the current user's AI providers, built-in first. */
 export async function listAiProviders(): Promise<AiProviderItem[]> {
   const session = await getSessionUser();
   if (!session) return [];
@@ -186,7 +157,27 @@ export async function listAiProviders(): Promise<AiProviderItem[]> {
     .where(eq(aiProviders.userId, session.id))
     .orderBy(desc(aiProviders.isDefault), desc(aiProviders.updatedAt));
 
-  return rows.map((row) => {
+  const active = rows.find((row) => row.isDefault);
+
+  const builtin = getBuiltinProviderConfig();
+  const items: AiProviderItem[] = [
+    {
+      id: BUILTIN_PROVIDER_ID,
+      name: "Hilbras AI",
+      baseUrl: builtin?.baseUrl ?? "",
+      apiKeyMasked: builtin ? "Server-managed" : "Not configured",
+      apiFormat: builtin?.apiFormat ?? "openai",
+      // The real model id is deliberately withheld from the UI.
+      modelId: "",
+      // Built-in is active while no user provider is selected.
+      isDefault: !active,
+      isSystem: true,
+      unavailable: !builtin,
+      createdAt: "",
+    },
+  ];
+
+  for (const row of rows) {
     let apiKeyMasked = "••••••••••••";
     try {
       apiKeyMasked = maskSecret(decryptSecret(row.apiKeyEnc));
@@ -194,7 +185,7 @@ export async function listAiProviders(): Promise<AiProviderItem[]> {
       // keep default masked
     }
 
-    return {
+    items.push({
       id: row.id,
       name: row.name,
       baseUrl: row.baseUrl,
@@ -203,8 +194,10 @@ export async function listAiProviders(): Promise<AiProviderItem[]> {
       modelId: row.modelId,
       isDefault: row.isDefault,
       createdAt: row.createdAt.toISOString(),
-    };
-  });
+    });
+  }
+
+  return items;
 }
 
 /**

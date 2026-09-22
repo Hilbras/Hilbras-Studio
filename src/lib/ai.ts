@@ -269,10 +269,9 @@ export async function summarizeSegment(segment: string): Promise<string> {
 /** Which model the Assistant will answer with — safe to send to the client. */
 export interface ActiveModelInfo {
   name: string;
+  /** Empty for the built-in model — its real model id never reaches the UI. */
   modelId: string;
   configured: boolean;
-  /** The hidden server-managed model — keep its name out of the UI. */
-  isBuiltin: boolean;
 }
 
 export async function getActiveModelInfo(userId: string): Promise<ActiveModelInfo> {
@@ -283,16 +282,16 @@ export async function getActiveModelInfo(userId: string): Promise<ActiveModelInf
     .where(and(eq(aiProviders.userId, userId), eq(aiProviders.isDefault, true)))
     .limit(1);
   if (active) {
-    return { name: active.name, modelId: active.modelId, configured: true, isBuiltin: false };
+    return { name: active.name, modelId: active.modelId, configured: true };
   }
 
-  // 2. Nothing selected → hidden server fallback (when configured)
+  // 2. Built-in model — its name is shown, but not the model it runs
   const builtin = getBuiltinProviderConfig();
   if (builtin) {
-    return { name: builtin.name, modelId: builtin.modelId, configured: true, isBuiltin: true };
+    return { name: builtin.name, modelId: "", configured: true };
   }
 
-  // 3. Fallback unavailable → most recent user provider (mirrors resolveForUser)
+  // 3. Built-in unavailable → most recent user provider (mirrors resolveForUser)
   const [anyRow] = await db
     .select()
     .from(aiProviders)
@@ -300,10 +299,10 @@ export async function getActiveModelInfo(userId: string): Promise<ActiveModelInf
     .orderBy(desc(aiProviders.updatedAt))
     .limit(1);
   if (anyRow) {
-    return { name: anyRow.name, modelId: anyRow.modelId, configured: true, isBuiltin: false };
+    return { name: anyRow.name, modelId: anyRow.modelId, configured: true };
   }
 
-  return { name: "No model", modelId: "—", configured: false, isBuiltin: false };
+  return { name: "No model", modelId: "—", configured: false };
 }
 
 /* ── Public API ─────────────────────────────────────────────── */

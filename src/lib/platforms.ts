@@ -21,6 +21,7 @@ export const PLATFORM_IDS = [
   "youtube",
   "pinterest",
   "reddit",
+  "telegram",
 ] as const;
 
 export type PlatformId = (typeof PLATFORM_IDS)[number];
@@ -30,8 +31,14 @@ export interface PlatformSpec {
   name: string;
   /** Account models the user may connect (drives the generic connection UI). */
   accountModel: string[];
-  /** Official OAuth 2.0 configuration. */
-  auth: {
+  /**
+   * How an account gets linked. Omitted means `"oauth"`; `"manual"` platforms
+   * (Telegram) collect their own credentials in the Accounts modal and declare
+   * no `auth` block — nothing on the OAuth code path may assume one exists.
+   */
+  connection?: "oauth" | "manual";
+  /** Official OAuth 2.0 configuration. Absent exactly when `connection` is `"manual"`. */
+  auth?: {
     clientIdEnv: string;
     clientSecretEnv: string;
     authorizeUrl: string;
@@ -288,6 +295,25 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {
       ],
     },
   },
+
+  telegram: {
+    id: "telegram",
+    name: "Telegram",
+    accountModel: ["Channel", "Group", "Direct message"],
+    // No OAuth: the user pastes a bot token from @BotFather plus the chat it
+    // should post to. The Accounts modal collects both, and the token is stored
+    // per-user in `social_accounts.accessToken_enc` (chat id → `platform_account_id`).
+    connection: "manual",
+    content: {
+      mediaTypes: ["text", "image", "video", "link"],
+      maxTextLength: 4096,
+      rules: [
+        "4096 characters per message; longer posts are split into a thread",
+        "Photo and video captions are limited to 1024 characters",
+        "Sent as plain text — markdown syntax shows literally",
+      ],
+    },
+  },
 };
 
 /** Registry order is the canonical display order across the UI. */
@@ -304,6 +330,8 @@ export function getPlatform(id: PlatformId): PlatformSpec {
  * environment. Server-side only — never call from client components.
  */
 export function platformCredentialsConfigured(id: PlatformId): boolean {
-  const { clientIdEnv, clientSecretEnv } = PLATFORM_REGISTRY[id].auth;
-  return Boolean(process.env[clientIdEnv] && process.env[clientSecretEnv]);
+  const auth = PLATFORM_REGISTRY[id].auth;
+  // Manual platforms (Telegram) have no developer-app pair to read from env.
+  if (!auth) return false;
+  return Boolean(process.env[auth.clientIdEnv] && process.env[auth.clientSecretEnv]);
 }

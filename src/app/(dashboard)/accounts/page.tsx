@@ -53,6 +53,7 @@ import {
   disconnectPlatform,
   getConnectRedirectUri,
 } from "@/app/actions/platform";
+import { connectTelegramAction } from "@/app/actions/telegram";
 
 type TestResult = { valid: boolean; message: string };
 
@@ -89,6 +90,8 @@ const CONNECT_ERROR_MESSAGES: Record<string, string> = {
     "You cancelled the authorization window, so nothing was connected. Start the connect again whenever you are ready.",
   instagram_personal_only:
     "Instagram publishing needs a Business or Creator account, not a personal profile.",
+  manual_connection:
+    "This platform does not use OAuth — open its Config on the Accounts page and connect with the form there.",
 };
 
 function safeDecode(value: string): string {
@@ -144,6 +147,11 @@ export default function AccountsPage() {
   const [redirectUri, setRedirectUri] = useState<string | null>(null);
   const [copiedUri, setCopiedUri] = useState(false);
 
+  // Telegram connects manually: the bot token and chat pasted into the modal.
+  const [tgToken, setTgToken] = useState("");
+  const [tgChat, setTgChat] = useState("");
+  const [tgConnecting, setTgConnecting] = useState(false);
+
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [testingPlatform, setTestingPlatform] = useState<string | null>(null);
 
@@ -195,9 +203,16 @@ export default function AccountsPage() {
     setSelectedPlatform(platform);
     setClientId("");
     setClientSecret("");
+    setTgToken("");
+    setTgChat("");
     setModalError("");
     setModalSuccess("");
     setModalOpen(true);
+    // Manual platforms (Telegram) have no app credentials or redirect URI to
+    // load — their form *is* the connection.
+    if (allPlatforms().some((p) => p.id === platform && p.connection === "manual")) {
+      return;
+    }
     setLoadingKeys(true);
     try {
       // The redirect URI comes from the server so it matches the value the
@@ -279,6 +294,31 @@ export default function AccountsPage() {
   const startOAuth = () => startOAuthFor(selectedPlatform);
 
   /**
+   * Validate the pasted bot token and chat against the Bot API, then store the
+   * connection. Success and failure both land inside the modal — unlike OAuth,
+   * there is no redirect to carry the result.
+   */
+  const handleTelegramConnect = async () => {
+    setTgConnecting(true);
+    setModalError("");
+    setModalSuccess("");
+    try {
+      const result = await connectTelegramAction(tgToken, tgChat);
+      if (result.success) {
+        setModalSuccess(`Connected — posts will go to ${result.chat ?? "the chat"}.`);
+        setTgToken("");
+        await refreshData();
+      } else {
+        setModalError(result.error || "Could not connect to Telegram.");
+      }
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : "Could not connect to Telegram.");
+    } finally {
+      setTgConnecting(false);
+    }
+  };
+
+  /**
    * Delete the stored connection. Deliberately behind a confirmation: it is the
    * one action here that removes something the user may still want, and it sits
    * next to Reconnect, which is the button they actually came for.
@@ -332,7 +372,7 @@ export default function AccountsPage() {
         <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="flex items-baseline justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight"><WordReveal text="Connected Accounts" /></h1>
-            <p className="text-sm text-muted-foreground"><WordReveal text="Configure credentials, test them, then connect via OAuth." delay={0.15} /></p>
+            <p className="text-sm text-muted-foreground"><WordReveal text="Configure credentials, test them, then connect each platform." delay={0.15} /></p>
           </div>
         </motion.div>
 
@@ -442,7 +482,11 @@ export default function AccountsPage() {
                           variant="outline"
                           size="sm"
                           className="rounded-xl gap-1"
-                          onClick={() => startOAuthFor(platform.id)}
+                          onClick={() =>
+                            platform.connection === "manual"
+                              ? openModal(platform.id)
+                              : startOAuthFor(platform.id)
+                          }
                         >
                           <RefreshCw className="size-3" /> Reconnect
                         </Button>
@@ -463,7 +507,8 @@ export default function AccountsPage() {
 
         <BlurFade delay={0.3}>
           <p className="mt-8 text-center text-xs text-muted-foreground">
-            All connections use official OAuth 2.0. Credentials are encrypted with AES-256-GCM before storage.
+            Connections use official OAuth 2.0 where the platform supports it — Telegram connects
+            with your own bot token. Credentials are encrypted with AES-256-GCM before storage.
           </p>
         </BlurFade>
       </div>
@@ -477,7 +522,7 @@ export default function AccountsPage() {
               {selectedMeta?.name} Settings
             </DialogTitle>
             <DialogDescription>
-              Manage API keys, OAuth connection, and review platform requirements.
+              Manage the connection and review platform requirements.
             </DialogDescription>
           </DialogHeader>
 
@@ -497,11 +542,12 @@ export default function AccountsPage() {
                   <Badge variant="gold" className="gap-1"><CheckCircle2 className="size-3" /> Connected</Badge>
                 )
               )}
-              {selConfigured ? (
-                <Badge variant="secondary">Credentials saved</Badge>
-              ) : (
-                <Badge variant="outline">No credentials yet</Badge>
-              )}
+              {selectedMeta?.connection !== "manual" &&
+                (selConfigured ? (
+                  <Badge variant="secondary">Credentials saved</Badge>
+                ) : (
+                  <Badge variant="outline">No credentials yet</Badge>
+                ))}
               {selTest && (
                 selTest.valid ? (
                   <Badge variant="secondary" className="gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle2 className="size-3" /> Keys valid</Badge>
@@ -514,7 +560,72 @@ export default function AccountsPage() {
             {/* Connection */}
             <section className="rounded-xl border border-border p-4 space-y-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connection</h4>
-              {selConnected ? (
+              {selectedMeta?.connection === "manual" ? (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Paste your bot&apos;s token and the chat it should post to. The bot must be a
+                    member of the chat — an administrator of any channel.
+                  </p>
+                  <ol className="space-y-1 text-xs text-muted-foreground list-decimal list-inside">
+                    <li>
+                      In Telegram, message <span className="font-medium text-foreground">@BotFather</span>{" "}
+                      → <code>/newbot</code> → copy the token.
+                    </li>
+                    <li>
+                      Channel: add the bot as an administrator with the right to post. Group: just add it.
+                    </li>
+                    <li>
+                      Paste the chat below as its <code>@username</code> or numeric ID (<code>-100…</code>).
+                    </li>
+                  </ol>
+                  <div className="space-y-2">
+                    <Label htmlFor="tg-token">Bot token</Label>
+                    <Input
+                      id="tg-token"
+                      type="password"
+                      autoComplete="off"
+                      value={tgToken}
+                      onChange={(e) => setTgToken(e.target.value)}
+                      placeholder="123456789:AA…"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="tg-chat">Chat</Label>
+                    <Input
+                      id="tg-chat"
+                      value={tgChat}
+                      onChange={(e) => setTgChat(e.target.value)}
+                      placeholder="@mychannel or -1001234567890"
+                    />
+                  </div>
+                  <AnimatePresence mode="wait">
+                    {modalError && <motion.p key="err" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1.5"><XCircle className="size-3.5 shrink-0" /> {modalError}</motion.p>}
+                    {modalSuccess && <motion.p key="ok" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="size-3.5 shrink-0" /> {modalSuccess}</motion.p>}
+                  </AnimatePresence>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="gold"
+                      size="sm"
+                      className="rounded-xl gap-1"
+                      onClick={handleTelegramConnect}
+                      disabled={tgConnecting || !tgToken.trim() || !tgChat.trim()}
+                    >
+                      {tgConnecting ? <Loader2 className="size-3 animate-spin" /> : <Link2 className="size-3" />}
+                      {tgConnecting ? "Connecting…" : selConnected ? "Update connection" : "Connect Telegram"}
+                    </Button>
+                    {selConnected && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="rounded-xl gap-1 text-red-600 dark:text-red-400"
+                        onClick={() => setConfirmDisconnect(true)}
+                      >
+                        <Unlink className="size-3" /> Disconnect
+                      </Button>
+                    )}
+                  </div>
+                </>
+              ) : selConnected ? (
                 <>
                   <p className="text-sm text-muted-foreground">
                     This platform is linked through official OAuth. You can publish to it from the Composer.
@@ -569,7 +680,9 @@ export default function AccountsPage() {
               )}
             </section>
 
-            {/* Credentials */}
+            {/* Credentials — hidden for manual platforms (Telegram), whose only
+                credential is the per-user bot token held in the Connection form. */}
+            {selectedMeta?.connection !== "manual" && (
             <section className="rounded-xl border border-border p-4 space-y-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Developer App Credentials</h4>
               {loadingKeys ? (
@@ -579,10 +692,10 @@ export default function AccountsPage() {
                 </div>
               ) : (
                 <>
-                  {selectedMeta?.auth.credentialHint && (
+                  {selectedMeta?.auth?.credentialHint && (
                     <p className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
                       <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
-                      <span>{selectedMeta.auth.credentialHint}</span>
+                      <span>{selectedMeta.auth?.credentialHint}</span>
                     </p>
                   )}
                   <div className="space-y-2">
@@ -643,6 +756,7 @@ export default function AccountsPage() {
                 </>
               )}
             </section>
+            )}
 
             {/* Platform requirements */}
             {selectedMeta && (

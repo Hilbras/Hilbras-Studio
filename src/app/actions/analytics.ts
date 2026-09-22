@@ -89,6 +89,7 @@ const PLATFORM_COLORS: Record<string, string> = {
   threads: "#000000",
   pinterest: "#BD081C",
   reddit: "#FF4500",
+  telegram: "#2AABEE",
 };
 
 export async function getAnalyticsData() {

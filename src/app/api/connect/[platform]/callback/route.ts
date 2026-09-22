@@ -46,6 +46,13 @@ export async function GET(
   const fail = (reason: string) =>
     respond(`/accounts?error=${encodeURIComponent(reason)}`);
 
+  // Manual platforms (Telegram) never round-trip through this OAuth callback —
+  // their connection is written by the Accounts modal's own action. Anything
+  // else without an `auth` block cannot have come from this flow either.
+  if (platform.connection === "manual" || !platform.auth) {
+    return fail("manual_connection");
+  }
+
   const { searchParams } = new URL(req.url);
   const code = searchParams.get("code");
   const stateStr = searchParams.get("state");

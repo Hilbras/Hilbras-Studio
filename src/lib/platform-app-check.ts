@@ -100,6 +100,13 @@ export async function verifyAppCredentials(
   if (!platform) {
     return { status: "unverified", message: `Unknown platform: ${platformId}` };
   }
+  // Manual platforms (Telegram) have no token endpoint to probe against.
+  if (!platform.auth) {
+    return {
+      status: "unverified",
+      message: `${platform.name} does not use OAuth app credentials.`,
+    };
+  }
 
   const headers: Record<string, string> = {
     "Content-Type": "application/x-www-form-urlencoded",

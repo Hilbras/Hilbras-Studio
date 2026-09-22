@@ -1,6 +1,6 @@
 # Hilbras Studio
 
-AI-powered social media management platform. Create, schedule, and publish content across Instagram, Facebook, Threads, X, LinkedIn, TikTok, YouTube, Pinterest, and Reddit — all from one place.
+AI-powered social media management platform. Create, schedule, and publish content across Instagram, Facebook, Threads, X, LinkedIn, TikTok, YouTube, Pinterest, Reddit, and Telegram — all from one place.
 
 ## Features
 

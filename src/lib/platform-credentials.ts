@@ -63,7 +63,10 @@ export async function readPlatformAppCredentials(
   platform: PlatformId
 ): Promise<PlatformAppCredentials | null> {
   const keys = platformCredentialKeys(platform);
-  const { auth } = PLATFORM_REGISTRY[platform];
+  const auth = PLATFORM_REGISTRY[platform].auth;
+  // Manual platforms (Telegram) carry no app pair — their credential *is* the
+  // per-user bot token, which never flows through this resolver.
+  if (!auth) return null;
 
   const clientId =
     (await decryptUserCredential(userId, keys.clientId)) ??

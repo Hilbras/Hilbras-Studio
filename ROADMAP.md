@@ -30,6 +30,7 @@
 - [ ] YouTube — Channel uploads via Google OAuth
 - [ ] Pinterest — Board + Pin, keyword-rich descriptions
 - [ ] Reddit — User + Subreddit moderator, per-subreddit rules
+- [ ] Telegram — bot-token connection (no OAuth), channel/group publishing
 
 Each connector: OAuth flow → encrypted token storage → publish/read API → capability metadata surfaced to the AI.
 

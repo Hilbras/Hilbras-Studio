@@ -16,6 +16,13 @@ export async function GET(
   const session = await getSessionUser();
   if (!session) return NextResponse.redirect(new URL("/login", req.url));
 
+  // Manual platforms (Telegram) collect their credentials in the Accounts
+  // modal and have no authorize page to hand the browser to; anything else
+  // reaching here without an `auth` block is a misconfigured registry entry.
+  if (platform.connection === "manual" || !platform.auth) {
+    return NextResponse.redirect(new URL("/accounts?error=manual_connection", req.url));
+  }
+
   // Credentials belong to the signed-in user: their own Settings → Accounts row
   // first, then the platform's env vars. Never another user's row — the client
   // secret is used to mint this user's token.

@@ -3,6 +3,13 @@ import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { decryptSecret } from "@/lib/crypto";
+import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
+import {
+  getDashboardStats,
+  getRecentActivity,
+  getWeeklyChartData,
+  getConnectedAccountsWithDetails,
+} from "@/app/actions/dashboard";
 import {
   chatCompletion as sdkChat,
   streamChat as sdkStream,
@@ -139,6 +146,89 @@ export async function resolveProviderForUser(userId: string): Promise<ProviderCo
   return resolveForUser(userId);
 }
 
+/* ── Assistant context ──────────────────────────────────────── */
+
+/** Display name for a platform id: "threads" → "Threads". */
+function platformName(id: string): string {
+  return (
+    PLATFORM_REGISTRY[id as PlatformId]?.name ??
+    id.charAt(0).toUpperCase() + id.slice(1)
+  );
+}
+
+/**
+ * System prompt for the Assistant, with the current user's real data appended.
+ *
+ * The context queries resolve the session themselves and are best-effort:
+ * if any of them fails, the base prompt is returned alone rather than
+ * breaking the chat. Call from a request with a signed-in session.
+ */
+export async function buildAssistantSystemPrompt(): Promise<string> {
+  const RULES = `
+
+Rules:
+- A <user_context> block may follow with this user's real account data — use it when it helps.
+- Never invent metrics, follower counts, engagement numbers, or dates that are not given.
+- If something is not tracked (impressions, likes, comments), say so plainly instead of guessing.
+- For connection or configuration issues, point the user to the right page (Accounts, Composer, Scheduler, Settings).`;
+
+  let context = "";
+  try {
+    const [accounts, stats, weekly, activity] = await Promise.all([
+      getConnectedAccountsWithDetails(),
+      getDashboardStats(),
+      getWeeklyChartData(),
+      getRecentActivity(3),
+    ]);
+
+    const stat = (label: string) => stats.find((s) => s.label === label)?.value ?? 0;
+    const lines: string[] = [
+      `Today: ${new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })}`,
+      `Connected accounts: ${
+        accounts.length
+          ? accounts
+              .map((a) => `${platformName(a.platform)} @${a.username ?? "unknown"}`)
+              .join(", ")
+          : "none connected yet"
+      }`,
+      `Posts: ${stat("Posts Published")} published in the last 7 days, ${stat(
+        "Scheduled"
+      )} scheduled, ${stat("Total Posts")} total`,
+      `This week (published per day): ${weekly.map((w) => `${w.day} ${w.posts}`).join(" · ")}`,
+    ];
+    if (activity.length) {
+      lines.push(
+        `Recent activity: ${activity
+          .map((a) => `${a.action} — ${a.detail} (${a.timestamp})`)
+          .join("; ")}`
+      );
+    }
+    context = `\n\n<user_context>\n${lines.join("\n")}\n</user_context>`;
+  } catch {
+    // best-effort — the chat must not fail because context queries did
+  }
+
+  return `${SYSTEM_PROMPT}${context}${RULES}`;
+}
+
+/** Which model the Assistant will answer with — safe to send to the client. */
+export interface ActiveModelInfo {
+  name: string;
+  modelId: string;
+  configured: boolean;
+}
+
+export async function getActiveModelInfo(userId: string): Promise<ActiveModelInfo> {
+  const provider = await resolveForUser(userId);
+  if (!provider) return { name: "No model", modelId: "—", configured: false };
+  return { name: provider.name, modelId: provider.modelId, configured: true };
+}
+
 /* ── Public API ─────────────────────────────────────────────── */
 
 /**
@@ -185,6 +275,22 @@ export async function generatePost(prompt: string, platform?: string): Promise<s
   if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
 
   return sdkGenerate(provider, prompt, platform);
+}
+
+/**
+ * Single-shot completion with a caller-supplied system prompt.
+ *
+ * Used by the Composer's rewrite tools: they must answer with content only,
+ * never with the Assistant's conversational persona.
+ */
+export async function completeWithSystem(system: string, user: string): Promise<string> {
+  const provider = await resolveProvider();
+  if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
+
+  return sdkChat(provider, [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ]);
 }
 
 /**

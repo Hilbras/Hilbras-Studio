@@ -24,9 +24,14 @@ interface ChatMessage {
   text: string;
 }
 
-// Convert to AI service format
+// Convert to AI service format.
+// NOTE: a real mapping — `m.role as "user" | "assistant"` would only satisfy
+// the compiler and still send `"ai"` over the wire, which every API rejects.
 function toAiMessages(messages: ChatMessage[]) {
-  return messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.text }));
+  return messages.map((m) => ({
+    role: m.role === "user" ? ("user" as const) : ("assistant" as const),
+    content: m.text,
+  }));
 }
 
 const QUICK_PROMPTS = [

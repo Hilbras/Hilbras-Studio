@@ -271,12 +271,39 @@ export interface ActiveModelInfo {
   name: string;
   modelId: string;
   configured: boolean;
+  /** The hidden server-managed model — keep its name out of the UI. */
+  isBuiltin: boolean;
 }
 
 export async function getActiveModelInfo(userId: string): Promise<ActiveModelInfo> {
-  const provider = await resolveForUser(userId);
-  if (!provider) return { name: "No model", modelId: "—", configured: false };
-  return { name: provider.name, modelId: provider.modelId, configured: true };
+  // 1. A provider the user explicitly selected
+  const [active] = await db
+    .select()
+    .from(aiProviders)
+    .where(and(eq(aiProviders.userId, userId), eq(aiProviders.isDefault, true)))
+    .limit(1);
+  if (active) {
+    return { name: active.name, modelId: active.modelId, configured: true, isBuiltin: false };
+  }
+
+  // 2. Nothing selected → hidden server fallback (when configured)
+  const builtin = getBuiltinProviderConfig();
+  if (builtin) {
+    return { name: builtin.name, modelId: builtin.modelId, configured: true, isBuiltin: true };
+  }
+
+  // 3. Fallback unavailable → most recent user provider (mirrors resolveForUser)
+  const [anyRow] = await db
+    .select()
+    .from(aiProviders)
+    .where(eq(aiProviders.userId, userId))
+    .orderBy(desc(aiProviders.updatedAt))
+    .limit(1);
+  if (anyRow) {
+    return { name: anyRow.name, modelId: anyRow.modelId, configured: true, isBuiltin: false };
+  }
+
+  return { name: "No model", modelId: "—", configured: false, isBuiltin: false };
 }
 
 /* ── Public API ─────────────────────────────────────────────── */

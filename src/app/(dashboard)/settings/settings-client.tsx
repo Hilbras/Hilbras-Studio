@@ -168,9 +168,8 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
     setLocalMemories([]);
   };
 
-  const activeId = localProviders.find((p) => p.isDefault)?.id ?? localProviders[0]?.id ?? "";
-  const hasCustomProviders = localProviders.some((p) => !p.isSystem);
-  const builtinUnconfigured = localProviders.some((p) => p.isSystem && p.unavailable);
+  const activeId = localProviders.find((p) => p.isDefault)?.id ?? "";
+  const noneSelected = localProviders.length > 0 && activeId === "";
 
   return (
     <div className="relative">
@@ -271,31 +270,6 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                       </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                      {/* Active model — the built-in one can't be removed or edited */}
-                      <div className="space-y-1.5">
-                        <Label htmlFor="ai-active" className="text-xs">Active model</Label>
-                        <select
-                          id="ai-active"
-                          value={activeId}
-                          onChange={(e) => handleActivateProvider(e.target.value)}
-                          className="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-gold-500/30"
-                        >
-                          {localProviders.map((p) => (
-                            <option key={p.id} value={p.id} disabled={p.unavailable}>
-                              {p.name} · {p.modelId}
-                              {p.isSystem ? " (built-in)" : ""}
-                              {p.unavailable ? " — not configured" : ""}
-                            </option>
-                          ))}
-                        </select>
-                        {builtinUnconfigured && (
-                          <p className="text-[10px] text-amber-500">
-                            The built-in model needs a key on this server (HILBRAS_AI_API_KEY).
-                          </p>
-                        )}
-                        <FormMessage state={activeMsg} />
-                      </div>
-
                       <form
                         action={async (formData: FormData) => {
                           setSavingProvider(true);
@@ -359,19 +333,23 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                       <div className="space-y-2">
                         {localProviders.map((p) => (
                           <div key={p.id} className="flex items-center gap-2 p-2.5 rounded-xl border border-border bg-card hover:border-gold-500/30 transition-colors">
+                            <input
+                              type="radio"
+                              name="active-ai-model"
+                              aria-label={`Use ${p.name}`}
+                              className="size-3.5 shrink-0 accent-gold-500 cursor-pointer disabled:cursor-not-allowed"
+                              checked={activeId === p.id}
+                              disabled={activatingProvider !== null}
+                              onChange={() => handleActivateProvider(p.id)}
+                            />
                             <div className="w-7 h-7 rounded-lg bg-gold-500/10 flex items-center justify-center shrink-0">
-                              {p.isSystem ? <Lock className="size-3.5 text-gold-500" /> : <Sparkles className="size-3.5 text-gold-500" />}
+                              <Sparkles className="size-3.5 text-gold-500" />
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-1.5">
                                 <p className="text-xs font-medium truncate">{p.name}</p>
-                                {p.isDefault ? (
+                                {p.isDefault && (
                                   <Badge variant="gold" className="text-[9px] px-1 py-0">Active</Badge>
-                                ) : p.isSystem ? (
-                                  <Badge variant="outline" className="text-[9px] px-1 py-0">Built-in</Badge>
-                                ) : null}
-                                {p.unavailable && (
-                                  <Badge variant="outline" className="text-[9px] px-1 py-0 text-amber-500">Not configured</Badge>
                                 )}
                                 {pingResult[p.id] && (
                                   <Badge variant={pingResult[p.id].ok ? "gold" : "outline"} className="text-[9px] px-1 py-0 gap-0.5">
@@ -381,51 +359,32 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                                 )}
                               </div>
                               <p className="text-[10px] text-muted-foreground truncate">
-                                {p.modelId} · {p.isSystem ? "managed by the server" : p.apiFormat}
+                                {p.modelId} · {p.apiFormat}
                               </p>
                             </div>
                             <div className="flex items-center gap-0.5">
-                              {activeId !== p.id ? (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 rounded-lg px-2 text-[10px] gap-1"
-                                  disabled={p.unavailable || activatingProvider !== null}
-                                  title={p.unavailable ? "The built-in model needs a key on this server" : "Make this the active model"}
-                                  onClick={() => handleActivateProvider(p.id)}
-                                >
-                                  {activatingProvider === p.id ? (
-                                    <Loader2 className="size-3 animate-spin" />
-                                  ) : (
-                                    <Sparkles className="size-3" />
-                                  )}
-                                  Set active
-                                </Button>
-                              ) : (
-                                <span className="px-2 text-[10px] font-medium text-gold-500" title="The Assistant uses this model">
-                                  In use
-                                </span>
-                              )}
                               <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Test" disabled={pinging === p.id} onClick={() => handlePing(p.id)}>
                                 {pinging === p.id ? <Loader2 className="size-3 animate-spin" /> : <Wifi className="size-3" />}
                               </Button>
-                              {!p.isSystem && (
-                                <>
-                                  <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Edit" onClick={() => { setEditingProvider(p); setViewingProvider(p); }}>
-                                    <Pencil className="size-3" />
-                                  </Button>
-                                  <Button variant="ghost" size="icon" className="size-7 rounded-lg hover:bg-red-500/10 hover:text-red-500" title="Delete" onClick={() => handleDeleteProvider(p.id)}>
-                                    <Trash2 className="size-3" />
-                                  </Button>
-                                </>
-                              )}
+                              <Button variant="ghost" size="icon" className="size-7 rounded-lg" title="Edit" onClick={() => { setEditingProvider(p); setViewingProvider(p); }}>
+                                <Pencil className="size-3" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="size-7 rounded-lg hover:bg-red-500/10 hover:text-red-500" title="Delete" onClick={() => handleDeleteProvider(p.id)}>
+                                <Trash2 className="size-3" />
+                              </Button>
                             </div>
                           </div>
                         ))}
                       </div>
-                      {!hasCustomProviders && (
+                      {noneSelected && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Select a model for the Assistant.
+                        </p>
+                      )}
+                      <FormMessage state={activeMsg} />
+                      {localProviders.length === 0 && (
                         <div className="py-2 text-center text-xs text-muted-foreground">
-                          <p>No custom providers yet. Add one above to switch away from the built-in model.</p>
+                          <p>No models yet — add your API provider above.</p>
                         </div>
                       )}
                       <p className="text-[10px] text-muted-foreground">Keys encrypted with AES-256-GCM.</p>

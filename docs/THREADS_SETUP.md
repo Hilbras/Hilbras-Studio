@@ -101,8 +101,25 @@ Two consequences worth knowing before you publish:
   token that cannot do anything.
 - The grant is bound to the token, so **accepting the invitation is not
   retroactive**: a connection made before acceptance keeps failing until you
-  press **Connect** again. Same for an app that is published with
+  press **Reconnect via OAuth**. Same for an app that is published with
   `threads_basic`/`threads_content_publish` still waiting on App Review.
+
+### Reconnecting an existing connection
+
+**Settings → Accounts → Threads → Config** carries both controls once the platform
+is connected:
+
+| Control | What it does |
+|---|---|
+| **Reconnect via OAuth** | Starts the authorize flow again. On success the stored row is replaced with the new token, so the connection finally carries the permissions that were missing. Start here whenever permissions changed on the Meta side (tester invitation accepted, `threads_basic` approved) — the old token can never pick them up |
+| **Disconnect** | Deletes the stored access token for this platform (after a confirmation). Nothing is deleted on Threads itself, and the saved app credentials stay, so you can connect again immediately. Use it to clear a connection that keeps coming back unusable, or to hand the account to a different profile |
+
+A connection whose token is provably empty is labelled **No permissions —
+reconnect** instead of **Connected**, both on the Threads card and in the modal:
+`/api/check-connections` returns those platform ids in `permissionsMissing`, which
+it decides by probing `GET /me` with the stored token (only a definitive `100/10`
+counts — a timeout never marks a connection broken). The card is the fastest way
+to see that a reconnect is still needed.
 
 ## Step 5: Connect and post
 
@@ -111,7 +128,8 @@ pnpm dev
 ```
 
 Open http://localhost:3000/accounts → **Connect** next to Threads → authorize in
-the Threads window → you land back on `/accounts?connected=threads`.
+the Threads window → you land back on `/accounts?connected=threads`. To redo an
+existing connection, use **Config → Reconnect via OAuth** as described above.
 
 Then, in the composer, select Threads and write the post:
 
@@ -160,7 +178,7 @@ Then, in the composer, select Threads and write the post:
 | `invalid_state` or `missing_pkce_verifier` | The authorization was started in a different browser/session, or cookies were cleared mid-flow. Start over from `/accounts` |
 | `no_access_token` | Meta returned no token — usually an app/secret mismatch or a redirect URI that does not match |
 | "This app is not ready" in the authorization window | The account is not a Threads Tester yet, or the invitation was never accepted (see Step 4) |
-| Publish fails with **"This action requires the threads_basic permission. You must submit for app review, or your user must be in the list of Threads testers."** — `THApiException`, error **100**, `error_subcode` **10** (also on `GET /me`, which needs no more than `threads_basic`) | Meta issued a token but granted **no** permissions, and it answers this way on *every* endpoint. Per Meta's own rule, only an app user **with a role on the app** can grant permissions until the app is published *and* each permission passed App Review — so either the account is not an accepted **Threads Tester**, or the app is live but `threads_basic`/`threads_content_publish` were never submitted for review. Fix: **App roles → Roles → Add People → Threads Tester** (and the knob in the Threads use case settings, **Add or Remove Threads Test Users**), **accept the invite** at threads.net → **Settings → Account → Website permissions**, then **reconnect Threads** — the old token stays empty forever, an accepted invite is not retroactive. Hilbras Studio now refuses such a connect with `threads_permissions_not_granted` and repeats the same fix in the publish result |
+| Publish fails with **"This action requires the threads_basic permission. You must submit for app review, or your user must be in the list of Threads testers."** — `THApiException`, error **100**, `error_subcode` **10** (also on `GET /me`, which needs no more than `threads_basic`) | Meta issued a token but granted **no** permissions, and it answers this way on *every* endpoint. Per Meta's own rule, only an app user **with a role on the app** can grant permissions until the app is published *and* each permission passed App Review — so either the account is not an accepted **Threads Tester**, or the app is live but `threads_basic`/`threads_content_publish` were never submitted for review. Fix: **App roles → Roles → Add People → Threads Tester** (and the knob in the Threads use case settings, **Add or Remove Threads Test Users**), **accept the invite** at threads.net → **Settings → Account → Website permissions**, then **reconnect Threads** from **Settings → Accounts → Threads → Config → Reconnect via OAuth** — the old token stays empty forever, an accepted invite is not retroactive. Hilbras Studio now refuses such a connect with `threads_permissions_not_granted` and repeats the same fix in the publish result, and marks a connection in this state as **No permissions — reconnect** instead of **Connected** |
 | Publish works, then fails about an hour later | The long-lived exchange failed — look for `[threads] token request failed` in the server log (usually a wrong app secret) |
 | Container creation succeeds but publish fails or times out | The media URL is not publicly reachable, or the format is unsupported. Check the log line `[threads] container <id> failed: <error_message>` |
 | Deauthorize / data-deletion webhook returns `500 app secret not configured` | Neither `THREADS_CLIENT_SECRET` nor a UI-saved `threads_client_secret` exists. The webhook has no session, so it verifies against **every** stored secret plus the env var |

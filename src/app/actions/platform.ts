@@ -7,7 +7,7 @@ import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { getCredentialValue } from "@/app/actions/credentials";
 import { getSessionUser } from "@/lib/session";
 import { db } from "@/db";
-import { storedCredentials } from "@/db/schema";
+import { socialAccounts, storedCredentials } from "@/db/schema";
 import { encryptSecret } from "@/lib/crypto";
 import { verifyAppCredentials } from "@/lib/platform-app-check";
 import { originFromHeaders } from "@/lib/request-origin";
@@ -95,6 +95,44 @@ export async function savePlatformCredentials(
     return { success: true };
   } catch (e: any) {
     return { success: false, error: e.message || "Failed to save" };
+  }
+}
+
+/**
+ * Drop this user's stored connection for a platform.
+ *
+ * Exists because an OAuth grant belongs to the token it was issued for. When
+ * Threads permissions change (the tester invitation is accepted, or App Review
+ * approves `threads_basic`), the stored token keeps its old, empty grant forever,
+ * and the connection would keep answering "connected" from `/api/check-connections`
+ * while every publish fails. `api/connect/[platform]/callback` replaces the row on
+ * a successful connect, so the way out is a fresh authorization — this is what
+ * removes a dead one first, and what lets a user start over when the provider
+ * keeps handing back the same unusable token.
+ *
+ * Only the *user's own* row for the platform is touched. Credentials
+ * (`savePlatformCredentials`) are deliberately left alone: re-authorizing needs
+ * them.
+ */
+export async function disconnectPlatform(platform: string): Promise<{ success: boolean; error?: string }> {
+  const session = await getSessionUser();
+  if (!session) return { success: false, error: "Not signed in" };
+
+  const spec = PLATFORM_REGISTRY[platform as PlatformId];
+  if (!spec) return { success: false, error: `Unknown platform: ${platform}` };
+
+  try {
+    await db
+      .delete(socialAccounts)
+      .where(
+        and(
+          eq(socialAccounts.userId, session.id),
+          eq(socialAccounts.platform, spec.id)
+        )
+      );
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Failed to disconnect" };
   }
 }
 

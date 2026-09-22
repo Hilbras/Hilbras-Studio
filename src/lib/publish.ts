@@ -6,8 +6,13 @@ import { socialAccounts } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { PLATFORM_REGISTRY } from "@/lib/platforms";
 import {
+  DEFAULT_TOKEN_LIFETIME_SECONDS,
+  effectiveTokenExpiry,
+  isExpiredSessionError,
   refreshLongLivedToken,
   supportsTokenRefresh,
+  TOKEN_REFRESH_WINDOW_MS,
+  tokenExpiredMessage,
 } from "@/lib/platform-tokens";
 import { isThreadsPermissionError, THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
 import { getSessionUser } from "@/lib/session";
@@ -32,12 +37,31 @@ const GRAPH_INSTAGRAM = "https://graph.instagram.com/v21.0";
 const GRAPH_THREADS = "https://graph.threads.net/v1.0";
 
 interface GraphError {
-  error?: { message?: string };
+  error?: { message?: string; code?: number; error_subcode?: number };
 }
 
-interface ConnectedAccount {
-  accessToken: string;
-  platformAccountId: string;
+/** A connection that is stored but cannot publish, and why. */
+type ConnectionProblem = "not_connected" | "expired";
+
+type AccountLookup =
+  | { ok: true; accessToken: string; platformAccountId: string }
+  | { ok: false; problem: ConnectionProblem };
+
+/** Publish failure for an unusable connection — the two cases worth naming. */
+function connectionError(platform: string, problem: ConnectionProblem): string {
+  const name = platform.charAt(0).toUpperCase() + platform.slice(1);
+  return problem === "expired" ? tokenExpiredMessage(platform) : `${name} not connected`;
+}
+
+/**
+ * Read the platform's own message out of a Graph error, rephrasing the one
+ * case where we know the fix better than Meta's wording does: an expired
+ * session, which Meta reports verbatim as `Error validating access token:
+ * Session has expired on …` and which only a reconnect can repair.
+ */
+function graphErrorMessage(platform: string, err: GraphError, fallback: string): string {
+  if (isExpiredSessionError(err)) return tokenExpiredMessage(platform);
+  return err.error?.message || fallback;
 }
 
 /** Errors surface as `unknown` — read a message out of them without `any`. */
@@ -51,34 +75,26 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
- * Refresh a long-lived token this close to expiry. Threads/Instagram tokens live
- * 60 days and are only refreshable while still valid, so refreshing a week ahead
- * leaves plenty of room for a retry if the first attempt fails.
- */
-const TOKEN_REFRESH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Fallback lifetime when the platform omits `expires_in` (60 days). */
-const DEFAULT_TOKEN_LIFETIME_SECONDS = 60 * 24 * 60 * 60;
-
-/**
  * Load the connection for a platform. Newest row wins, so a connection made
  * before reconnects replaced rows instead of appending them can't shadow it.
  *
- * If the platform's long-lived token is within `TOKEN_REFRESH_WINDOW_MS` of
- * expiring, it is refreshed here and written back: otherwise the connection
- * silently dies ~60 days after connect, because nothing else acts on
- * `tokenExpiresAt`.
+ * Returns `{ ok: false, problem }` for the two states a publish cannot work
+ * from — no connection, or one whose session has expired — and refreshes the
+ * long-lived token on the way out when it is inside `TOKEN_REFRESH_WINDOW_MS`.
+ * Nothing else ever acts on `tokenExpiresAt`, so without this check the
+ * connection would silently die ~60 days after connect.
  */
 async function getConnectedAccount(
   userId: string,
   platform: string
-): Promise<ConnectedAccount | null> {
+): Promise<AccountLookup> {
   const [account] = await db
     .select({
       id: socialAccounts.id,
       accessTokenEnc: socialAccounts.accessTokenEnc,
       platformAccountId: socialAccounts.platformAccountId,
       tokenExpiresAt: socialAccounts.tokenExpiresAt,
+      connectedAt: socialAccounts.connectedAt,
     })
     .from(socialAccounts)
     .where(
@@ -90,22 +106,29 @@ async function getConnectedAccount(
     .orderBy(desc(socialAccounts.connectedAt))
     .limit(1);
 
-  if (!account?.accessTokenEnc) return null;
+  if (!account?.accessTokenEnc) return { ok: false, problem: "not_connected" };
 
   let accessToken: string;
   try {
     accessToken = decryptSecret(account.accessTokenEnc);
   } catch {
-    return null;
+    return { ok: false, problem: "not_connected" };
   }
 
-  if (account.tokenExpiresAt && supportsTokenRefresh(platform)) {
-    const msLeft = account.tokenExpiresAt.getTime() - Date.now();
-    if (msLeft > 0 && msLeft < TOKEN_REFRESH_WINDOW_MS) {
+  // Nothing else ever acts on `tokenExpiresAt`, so this is the only place a
+  // connection notices it is running out. An expired token is reported here
+  // rather than sent to the platform: Meta would answer with the same verdict
+  // (`code 190 / subcode 463`), only later and in its own words.
+  const expiresAt = effectiveTokenExpiry(platform, account.tokenExpiresAt, account.connectedAt);
+  if (expiresAt) {
+    const msLeft = expiresAt.getTime() - Date.now();
+    if (msLeft <= 0) return { ok: false, problem: "expired" };
+
+    if (msLeft < TOKEN_REFRESH_WINDOW_MS && supportsTokenRefresh(platform)) {
       const refreshed = await refreshLongLivedToken(platform, accessToken);
       if (refreshed) {
         accessToken = refreshed.accessToken;
-        const expiresAt = new Date(
+        const newExpiry = new Date(
           Date.now() +
             (refreshed.expiresIn ?? DEFAULT_TOKEN_LIFETIME_SECONDS) * 1000
         );
@@ -113,19 +136,16 @@ async function getConnectedAccount(
           .update(socialAccounts)
           .set({
             accessTokenEnc: encryptSecret(accessToken),
-            tokenExpiresAt: expiresAt,
+            tokenExpiresAt: newExpiry,
           })
           .where(eq(socialAccounts.id, account.id));
       }
+      // A failed refresh keeps the still-valid old token: the window is wide
+      // enough that the next publish or cron run gets another attempt.
     }
   }
 
-  return { accessToken, platformAccountId: account.platformAccountId };
-}
-
-/** Get a decrypted access token for a specific connected platform. */
-async function getAccessToken(userId: string, platform: string): Promise<string | null> {
-  return (await getConnectedAccount(userId, platform))?.accessToken ?? null;
+  return { ok: true, accessToken, platformAccountId: account.platformAccountId };
 }
 
 /** Container states reported by `GET /<container>?fields=status_code`. */
@@ -191,8 +211,8 @@ async function instagramPermalink(
  */
 async function publishToInstagram(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
   const account = await getConnectedAccount(userId, "instagram");
-  if (!account) {
-    return { platform: "instagram", success: false, error: "Instagram not connected" };
+  if (!account.ok) {
+    return { platform: "instagram", success: false, error: connectionError("instagram", account.problem) };
   }
 
   if (!imageUrl) {
@@ -225,7 +245,7 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
       return {
         platform: "instagram",
         success: false,
-        error: err.error?.message || `Container creation failed: ${containerRes.status}`,
+        error: graphErrorMessage("instagram", err, `Container creation failed: ${containerRes.status}`),
       };
     }
 
@@ -258,7 +278,7 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
       return {
         platform: "instagram",
         success: false,
-        error: err.error?.message || `Publish failed: ${publishRes.status}`,
+        error: graphErrorMessage("instagram", err, `Publish failed: ${publishRes.status}`),
       };
     }
 
@@ -278,8 +298,11 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
  * Publish to Facebook Pages via Graph API.
  */
 async function publishToFacebook(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
-  const token = await getAccessToken(userId, "facebook");
-  if (!token) return { platform: "facebook", success: false, error: "Facebook not connected" };
+  const account = await getConnectedAccount(userId, "facebook");
+  if (!account.ok) {
+    return { platform: "facebook", success: false, error: connectionError("facebook", account.problem) };
+  }
+  const token = account.accessToken;
 
   try {
     // Get user's pages
@@ -287,7 +310,12 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
       `${GRAPH_FACEBOOK}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(token)}`
     );
     if (!pagesRes.ok) {
-      return { platform: "facebook", success: false, error: `Failed to get pages: ${pagesRes.status}` };
+      const err = (await pagesRes.json().catch(() => ({}))) as GraphError;
+      return {
+        platform: "facebook",
+        success: false,
+        error: graphErrorMessage("facebook", err, `Failed to get pages: ${pagesRes.status}`),
+      };
     }
     const pages = await pagesRes.json() as { data: Array<{ id: string; name: string; access_token: string }> };
 
@@ -316,8 +344,12 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
     );
 
     if (!publishRes.ok) {
-      const err = await publishRes.json() as { error?: { message?: string } };
-      return { platform: "facebook", success: false, error: err.error?.message || `Publish failed: ${publishRes.status}` };
+      const err = await publishRes.json() as GraphError;
+      return {
+        platform: "facebook",
+        success: false,
+        error: graphErrorMessage("facebook", err, `Publish failed: ${publishRes.status}`),
+      };
     }
 
     const published = await publishRes.json() as { id: string };
@@ -337,14 +369,16 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
  * Note: X posting requires elevated access (Basic or Pro tier).
  */
 async function publishToX(userId: string, text: string): Promise<PublishResult> {
-  const token = await getAccessToken(userId, "x");
-  if (!token) return { platform: "x", success: false, error: "X not connected" };
+  const account = await getConnectedAccount(userId, "x");
+  if (!account.ok) {
+    return { platform: "x", success: false, error: connectionError("x", account.problem) };
+  }
 
   try {
     const res = await fetch("https://api.x.com/2/tweets", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
+        "Authorization": `Bearer ${account.accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ text }),
@@ -474,8 +508,8 @@ async function threadsPermalink(
  */
 async function publishToThreads(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
   const account = await getConnectedAccount(userId, "threads");
-  if (!account) {
-    return { platform: "threads", success: false, error: "Threads not connected" };
+  if (!account.ok) {
+    return { platform: "threads", success: false, error: connectionError("threads", account.problem) };
   }
 
   const maxLength = PLATFORM_REGISTRY.threads.content.maxTextLength;
@@ -521,7 +555,7 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
       return {
         platform: "threads",
         success: false,
-        error: err.error?.message || `Container creation failed: ${containerRes.status}`,
+        error: graphErrorMessage("threads", err, `Container creation failed: ${containerRes.status}`),
       };
     }
 
@@ -561,7 +595,7 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string)
       return {
         platform: "threads",
         success: false,
-        error: err.error?.message || `Publish failed: ${publishRes.status}`,
+        error: graphErrorMessage("threads", err, `Publish failed: ${publishRes.status}`),
       };
     }
 

@@ -29,19 +29,30 @@ const THREADS_PERMISSION_SUBCODE = 10;
 const THREADS_PERMISSION_MESSAGE = "requires the threads_basic permission";
 
 /**
- * What the user has to do, in one sentence — shared by the connect error banner
- * and the publish result so both say the same thing.
+ * Short label for the Accounts card, where the long sentence below does not fit.
+ *
+ * Shown instead of "Connected": a stored token without a grant is the state that
+ * looks healthy and cannot publish.
+ */
+export const THREADS_PERMISSION_BADGE = "No permissions — reconnect";
+
+/**
+ * What the user has to do, in one sentence — shared by the connect error banner,
+ * the publish result and the Accounts reconnect prompt so all three say the same
+ * thing.
  *
  * Both halves are required: adding the role in the dashboard is not enough on its
  * own (Meta: "you must first send an invitation to the Threads user's profile
  * **and accept the invitation**"), and the token issued before the invite was
- * accepted stays empty forever, so the connection has to be remade.
+ * accepted stays empty forever. That last part is what makes the *reconnect* step
+ * mandatory rather than cosmetic — a grant belongs to the token it was issued
+ * for.
  */
 export const THREADS_PERMISSION_FIX =
   "Meta granted this Threads connection no permissions (Threads API error 100/10). " +
   "Add the account as a Threads Tester in the app dashboard (App roles → Roles → Add People), " +
   "accept the invitation at threads.net → Settings → Account → Website permissions, " +
-  "then connect Threads again from Settings → Accounts.";
+  "then reconnect Threads from Settings → Accounts → Threads → Config → Reconnect via OAuth.";
 
 /** Shape of Meta's error envelope — only the fields we classify by. */
 interface MetaErrorEnvelope {

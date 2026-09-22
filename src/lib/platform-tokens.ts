@@ -68,6 +68,100 @@ export function supportsTokenRefresh(platform: string): boolean {
   return Boolean(REFRESH_ENDPOINTS[platform]);
 }
 
+/** Platform ids `refreshLongLivedToken` can act on — what the maintainer scans. */
+export function refreshablePlatforms(): string[] {
+  return Object.keys(REFRESH_ENDPOINTS);
+}
+
+/**
+ * How close to expiry a token must be before it is worth refreshing.
+ *
+ * Meta allows a refresh any time the long-lived token is at least 24 hours old
+ * **and still valid**, so there is nothing to gain from waiting until the last
+ * week: a 30-day window turns a missed publish or one failed refresh attempt
+ * into a retry on the next run, instead of a connection that dies in silence
+ * because nothing happened to publish during its final 7 days.
+ *
+ * Shared by the publish path (refresh just in time) and the cron maintainer
+ * (refresh ahead of time).
+ */
+export const TOKEN_REFRESH_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Assumed lifetime when the platform omits `expires_in` (60 days). */
+export const DEFAULT_TOKEN_LIFETIME_SECONDS = 60 * 24 * 60 * 60;
+
+/**
+ * Effective expiry of a stored token: the platform's own `expires_in` when it
+ * recorded one, otherwise — for platforms with a fixed 60-day lifetime — the
+ * connect time plus that lifetime.
+ *
+ * The fallback matters because rows written before `tokenExpiresAt` was stored
+ * carry a `null`, which used to disable the refresh logic outright: the token
+ * aged out 60 days after connect and nothing ever noticed. For platforms whose
+ * lifetime is not known to be fixed, `null` stays `null` ("unknown"), never a
+ * guess.
+ */
+export function effectiveTokenExpiry(
+  platform: string,
+  tokenExpiresAt: Date | null,
+  connectedAt: Date
+): Date | null {
+  if (tokenExpiresAt) return tokenExpiresAt;
+  if (supportsTokenRefresh(platform)) {
+    return new Date(connectedAt.getTime() + DEFAULT_TOKEN_LIFETIME_SECONDS * 1000);
+  }
+  return null;
+}
+
+/** Shape of Meta's error envelope — only the fields the checks below read. */
+interface MetaErrorPayload {
+  error?: {
+    message?: unknown;
+    code?: unknown;
+    error_subcode?: unknown;
+  };
+}
+
+/**
+ * True for Meta's "this session is over" answer.
+ *
+ * An expired token is reported as `code: 190` — the same code used for a
+ * malformed token — with `error_subcode: 463` on the endpoints that send a
+ * subcode, and always the wording `Session has expired on <date>` in the
+ * message. Both halves are checked because the subcode is missing on some
+ * endpoints while the wording has proven stable across them.
+ *
+ * This is the error a connection hits when nothing refreshed it in time, and it
+ * is the one case the platform itself cannot help with: Meta will only refresh
+ * a token that is still valid, so the answer is always "reconnect".
+ */
+export function isExpiredSessionError(payload: unknown): boolean {
+  if (typeof payload !== "object" || payload === null) return false;
+
+  const { message, code, error_subcode } = (payload as MetaErrorPayload).error ?? {};
+
+  if (code === 190 && error_subcode === 463) return true;
+
+  return typeof message === "string" && message.includes("Session has expired");
+}
+
+/**
+ * What the user has to do about an expired session — one sentence, shared by
+ * the publish result and the Accounts notice so both say the same thing.
+ */
+export const TOKEN_EXPIRED_FIX =
+  "The OAuth session for this platform has expired. Meta only refreshes a token while it is " +
+  "still valid, so an expired one cannot be renewed — reconnect to issue a new session.";
+
+/** Short label for the Accounts card (see `THREADS_PERMISSION_BADGE`). */
+export const TOKEN_EXPIRED_BADGE = "Session expired — reconnect";
+
+/** The publish-time variant: names the platform so a multi-platform post reads clearly. */
+export function tokenExpiredMessage(platform: string): string {
+  const name = platform.charAt(0).toUpperCase() + platform.slice(1);
+  return `${name}: the session expired and must be renewed — reconnect from Accounts → ${name} → Config → Reconnect via OAuth.`;
+}
+
 /** Shared GET-and-parse for the token endpoints (exchange and refresh). */
 async function fetchToken(
   platform: string,

@@ -36,17 +36,21 @@ import {
   Loader2,
   TestTube2,
   Link2,
+  Unlink,
+  RefreshCw,
   AlertTriangle,
   Copy,
   Check,
 } from "lucide-react";
 import { allPlatforms, type PlatformId } from "@/lib/platforms";
-import { THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
+import { THREADS_PERMISSION_BADGE, THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
+import { TOKEN_EXPIRED_BADGE, TOKEN_EXPIRED_FIX } from "@/lib/platform-tokens";
 import {
   getPlatformCredentials,
   savePlatformCredentials,
   testPlatformCredentials,
   checkCredentialsExist,
+  disconnectPlatform,
   getConnectRedirectUri,
 } from "@/app/actions/platform";
 
@@ -118,8 +122,18 @@ export default function AccountsPage() {
 
   const [configured, setConfigured] = useState<Set<string>>(new Set());
   const [connected, setConnected] = useState<Set<string>>(new Set());
+  // Platforms whose stored token provably carries no permission grant. They are
+  // "connected" in the database and useless against the API, so the card must not
+  // show a green badge and the modal must offer a reconnect.
+  const [permissionsMissing, setPermissionsMissing] = useState<Set<string>>(new Set());
+  // Platforms whose stored session has expired. Same reasoning, different cause:
+  // Meta only refreshes a token while it is valid, so these can only be fixed by
+  // a fresh authorization — which is exactly what the reconnect button starts.
+  const [expired, setExpired] = useState<Set<string>>(new Set());
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [selectedPlatform, setSelectedPlatform] = useState<string>("");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
@@ -142,13 +156,27 @@ export default function AccountsPage() {
       (async () => {
         try {
           const res = await fetch("/api/check-connections");
-          if (res.ok) return await res.json() as { connected: string[] };
+          if (res.ok) {
+            return await res.json() as {
+              connected: string[];
+              permissionsMissing?: string[];
+              expired?: string[];
+            };
+          }
         } catch {}
-        return { connected: [] as string[] };
+        return {
+          connected: [] as string[],
+          permissionsMissing: [] as string[],
+          expired: [] as string[],
+        };
       })(),
     ]);
     setConfigured(new Set(confResults.filter((r) => r.exists).map((r) => r.id)));
     setConnected(new Set(connResults.connected));
+    // Absent fields (an older response shape) read as "nothing known to be
+    // broken" rather than as an error.
+    setPermissionsMissing(new Set(connResults.permissionsMissing ?? []));
+    setExpired(new Set(connResults.expired ?? []));
   }, []);
 
   useEffect(() => { refreshData(); }, [refreshData]);
@@ -233,10 +261,67 @@ export default function AccountsPage() {
     }
   };
 
+  /**
+   * Start (or restart) the provider's OAuth flow for a platform — either the one
+   * open in the modal or, from a card's Reconnect button, the one clicked.
+   *
+   * Restarting is the whole point: an OAuth grant belongs to the token it was
+   * issued for, so a connection whose permission set has changed — a Threads
+   * Tester invitation accepted, a permission approved in App Review — or whose
+   * session has expired only picks the new grant up through a fresh
+   * authorization. `authorize` replaces the stored row on success, so nothing
+   * has to be cleared first.
+   */
+  const startOAuthFor = (platform: string) => {
+    window.location.href = `/api/connect/${platform}/authorize`;
+  };
+
+  const startOAuth = () => startOAuthFor(selectedPlatform);
+
+  /**
+   * Delete the stored connection. Deliberately behind a confirmation: it is the
+   * one action here that removes something the user may still want, and it sits
+   * next to Reconnect, which is the button they actually came for.
+   */
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    setModalError("");
+    try {
+      const result = await disconnectPlatform(selectedPlatform);
+      if (!result.success) {
+        setModalError(result.error || "Failed to disconnect");
+        return;
+      }
+      setConnected((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedPlatform);
+        return next;
+      });
+      setPermissionsMissing((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedPlatform);
+        return next;
+      });
+      setExpired((prev) => {
+        const next = new Set(prev);
+        next.delete(selectedPlatform);
+        return next;
+      });
+      setConfirmDisconnect(false);
+      setModalOpen(false);
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : "Failed to disconnect");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   const PLATFORMS = allPlatforms();
   const selectedMeta = PLATFORMS.find((p) => p.id === selectedPlatform);
   const selConfigured = configured.has(selectedPlatform);
   const selConnected = connected.has(selectedPlatform);
+  const selNeedsReconnect = permissionsMissing.has(selectedPlatform);
+  const selExpired = expired.has(selectedPlatform);
   const selTest = testResults[selectedPlatform];
   const selTesting = testingPlatform === selectedPlatform;
 
@@ -257,7 +342,7 @@ export default function AccountsPage() {
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
-              className={`mt-4 rounded-xl border px-4 py-3 text-sm flex items-center gap-2 ${
+              className={`mt-4 rounded-xl border px-4 py-3 text-sm flex flex-wrap items-center gap-2 ${
                 connectedPlatform
                   ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                   : "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400"
@@ -266,7 +351,18 @@ export default function AccountsPage() {
               {connectedPlatform ? (
                 <><CheckCircle2 className="size-4 shrink-0" /> Connected to <span className="font-semibold capitalize">{connectedPlatform}</span>!</>
               ) : (
-                <><XCircle className="size-4 shrink-0" /> Connection failed: <span className="font-medium">{describeConnectError(safeDecode(errorParam ?? "unknown"))}</span></>
+                <>
+                  <XCircle className="size-4 shrink-0" /> Connection failed: <span className="font-medium">{describeConnectError(safeDecode(errorParam ?? "unknown"))}</span>
+                  {/* The Threads permission fix ends in a reconnect, and the only
+                      button that starts one lives in that platform's settings —
+                      so hand it over rather than making the sentence do the work
+                      of a UI. */}
+                  {safeDecode(errorParam ?? "") === "threads_permissions_not_granted" && (
+                    <Button variant="outline" size="sm" className="rounded-xl gap-1 ml-auto shrink-0" onClick={() => openModal("threads")}>
+                      <RefreshCw className="size-3" /> Open Threads settings
+                    </Button>
+                  )}
+                </>
               )}
             </motion.div>
           )}
@@ -276,6 +372,8 @@ export default function AccountsPage() {
           {PLATFORMS.map((platform) => {
             const isConfigured = configured.has(platform.id);
             const isConnected = connected.has(platform.id);
+            const needsReconnect = permissionsMissing.has(platform.id);
+            const isExpired = expired.has(platform.id);
             const testResult = testResults[platform.id];
             const isTesting = testingPlatform === platform.id;
 
@@ -291,7 +389,17 @@ export default function AccountsPage() {
                       <CardDescription className="text-xs mt-0.5">{platform.accountModel.join(" / ")}</CardDescription>
                     </div>
                     {isConnected ? (
-                      <Badge variant="gold" className="text-[10px] shrink-0 gap-1"><CheckCircle2 className="size-3" /> Connected</Badge>
+                      needsReconnect ? (
+                        <Badge variant="outline" className="text-[10px] shrink-0 gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400">
+                          <AlertTriangle className="size-3" /> {THREADS_PERMISSION_BADGE}
+                        </Badge>
+                      ) : isExpired ? (
+                        <Badge variant="outline" className="text-[10px] shrink-0 gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400">
+                          <AlertTriangle className="size-3" /> {TOKEN_EXPIRED_BADGE}
+                        </Badge>
+                      ) : (
+                        <Badge variant="gold" className="text-[10px] shrink-0 gap-1"><CheckCircle2 className="size-3" /> Connected</Badge>
+                      )
                     ) : isConfigured ? (
                       <Badge variant="secondary" className="text-[10px] shrink-0">Configured</Badge>
                     ) : null}
@@ -317,24 +425,35 @@ export default function AccountsPage() {
                     )}
                   </AnimatePresence>
 
-                  <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
-                    <div className="text-xs text-muted-foreground">
+                  {/* One footer, three pieces of state: the media rules, a
+                      Reconnect that starts OAuth straight from the card — the
+                      connection this page exists to repair must not be buried in
+                      a modal — and Config for credentials. The Reconnect button
+                      only appears once a connection exists to replace. */}
+                  <div className="mt-4 pt-4 border-t border-border flex items-center justify-between gap-2">
+                    <div className="text-xs text-muted-foreground truncate pr-1">
                       <span>Media: </span>
                       <span className="font-medium">{platform.content.mediaTypes.join(", ")}</span>
                     </div>
 
-                  <div className="mt-4 pt-4 border-t border-border flex items-center justify-between">
-                    <div className="text-xs text-muted-foreground truncate pr-3">
-                      <span>Media: </span>
-                      <span className="font-medium">{platform.content.mediaTypes.join(", ")}</span>
-                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isConnected && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="rounded-xl gap-1"
+                          onClick={() => startOAuthFor(platform.id)}
+                        >
+                          <RefreshCw className="size-3" /> Reconnect
+                        </Button>
+                      )}
 
-                    <MagneticButton strength={0.12}>
-                      <Button variant="gold" size="sm" className="rounded-xl gap-1 shrink-0" onClick={() => openModal(platform.id)}>
-                        <Settings className="size-3" /> Config
-                      </Button>
-                    </MagneticButton>
-                  </div>
+                      <MagneticButton strength={0.12}>
+                        <Button variant="gold" size="sm" className="rounded-xl gap-1" onClick={() => openModal(platform.id)}>
+                          <Settings className="size-3" /> Config
+                        </Button>
+                      </MagneticButton>
+                    </div>
                   </div>
                 </motion.div>
               </motion.div>
@@ -366,7 +485,17 @@ export default function AccountsPage() {
             {/* Status */}
             <div className="flex flex-wrap items-center gap-2">
               {selConnected && (
-                <Badge variant="gold" className="gap-1"><CheckCircle2 className="size-3" /> Connected</Badge>
+                selNeedsReconnect ? (
+                  <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="size-3" /> {THREADS_PERMISSION_BADGE}
+                  </Badge>
+                ) : selExpired ? (
+                  <Badge variant="outline" className="gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="size-3" /> {TOKEN_EXPIRED_BADGE}
+                  </Badge>
+                ) : (
+                  <Badge variant="gold" className="gap-1"><CheckCircle2 className="size-3" /> Connected</Badge>
+                )
               )}
               {selConfigured ? (
                 <Badge variant="secondary">Credentials saved</Badge>
@@ -386,9 +515,40 @@ export default function AccountsPage() {
             <section className="rounded-xl border border-border p-4 space-y-3">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Connection</h4>
               {selConnected ? (
-                <p className="text-sm text-muted-foreground">
-                  This platform is linked through official OAuth. You can publish to it from the Composer.
-                </p>
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    This platform is linked through official OAuth. You can publish to it from the Composer.
+                  </p>
+                  {selNeedsReconnect && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                      <span>{THREADS_PERMISSION_FIX}</span>
+                    </div>
+                  )}
+                  {selExpired && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                      <AlertTriangle className="size-3.5 shrink-0 mt-0.5" />
+                      <span>{TOKEN_EXPIRED_FIX}</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Reconnect after the app&apos;s permissions change — the provider binds a grant to the
+                    token it was issued for, so an older connection keeps the older permissions.
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="gold" size="sm" className="rounded-xl gap-1" onClick={startOAuth}>
+                      <RefreshCw className="size-3" /> Reconnect via OAuth
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="rounded-xl gap-1 text-red-600 dark:text-red-400"
+                      onClick={() => setConfirmDisconnect(true)}
+                    >
+                      <Unlink className="size-3" /> Disconnect
+                    </Button>
+                  </div>
+                </>
               ) : (
                 <>
                   <p className="text-sm text-muted-foreground">
@@ -401,7 +561,7 @@ export default function AccountsPage() {
                     size="sm"
                     className="rounded-xl gap-1"
                     disabled={!selConfigured}
-                    onClick={() => { window.location.href = `/api/connect/${selectedPlatform}/authorize`; }}
+                    onClick={startOAuth}
                   >
                     <Link2 className="size-3" /> Connect via OAuth
                   </Button>
@@ -506,6 +666,39 @@ export default function AccountsPage() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setModalOpen(false)} className="rounded-xl">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disconnect confirmation. Disconnecting is the only way back to a clean
+          "not connected" state, and it is irreversible from the UI — the next
+          step is a fresh authorization — so it does not get to be one click
+          while Reconnect sits beside it. */}
+      <Dialog open={confirmDisconnect} onOpenChange={setConfirmDisconnect}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Unlink className="size-4 text-red-500" /> Disconnect {selectedMeta?.name}?
+            </DialogTitle>
+            <DialogDescription>
+              The stored access token is deleted from Hilbras Studio, so nothing can publish to{" "}
+              {selectedMeta?.name} until you connect again. Nothing is posted or removed on{" "}
+              {selectedMeta?.name} itself, and your saved app credentials are kept.
+            </DialogDescription>
+          </DialogHeader>
+          <AnimatePresence>
+            {modalError && (
+              <motion.p key={modalError} initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} className="text-sm text-red-600 dark:text-red-400 flex items-center gap-1.5">
+                <XCircle className="size-3.5 shrink-0" /> {modalError}
+              </motion.p>
+            )}
+          </AnimatePresence>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmDisconnect(false)} className="rounded-xl">Cancel</Button>
+            <Button variant="gold" onClick={handleDisconnect} disabled={disconnecting} className="rounded-xl gap-1">
+              {disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Unlink className="size-3" />}
+              {disconnecting ? "Disconnecting…" : "Disconnect"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

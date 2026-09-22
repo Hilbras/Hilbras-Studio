@@ -295,3 +295,33 @@
 .docs-prose hr {
   @apply border-border;
 }
+
+/* ── Docs page entrance ──────────────────────────────────── */
+
+/*
+ * Replays on every /docs navigation: template.tsx recreates this wrapper's
+ * DOM per route change, so the keyframe run restarts each time — entering
+ * the docs from the app and moving between docs pages alike. Matches the
+ * dashboard transition's feel (fade + 8px rise) without pulling JS into the
+ * static pages.
+ */
+@keyframes docs-page-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.docs-page-enter {
+  animation: docs-page-in 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .docs-page-enter {
+    animation: none;
+  }
+}

@@ -32,11 +32,19 @@ export interface AiProviderFormState {
 
 const providerSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
-  baseUrl: z.string().url("Must be a valid URL"),
+  baseUrl: z.string().url("Must be a valid URL, e.g. https://api.openai.com/v1"),
   apiKey: z.string().min(1, "API key is required"),
   apiFormat: z.enum(["openai", "anthropic"], { message: "Format must be openai or anthropic" }),
   modelId: z.string().min(1, "Model ID is required").max(100),
 });
+
+/** Accept a pasted host without a scheme: "api.openai.com/v1" → https://… */
+function normalizeBaseUrl(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  const value = raw.trim();
+  if (!value) return value;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`;
+}
 
 /** Save or create an AI provider for the current user. */
 export async function saveAiProviderAction(
@@ -46,12 +54,18 @@ export async function saveAiProviderAction(
   const session = await getSessionUser();
   if (!session) return { error: "Not signed in" };
 
+  const providerName = formData.get("name");
   const parsed = providerSchema.safeParse({
-    name: formData.get("name"),
-    baseUrl: formData.get("baseUrl"),
-    apiKey: formData.get("apiKey"),
+    name: typeof providerName === "string" ? providerName.trim() : providerName,
+    // Users routinely paste "api.groq.com/openai/v1" without a scheme — zod
+    // would reject it, and the form used to swallow that error silently.
+    baseUrl: normalizeBaseUrl(formData.get("baseUrl")),
+    apiKey: typeof formData.get("apiKey") === "string" ? (formData.get("apiKey") as string).trim() : formData.get("apiKey"),
     apiFormat: formData.get("apiFormat"),
-    modelId: formData.get("modelId"),
+    modelId:
+      typeof formData.get("modelId") === "string"
+        ? (formData.get("modelId") as string).trim()
+        : formData.get("modelId"),
   });
 
   if (!parsed.success) {

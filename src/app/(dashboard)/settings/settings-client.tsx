@@ -48,6 +48,7 @@ import {
   testPingProviderAction,
   listAiProviders,
   type AiProviderItem,
+  type AiProviderFormState,
 } from "@/app/actions/ai-providers";
 
 type Prefs = {
@@ -114,7 +115,12 @@ export function SettingsClient({ user, preferences, providers = [] }: {
   const [passwordState, passwordAction, passwordPending] = useActionState(changePasswordAction, {});
   const [localProviders, setLocalProviders] = useState<AiProviderItem[]>(providers);
   const [prefs, setPrefs] = useState<Prefs>(preferences);
-  const [aiProviderState, , aiProviderPending] = useActionState(saveAiProviderAction, {});
+  // The provider form calls the action directly (it needs to refresh the list
+  // on success), so its result lives here — not in useActionState, whose
+  // dispatcher is never invoked and whose state would never update.
+  const [savingProvider, setSavingProvider] = useState(false);
+  const [aiFormMsg, setAiFormMsg] = useState<AiProviderFormState>({});
+  const [activeMsg, setActiveMsg] = useState<AiProviderFormState>({});
   const [editingProvider, setEditingProvider] = useState<AiProviderItem | null>(null);
   const [viewingProvider, setViewingProvider] = useState<AiProviderItem | null>(null);
   const [pingResult, setPingResult] = useState<Record<string, { ok: boolean; latencyMs?: number; error?: string }>>({});
@@ -122,7 +128,15 @@ export function SettingsClient({ user, preferences, providers = [] }: {
 
   const refreshProviders = async () => { setLocalProviders(await listAiProviders()); };
   const handleDeleteProvider = async (id: string) => { await deleteAiProviderAction(id); await refreshProviders(); setViewingProvider(null); };
-  const handleActivateProvider = async (id: string) => { await setDefaultAiProviderAction(id); await refreshProviders(); };
+  const handleActivateProvider = async (id: string) => {
+    setActiveMsg({});
+    const r = await setDefaultAiProviderAction(id);
+    if (!r.ok) {
+      setActiveMsg({ error: r.error ?? "Could not switch the active model." });
+      return;
+    }
+    await refreshProviders();
+  };
   const handlePrefToggle = (key: keyof Prefs) => { const v = !prefs[key]; setPrefs((p) => ({ ...p, [key]: v })); updatePreferencesAction({ ...prefs, [key]: v }); };
   const handlePing = async (id: string) => { setPinging(id); const r = await testPingProviderAction(id); setPingResult((prev) => ({ ...prev, [id]: r })); setPinging(null); };
 
@@ -251,12 +265,22 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                             The built-in model needs a key on this server (HILBRAS_AI_API_KEY).
                           </p>
                         )}
+                        <FormMessage state={activeMsg} />
                       </div>
 
                       <form
                         action={async (formData: FormData) => {
-                          const r = await saveAiProviderAction(aiProviderState, formData);
-                          if (r.success) { await refreshProviders(); setEditingProvider(null); }
+                          setSavingProvider(true);
+                          setAiFormMsg({});
+                          try {
+                            const r = await saveAiProviderAction({}, formData);
+                            setAiFormMsg(r);
+                            if (r.success) { await refreshProviders(); setEditingProvider(null); }
+                          } catch {
+                            setAiFormMsg({ error: "Could not save the provider — try again." });
+                          } finally {
+                            setSavingProvider(false);
+                          }
                         }}
                         className="space-y-3 p-3 rounded-xl border border-dashed border-border bg-muted/30"
                       >
@@ -295,12 +319,12 @@ export function SettingsClient({ user, preferences, providers = [] }: {
                         </div>
                         <div className="flex items-center gap-2">
                           <MagneticButton strength={0.1}>
-                            <Button type="submit" variant="gold" size="sm" disabled={aiProviderPending} className="rounded-lg gap-1 text-xs">
-                              {aiProviderPending && <Loader2 className="size-3 animate-spin" />}
+                            <Button type="submit" variant="gold" size="sm" disabled={savingProvider} className="rounded-lg gap-1 text-xs">
+                              {savingProvider && <Loader2 className="size-3 animate-spin" />}
                               {editingProvider ? "Update" : "Save"}
                             </Button>
                           </MagneticButton>
-                          <FormMessage state={aiProviderState} />
+                          <FormMessage state={aiFormMsg} />
                         </div>
                       </form>
 

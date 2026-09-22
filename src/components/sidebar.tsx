@@ -13,6 +13,7 @@ import {
   Inbox as InboxIcon,
   ChevronLeft,
   ChevronRight,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/components/lib/utils";
 import { PlatformIcon } from "@/components/platform-icon";
@@ -27,6 +28,7 @@ const NAV_ITEMS = [
   { href: "/inbox", label: "Inbox", icon: InboxIcon },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/docs", label: "Docs", icon: BookOpen },
 ] as const;
 
 export function Sidebar({

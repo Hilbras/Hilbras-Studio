@@ -5,7 +5,7 @@ AI-powered social media management platform. Create, schedule, and publish conte
 ## Features
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible provider (OpenRouter, Groq, Together, etc.)
-- **Multi-platform Publishing** — Publish to 9 platforms with OAuth 2.0 connections
+- **Multi-platform Publishing** — Publish to 10 platforms: nine via OAuth 2.0, Telegram via bot token
 - **Smart Composer** — AI adapts tone, length, and format per platform
 - **Post Scheduler** — Queue posts with AI-optimized timing
 - **Inbox** — Unified notification feed across connected platforms

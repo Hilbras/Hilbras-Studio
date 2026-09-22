@@ -193,3 +193,105 @@
   background: color-mix(in srgb, var(--gold-500) 30%, transparent);
   color: var(--foreground);
 }
+
+/* ── Docs content (/docs) ────────────────────────────────── */
+
+/*
+ * Typographic styles for the public docs pages. The app has no typography
+ * plugin, so the docs bring their own `.docs-prose` scope instead — content
+ * pages write plain semantic HTML (h2/p/ul/table/pre) inside it.
+ */
+
+.docs-prose {
+  @apply text-[15px] leading-relaxed;
+}
+
+.docs-prose > * + * {
+  @apply mt-4;
+}
+
+.docs-prose h1 {
+  @apply mb-2 mt-0 text-3xl font-bold tracking-tight;
+}
+
+.docs-prose h2 {
+  @apply mb-2 mt-10 border-b border-border pb-2 text-xl font-semibold tracking-tight;
+}
+
+.docs-prose h3 {
+  @apply mb-1 mt-6 text-base font-semibold;
+}
+
+.docs-prose p {
+  @apply text-muted-foreground;
+}
+
+.docs-prose .lede {
+  @apply text-base text-foreground/90;
+}
+
+.docs-prose strong,
+.docs-prose li strong {
+  @apply font-semibold text-foreground;
+}
+
+.docs-prose a {
+  @apply font-medium text-gold-600 underline underline-offset-2 hover:opacity-80 dark:text-gold-400;
+}
+
+.docs-prose ul,
+.docs-prose ol {
+  @apply list-outside space-y-1.5 pl-5 text-muted-foreground;
+}
+
+.docs-prose ul {
+  @apply list-disc;
+}
+
+.docs-prose ol {
+  @apply list-decimal;
+}
+
+.docs-prose li::marker {
+  @apply text-gold-500;
+}
+
+.docs-prose code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[13px] text-foreground;
+}
+
+.docs-prose pre {
+  @apply overflow-x-auto rounded-xl border border-border bg-card p-4 font-mono text-[13px] leading-relaxed text-muted-foreground;
+}
+
+.docs-prose pre code {
+  @apply rounded-none bg-transparent p-0 text-inherit;
+}
+
+.docs-prose blockquote {
+  @apply border-l-2 border-gold-500/60 pl-4 italic text-muted-foreground;
+}
+
+.docs-prose .callout {
+  @apply rounded-xl border border-gold-500/30 bg-gold-500/5 px-4 py-3 text-sm;
+}
+
+.docs-prose .callout p {
+  @apply text-foreground/90;
+}
+
+.docs-prose table {
+  @apply w-full border-collapse text-sm;
+}
+
+.docs-prose th {
+  @apply border-b border-border px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground;
+}
+
+.docs-prose td {
+  @apply border-b border-border px-3 py-2 align-top text-muted-foreground;
+}
+
+.docs-prose hr {
+  @apply border-border;
+}

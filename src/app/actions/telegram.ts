@@ -2,6 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { socialAccounts } from "@/db/schema";
 import { encryptSecret } from "@/lib/crypto";
@@ -21,6 +22,23 @@ interface TelegramChat {
   title?: string;
   username?: string;
 }
+
+const telegramConnectSchema = z.object({
+  botToken: z
+    .string()
+    .trim()
+    .min(1, "Paste the bot token from @BotFather.")
+    .max(100)
+    .regex(
+      /^\d+:[A-Za-z0-9_-]{10,}$/,
+      "That does not look like a bot token — it looks like 123456789:AA…"
+    ),
+  chatRef: z
+    .string()
+    .trim()
+    .min(1, "Paste the chat — its @username or numeric ID.")
+    .max(64),
+});
 
 /**
  * Connect a Telegram chat for publishing.
@@ -44,18 +62,17 @@ export async function connectTelegramAction(
   const session = await getSessionUser();
   if (!session) return { success: false, error: "Not signed in" };
 
-  const token = botToken.trim();
-  const chatRef = chatInput.trim();
-  if (!token) return { success: false, error: "Paste the bot token from @BotFather." };
-  if (!token.includes(":")) {
+  const parsed = telegramConnectSchema.safeParse({
+    botToken,
+    chatRef: chatInput,
+  });
+  if (!parsed.success) {
     return {
       success: false,
-      error: "That does not look like a bot token — it looks like 123456789:AA…",
+      error: parsed.error.issues[0]?.message ?? "Invalid input",
     };
   }
-  if (!chatRef) {
-    return { success: false, error: "Paste the chat — its @username or numeric ID." };
-  }
+  const { botToken: token, chatRef } = parsed.data;
 
   // The token must belong to a real bot.
   const me = await telegramApi<{ id: number; username: string }>(token, "getMe", {});

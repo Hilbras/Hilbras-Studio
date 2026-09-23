@@ -1,5 +1,7 @@
 "use server";
 
+import { z } from "zod";
+
 import { publishPost, publishToAll, type PublishResult } from "@/lib/publish";
 
 export interface PublishActionState {
@@ -8,22 +10,44 @@ export interface PublishActionState {
   results?: Array<{ platform: string; success: boolean; postId?: string; error?: string; url?: string }>;
 }
 
+const textSchema = z
+  .string()
+  .trim()
+  .min(1, "Post content is required")
+  .max(5000, "Post is too long (5000 characters max)");
+const platformSchema = z
+  .string()
+  .regex(/^[a-z][a-z0-9_-]{0,29}$/, "Select a platform");
+const platformsSchema = z
+  .array(platformSchema)
+  .min(1, "Select at least one platform")
+  .max(10);
+const imageUrlSchema = z
+  .union([z.string().url("Media must be a valid URL").max(2048), z.literal("")])
+  .optional();
+
+/** FormData entries can be File or null — only strings count as fields. */
+function asString(v: FormDataEntryValue | null): string {
+  return typeof v === "string" ? v : "";
+}
+
 export async function publishPostAction(
   _prev: PublishActionState,
   formData: FormData
 ): Promise<PublishActionState> {
-  const platform = formData.get("platform") as string;
-  const text = formData.get("text") as string;
-  const imageUrl = (formData.get("imageUrl") as string) || undefined;
-
-  if (!text?.trim()) {
-    return { error: "Post content is required" };
+  const parsed = z
+    .object({ platform: platformSchema, text: textSchema, imageUrl: imageUrlSchema })
+    .safeParse({
+      platform: asString(formData.get("platform")),
+      text: asString(formData.get("text")),
+      imageUrl: asString(formData.get("imageUrl")),
+    });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
-  if (!platform) {
-    return { error: "Select a platform" };
-  }
 
-  const result = await publishPost(platform, text.trim(), imageUrl);
+  const { platform, text, imageUrl } = parsed.data;
+  const result = await publishPost(platform, text, imageUrl || undefined);
 
   if (result.success) {
     return {
@@ -39,18 +63,21 @@ export async function publishToAllAction(
   _prev: PublishActionState,
   formData: FormData
 ): Promise<PublishActionState> {
-  const text = formData.get("text") as string;
-  const imageUrl = (formData.get("imageUrl") as string) || undefined;
-  const platforms = formData.getAll("platforms") as string[];
-
-  if (!text?.trim()) {
-    return { error: "Post content is required" };
+  const parsed = z
+    .object({ text: textSchema, platforms: platformsSchema, imageUrl: imageUrlSchema })
+    .safeParse({
+      text: asString(formData.get("text")),
+      platforms: formData
+        .getAll("platforms")
+        .filter((p): p is string => typeof p === "string"),
+      imageUrl: asString(formData.get("imageUrl")),
+    });
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
-  if (!platforms.length) {
-    return { error: "Select at least one platform" };
-  }
 
-  const results = await publishToAll(text.trim(), imageUrl, platforms);
+  const { text, platforms, imageUrl } = parsed.data;
+  const results = await publishToAll(text, imageUrl || undefined, platforms);
   const successes = results.filter((r) => r.success);
   const failures = results.filter((r) => !r.success);
 
@@ -87,10 +114,22 @@ export async function publishPostNowAction(
   text: string,
   imageUrl?: string
 ): Promise<PublishResult[]> {
-  if (!text?.trim()) return [{ platform, success: false, error: "Post content is required" }];
-  if (!platform) return [{ platform: "unknown", success: false, error: "Select a platform" }];
+  const parsed = z
+    .object({ platform: platformSchema, text: textSchema, imageUrl: imageUrlSchema })
+    .safeParse({ platform, text, imageUrl });
+  if (!parsed.success) {
+    return [
+      {
+        platform: typeof platform === "string" ? platform.slice(0, 30) : "unknown",
+        success: false,
+        error: parsed.error.issues[0]?.message ?? "Invalid input",
+      },
+    ];
+  }
 
-  return [await publishPost(platform, text.trim(), imageUrl)];
+  return [
+    await publishPost(parsed.data.platform, parsed.data.text, parsed.data.imageUrl || undefined),
+  ];
 }
 
 /** Publish one draft to several platforms now — the Composer's main path. */
@@ -99,12 +138,22 @@ export async function publishToAllNowAction(
   imageUrl?: string,
   platforms?: string[]
 ): Promise<PublishResult[]> {
-  if (!text?.trim()) {
-    return [{ platform: "all", success: false, error: "Post content is required" }];
-  }
-  if (!platforms?.length) {
-    return [{ platform: "all", success: false, error: "Select at least one platform" }];
+  const parsed = z
+    .object({ text: textSchema, platforms: platformsSchema, imageUrl: imageUrlSchema })
+    .safeParse({ text, platforms: platforms ?? [], imageUrl });
+  if (!parsed.success) {
+    return [
+      {
+        platform: "all",
+        success: false,
+        error: parsed.error.issues[0]?.message ?? "Invalid input",
+      },
+    ];
   }
 
-  return publishToAll(text.trim(), imageUrl, platforms);
+  return publishToAll(
+    parsed.data.text,
+    parsed.data.imageUrl || undefined,
+    parsed.data.platforms
+  );
 }

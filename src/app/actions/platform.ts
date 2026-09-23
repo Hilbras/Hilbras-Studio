@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { eq, and } from "drizzle-orm";
+import { z } from "zod";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { getCredentialValue } from "@/app/actions/credentials";
 import { getSessionUser } from "@/lib/session";
@@ -12,15 +13,28 @@ import { encryptSecret } from "@/lib/crypto";
 import { verifyAppCredentials } from "@/lib/platform-app-check";
 import { originFromHeaders } from "@/lib/request-origin";
 
+/** A platform slug — it becomes part of stored credential key names, so it is bounded before interpolation. */
+const platformParam = z.string().regex(/^[a-z][a-z0-9_-]{0,29}$/, "Invalid platform");
+
+const platformCredentialsSchema = z.object({
+  platform: platformParam,
+  clientId: z.string().trim().min(1, "Client ID is required").max(500),
+  clientSecret: z.string().trim().min(1, "Client secret is required").max(500),
+});
+
 export async function getPlatformCredentials(platform: string): Promise<{ clientId: string | null; clientSecret: string | null }> {
-  const clientId = await getCredentialValue(`${platform}_client_id`);
-  const clientSecret = await getCredentialValue(`${platform}_client_secret`);
+  const parsed = platformParam.safeParse(platform);
+  if (!parsed.success) return { clientId: null, clientSecret: null };
+  const clientId = await getCredentialValue(`${parsed.data}_client_id`);
+  const clientSecret = await getCredentialValue(`${parsed.data}_client_secret`);
   return { clientId, clientSecret };
 }
 
 export async function checkCredentialsExist(platform: string): Promise<boolean> {
-  const clientId = await getCredentialValue(`${platform}_client_id`);
-  const clientSecret = await getCredentialValue(`${platform}_client_secret`);
+  const parsed = platformParam.safeParse(platform);
+  if (!parsed.success) return false;
+  const clientId = await getCredentialValue(`${parsed.data}_client_id`);
+  const clientSecret = await getCredentialValue(`${parsed.data}_client_secret`);
   return !!(clientId && clientSecret);
 }
 
@@ -89,12 +103,21 @@ export async function savePlatformCredentials(
   const session = await getSessionUser();
   if (!session) return { success: false, error: "Not signed in" };
 
+  const parsed = platformCredentialsSchema.safeParse({ platform, clientId, clientSecret });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+  if (!PLATFORM_REGISTRY[parsed.data.platform as PlatformId]) {
+    return { success: false, error: `Unknown platform: ${parsed.data.platform}` };
+  }
+
   try {
-    await upsertCredential(session.id, `${platform}_client_id`, clientId, `${platform} Client ID`);
-    await upsertCredential(session.id, `${platform}_client_secret`, clientSecret, `${platform} Client Secret`);
+    const { platform: id, clientId: cid, clientSecret: secret } = parsed.data;
+    await upsertCredential(session.id, `${id}_client_id`, cid, `${id} Client ID`);
+    await upsertCredential(session.id, `${id}_client_secret`, secret, `${id} Client Secret`);
     return { success: true };
-  } catch (e: any) {
-    return { success: false, error: e.message || "Failed to save" };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Failed to save" };
   }
 }
 

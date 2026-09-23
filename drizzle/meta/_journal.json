@@ -36,6 +36,13 @@
       "when": 1790111071069,
       "tag": "0004_fantastic_mentallo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790126658288,
+      "tag": "0005_session_revocation_and_rate_limits",
+      "breakpoints": true
     }
   ]
 }

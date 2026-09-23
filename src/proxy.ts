@@ -84,6 +84,7 @@ export async function proxy(request: NextRequest) {
   let sessionValid = false;
   let needsRefresh = false;
   let userId = "";
+  let tokenVersion = 0;
 
   if (token) {
     try {
@@ -91,6 +92,7 @@ export async function proxy(request: NextRequest) {
       if (typeof payload.sub === "string") {
         sessionValid = true;
         userId = payload.sub;
+        tokenVersion = typeof payload.ver === "number" ? payload.ver : 0;
 
         const exp = payload.exp;
         const iat = payload.iat;
@@ -106,6 +108,17 @@ export async function proxy(request: NextRequest) {
     }
   }
 
+  // A signed-but-dead cookie (password changed elsewhere, user deleted, or
+  // token_version bumped) passes this proxy's signature check but fails
+  // getSessionUser inside the layout, which redirects to /login?reauth=1.
+  // Clear the cookie here: without it the two layers bounce the browser
+  // between /login and /dashboard forever.
+  if (isAuthPage && request.nextUrl.searchParams.get("reauth") === "1") {
+    const response = NextResponse.redirect(new URL("/login", request.url));
+    response.cookies.delete(SESSION_COOKIE);
+    return response;
+  }
+
   // Redirect unauthenticated users away from protected routes
   if (isProtected && !sessionValid) {
     const loginUrl = new URL("/login", request.url);
@@ -118,10 +131,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Refresh the session cookie if nearing expiry
+  // Refresh the session cookie if nearing expiry. The version claim is
+  // carried forward verbatim — the data layer (getSessionUser) is what
+  // compares it against users.token_version, so the proxy re-signs only
+  // what it was given and never invents a fresh version.
   if (sessionValid && needsRefresh) {
     const { SignJWT } = await import("jose");
-    const newToken = await new SignJWT({ sub: userId })
+    const newToken = await new SignJWT({ sub: userId, ver: tokenVersion })
       .setProtectedHeader({ alg: "HS256" })
       .setIssuedAt()
       .setExpirationTime("7d")

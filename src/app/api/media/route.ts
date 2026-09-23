@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { getSessionUser } from "@/lib/session";
+import { sniffImageMime } from "@/lib/media-sniff";
 import { db, schema } from "@/db";
 import { requestOrigin } from "@/lib/request-origin";
 
@@ -54,6 +55,15 @@ export async function POST(req: NextRequest) {
   const bytes = Buffer.from(await file.arrayBuffer());
   if (bytes.byteLength === 0) {
     return NextResponse.json({ error: "The file is empty." }, { status: 400 });
+  }
+
+  // The declared MIME type is client-supplied — trust the actual bytes.
+  const sniffed = sniffImageMime(bytes);
+  if (!sniffed || sniffed !== file.type) {
+    return NextResponse.json(
+      { error: "The file's content does not match a supported image type." },
+      { status: 400 }
+    );
   }
 
   const id = randomUUID();

@@ -1,6 +1,7 @@
 "use server";
 
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { socialAccounts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
@@ -14,6 +15,20 @@ export interface InboxMessage {
   text: string;
   time: string;
   unread: boolean;
+}
+
+const replyInput = z.object({
+  platform: z.string().regex(/^[a-z][a-z0-9_-]{0,29}$/),
+  messageId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Invalid message"),
+  text: z.string().trim().min(1, "Reply cannot be empty").max(1000),
+});
+
+/** One mention as the X API returns it — optional fields stay optional. */
+interface RawTweet {
+  id?: string;
+  text?: string;
+  created_at?: string;
+  author_id?: string;
 }
 
 function relativeTime(dateStr: string): string {
@@ -46,13 +61,13 @@ async function fetchXMessages(accessToken: string): Promise<InboxMessage[]> {
       }
     }
 
-    return data.data.map((tweet: any) => ({
-      id: tweet.id,
+    return data.data.map((tweet: RawTweet) => ({
+      id: tweet.id ?? "",
       platform: "x",
-      name: usersMap[tweet.author_id]?.name || "Unknown",
-      handle: `@${usersMap[tweet.author_id]?.username || "unknown"}`,
-      text: tweet.text,
-      time: relativeTime(tweet.created_at),
+      name: usersMap[tweet.author_id ?? ""]?.name || "Unknown",
+      handle: `@${usersMap[tweet.author_id ?? ""]?.username || "unknown"}`,
+      text: tweet.text ?? "",
+      time: relativeTime(tweet.created_at ?? new Date(0).toISOString()),
       unread: true,
     }));
   } catch {
@@ -138,13 +153,18 @@ export async function sendReply(
   const session = await getSessionUser();
   if (!session) return { success: false, error: "Not signed in" };
 
+  const parsed = replyInput.safeParse({ platform, messageId, text });
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
   const account = await db
     .select()
     .from(socialAccounts)
     .where(
       eq(socialAccounts.userId, session.id)
     )
-    .then((rows) => rows.find((r) => r.platform === platform));
+    .then((rows) => rows.find((r) => r.platform === parsed.data.platform));
 
   if (!account?.accessTokenEnc) {
     return { success: false, error: "Platform not connected" };
@@ -158,7 +178,7 @@ export async function sendReply(
   }
 
   try {
-    if (platform === "x") {
+    if (parsed.data.platform === "x") {
       const res = await fetch("https://api.twitter.com/2/tweets", {
         method: "POST",
         headers: {
@@ -166,8 +186,8 @@ export async function sendReply(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          text,
-          reply: { in_reply_to_tweet_id: messageId },
+          text: parsed.data.text,
+          reply: { in_reply_to_tweet_id: parsed.data.messageId },
         }),
       });
       if (!res.ok) {
@@ -179,10 +199,10 @@ export async function sendReply(
 
     return {
       success: false,
-      error: `Reply not yet supported for ${platform}`,
+      error: `Reply not yet supported for ${parsed.data.platform}`,
     };
-  } catch (e: any) {
-    return { success: false, error: e.message || "Network error" };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Network error" };
   }
 }
 

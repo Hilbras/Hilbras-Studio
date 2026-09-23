@@ -2,12 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
 import { users, userPreferences } from "@/db/schema";
-import { getSessionUser } from "@/lib/session";
+import { getSessionUser, createSession } from "@/lib/session";
 
 export interface SettingsFormState {
   error?: string;
@@ -21,6 +21,13 @@ const profileSchema = z.object({
     .trim()
     .toLowerCase()
     .regex(/^[a-z0-9_]{3,20}$/, "Username: 3–20 characters, letters/numbers/underscores only"),
+});
+
+const preferencesSchema = z.object({
+  autoHashtags: z.boolean(),
+  adaptTone: z.boolean(),
+  autoSchedule: z.boolean(),
+  engagementNotifications: z.boolean(),
 });
 
 const passwordSchema = z
@@ -106,8 +113,15 @@ export async function changePasswordAction(
 
   await db
     .update(users)
-    .set({ passwordHash: await bcrypt.hash(parsed.data.newPassword, 10) })
+    .set({
+      passwordHash: await bcrypt.hash(parsed.data.newPassword, 10),
+      // Revokes every other outstanding cookie; createSession below re-reads
+      // the bumped version, so this browser stays signed in seamlessly.
+      tokenVersion: sql`${users.tokenVersion} + 1`,
+    })
     .where(eq(users.id, session.id));
+
+  await createSession(session.id);
 
   return { success: "Password changed" };
 }
@@ -126,12 +140,15 @@ export async function updatePreferencesAction(
   const session = await getSessionUser();
   if (!session) return { ok: false };
 
+  const parsed = preferencesSchema.safeParse(prefs);
+  if (!parsed.success) return { ok: false };
+
   await db
     .insert(userPreferences)
-    .values({ userId: session.id, ...prefs, updatedAt: new Date() })
+    .values({ userId: session.id, ...parsed.data, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: userPreferences.userId,
-      set: { ...prefs, updatedAt: new Date() },
+      set: { ...parsed.data, updatedAt: new Date() },
     });
 
   return { ok: true };

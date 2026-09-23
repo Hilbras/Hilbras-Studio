@@ -1,12 +1,44 @@
 "use server";
 
+import { z } from "zod";
+
 import { chatCompletion, generatePost, completeWithSystem, type ChatMessage } from "@/lib/ai";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
+import { getSessionUser } from "@/lib/session";
 
 export interface ChatResult {
   content: string;
   error?: string;
 }
+
+/**
+ * Every action in here spends real provider tokens on the server's key, so
+ * each one starts with the same session gate — an unauthenticated caller
+ * must never reach the model.
+ */
+const textInput = z.object({ text: z.string().max(10000, "Post is too long") });
+
+const postInput = z.object({
+  text: z.string().max(10000, "Post is too long"),
+  platforms: z.array(z.string().max(30)).max(10),
+});
+
+const assistantInput = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(["system", "user", "assistant"]),
+        content: z.string().max(40000),
+      })
+    )
+    .max(100),
+  userMessage: z.string().min(1, "Message is required").max(4000),
+});
+
+const generateInput = z.object({
+  prompt: z.string().max(4000),
+  platform: z.string().max(30).optional(),
+});
 
 /**
  * The Composer is an editor, not a chat: every response must be usable content
@@ -78,9 +110,17 @@ export async function improvePostAction(
   text: string,
   platforms: string[] = []
 ): Promise<ChatResult> {
+  const session = await getSessionUser();
+  if (!session) return { content: "", error: "Not signed in." };
+
+  const parsed = postInput.safeParse({ text, platforms });
+  if (!parsed.success) {
+    return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
   try {
-    const draft = text.trim();
-    const context = platformContext(platforms);
+    const draft = parsed.data.text.trim();
+    const context = platformContext(parsed.data.platforms);
     const user = draft
       ? `${context ? context + "\n" : ""}Improve this post. Return only the improved post:\n\n${draft}`
       : `${context ? context + "\n" : ""}Write a new social media post. Return only the post text.`;
@@ -95,7 +135,15 @@ export async function improvePostAction(
 
 /** Hashtags for the current draft — returns a single `#a #b #c` line. */
 export async function generateHashtagsAction(text: string): Promise<ChatResult> {
-  const draft = text.trim();
+  const session = await getSessionUser();
+  if (!session) return { content: "", error: "Not signed in." };
+
+  const parsed = textInput.safeParse({ text });
+  if (!parsed.success) {
+    return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const draft = parsed.data.text.trim();
   if (!draft) return { content: "", error: "Write a post first." };
 
   try {
@@ -118,10 +166,18 @@ export async function processAssistantMessage(
   messages: ChatMessage[],
   userMessage: string
 ): Promise<ChatResult> {
+  const session = await getSessionUser();
+  if (!session) return { content: "", error: "Not signed in." };
+
+  const parsed = assistantInput.safeParse({ messages, userMessage });
+  if (!parsed.success) {
+    return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
   try {
     const response = await chatCompletion([
-      ...messages,
-      { role: "user", content: userMessage },
+      ...parsed.data.messages,
+      { role: "user", content: parsed.data.userMessage },
     ]);
     return { content: response };
   } catch (err) {
@@ -137,8 +193,16 @@ export async function generatePostAction(
   prompt: string,
   platform?: string
 ): Promise<{ content: string; error?: string }> {
+  const session = await getSessionUser();
+  if (!session) return { content: "", error: "Not signed in." };
+
+  const parsed = generateInput.safeParse({ prompt, platform });
+  if (!parsed.success) {
+    return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
   try {
-    const content = await generatePost(prompt, platform);
+    const content = await generatePost(parsed.data.prompt, parsed.data.platform);
     return { content };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

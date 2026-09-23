@@ -17,6 +17,12 @@ export const users = pgTable("users", {
   /** Sign-in brute-force lockout — driven by signInAction. */
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   loginLockedUntil: timestamp("login_locked_until"),
+  /**
+   * Session revocation: JWTs carry this number (0 when absent), and
+   * getSessionUser compares it against the row. Bumping it invalidates
+   * every outstanding cookie for the user — password changes do this.
+   */
+  tokenVersion: integer("token_version").notNull().default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -57,6 +63,17 @@ export const userPreferences = pgTable("user_preferences", {
 });
 
 export type UserPreferences = typeof userPreferences.$inferSelect;
+
+/**
+ * rate_limits — fixed-window counters keyed by an opaque string such as
+ * "assistant:<user id>". One row per key; consumption is a single atomic
+ * upsert so concurrent serverless instances never race.
+ */
+export const rateLimits = pgTable("rate_limits", {
+  key: text("key").primaryKey(),
+  count: integer("count").notNull().default(0),
+  resetAt: timestamp("reset_at").notNull(),
+});
 
 /**
  * stored_credentials — per-user encrypted secrets (API keys, OAuth tokens).

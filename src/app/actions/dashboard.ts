@@ -1,6 +1,7 @@
 "use server";
 
 import { eq, and, gte, lte, desc, count } from "drizzle-orm";
+import { z } from "zod";
 import { db } from "@/db";
 import { posts, socialAccounts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
@@ -77,7 +78,6 @@ export async function getDashboardStats(): Promise<DashboardStat[]> {
   const session = await getSessionUser();
   if (!session) return [];
 
-  const now = new Date();
   const sevenDaysAgo = daysAgo(7);
   const fourteenDaysAgo = daysAgo(14);
 
@@ -176,12 +176,15 @@ export async function getRecentActivity(limit = 5): Promise<ActivityItem[]> {
   const session = await getSessionUser();
   if (!session) return [];
 
+  // Clamped: anything out of range (or the wrong type) falls back to 5.
+  const safeLimit = z.number().int().min(1).max(50).catch(5).parse(limit);
+
   const rows = await db
     .select()
     .from(posts)
     .where(eq(posts.userId, session.id))
     .orderBy(desc(posts.createdAt))
-    .limit(limit);
+    .limit(safeLimit);
 
   return rows.map((r) => ({
     id: r.id,

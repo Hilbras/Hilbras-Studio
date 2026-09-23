@@ -9,6 +9,7 @@ import {
   summarizeSegment,
 } from "@/lib/ai";
 import { streamChat as sdkStream, type ChatMessage } from "@/lib/ai-sdk";
+import { consumeRateLimit } from "@/lib/rate-limit";
 import {
   RECENT_CONTEXT,
   ensureSession,
@@ -72,6 +73,41 @@ export async function POST(req: NextRequest) {
     );
   }
   const { sessionId, message } = parsed.data;
+
+  // Cost guard: a signed-in account must not be able to burn unlimited
+  // provider spend. Counted before any model call; if the limiter itself
+  // fails, fail open — a broken counter should never lock users out.
+  const rateLimit = Math.max(
+    1,
+    Number.parseInt(process.env.ASSISTANT_RATE_LIMIT ?? "20", 10) || 20
+  );
+  try {
+    const verdict = await consumeRateLimit(
+      `assistant:${session.id}`,
+      rateLimit,
+      5 * 60
+    );
+    if (!verdict.allowed) {
+      return new NextResponse(
+        JSON.stringify({
+          error: `You're sending messages too quickly — try again in ${
+            verdict.retryAfterSec
+          } second${verdict.retryAfterSec === 1 ? "" : "s"}.`,
+          code: "RATE_LIMITED",
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(verdict.retryAfterSec),
+          },
+        }
+      );
+    }
+  } catch (err) {
+    // fail open (see above) — but never silently
+    console.error("assistant rate limit check failed:", err);
+  }
 
   // Resolve the model first: a missing provider must not persist a message
   // the assistant can never answer.

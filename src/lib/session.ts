@@ -13,11 +13,13 @@ import { eq } from "drizzle-orm";
  * - HS256 signed with AUTH_SECRET
  * - 7-day expiry, sliding window (refreshed on every authenticated request)
  * - Cookie is set before any redirect to prevent race conditions
+ * - Versioned: tokens carry `ver` = users.token_version, and getSessionUser
+ *   compares it against the row — bumping the column revokes every
+ *   outstanding cookie at once (password changes do this)
  */
 
 const SESSION_COOKIE = "hilbras_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
-const REFRESH_THRESHOLD_SECONDS = 60 * 60 * 24; // refresh if < 1 day left
 
 function getSecretKey(): Uint8Array {
   const secret = process.env.AUTH_SECRET;
@@ -41,7 +43,15 @@ export interface SessionUser {
  * Returns the token so callers can verify it was set.
  */
 export async function createSession(userId: string): Promise<string> {
-  const token = await new SignJWT({ sub: userId })
+  // The version travels inside the token so getSessionUser can reject
+  // anything signed before a bump — see the module docs above.
+  const [row] = await db
+    .select({ tokenVersion: users.tokenVersion })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  const token = await new SignJWT({ sub: userId, ver: row?.tokenVersion ?? 0 })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
@@ -57,47 +67,6 @@ export async function createSession(userId: string): Promise<string> {
   });
 
   return token;
-}
-
-/**
- * Refresh the session cookie if it's nearing expiry.
- * Call this on every authenticated request for sliding-window behavior.
- */
-export async function refreshSessionIfNeeded(): Promise<void> {
-  const store = await cookies();
-  const token = store.get(SESSION_COOKIE)?.value;
-  if (!token) return;
-
-  try {
-    const { payload } = await jwtVerify(token, getSecretKey());
-    if (typeof payload.sub !== "string") return;
-
-    // Check if the token needs refreshing
-    const exp = payload.exp;
-    const iat = payload.iat;
-    if (!exp || !iat) return;
-
-    const remaining = exp - Math.floor(Date.now() / 1000);
-    if (remaining > REFRESH_THRESHOLD_SECONDS) return;
-
-    // Token is near expiry — issue a fresh one
-    const newToken = await new SignJWT({ sub: payload.sub })
-      .setProtectedHeader({ alg: "HS256" })
-      .setIssuedAt()
-      .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
-      .sign(getSecretKey());
-
-    store.set(SESSION_COOKIE, newToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: SESSION_TTL_SECONDS,
-    });
-  } catch {
-    // Invalid token — clear it
-    store.delete(SESSION_COOKIE);
-  }
 }
 
 /** Clear the session cookie. */
@@ -122,12 +91,26 @@ export async function getSessionUser(): Promise<SessionUser | null> {
         name: users.name,
         email: users.email,
         username: users.username,
+        tokenVersion: users.tokenVersion,
       })
       .from(users)
       .where(eq(users.id, payload.sub))
       .limit(1);
 
-    return user ?? null;
+    if (!user) return null;
+
+    // Revocation: a bumped token_version invalidates every cookie signed
+    // with an older number. Tokens issued before versioning carry no claim
+    // and count as 0 (the column's default).
+    const claimed = typeof payload.ver === "number" ? payload.ver : 0;
+    if (claimed !== user.tokenVersion) return null;
+
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+    };
   } catch {
     return null;
   }
@@ -136,6 +119,10 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 /** Server-component guard: redirect to /login when unauthenticated. */
 export async function requireSessionUser(): Promise<SessionUser> {
   const user = await getSessionUser();
-  if (!user) redirect("/login");
+  // Reaching this guard at all means the proxy already accepted the cookie's
+  // signature — a null user here means it failed server-side validation
+  // (revoked version / deleted account). ?reauth=1 tells the proxy to clear
+  // it, which is what stops a redirect loop with the proxy's own rules.
+  if (!user) redirect("/login?reauth=1");
   return user;
 }

@@ -420,6 +420,132 @@ export type NewRunStep = typeof runSteps.$inferInsert;
 
 
 /**
+ * execution_policies — what a user has decided about their own actions.
+ *
+ * One row per (user, scope, key). `scope` is `account` or `tool` and `scope_key`
+ * is a `platform:handle` or a tool name respectively, so the pair is a small
+ * closed union rather than two nullable columns. Nullable dimensions would make
+ * "most specific rule wins" real code with a `NULL` in it; this way the row
+ * shape has no `NULL` and the precedence lives entirely in `policyFor`, which
+ * was already written and tested in v0.3.0.
+ *
+ * The absent row is the default (`auto`), so a user with no policies publishes
+ * unattended — which is the behaviour every existing user has today, and the one
+ * a new deployment should not have to configure before it works.
+ *
+ * `decision` is read by the plan gate (`disabled` refuses the plan before a
+ * model call is spent) and again by the executor immediately before dispatch,
+ * because a user who switches a policy off while a run is suspended for approval
+ * means it for that run too.
+ */
+export const executionPolicies = pgTable(
+  "execution_policies",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** "account" | "tool" */
+    scope: text("scope").notNull(),
+    /** A `platform:handle`, or a tool name. Read through `scope`. */
+    scopeKey: text("scope_key").notNull(),
+    /** "auto" | "approval" | "disabled" */
+    decision: text("decision").notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    unique("execution_policies_user_scope_key_unique").on(
+      t.userId,
+      t.scope,
+      t.scopeKey,
+    ),
+    index("execution_policies_user_idx").on(t.userId),
+  ],
+);
+
+export type ExecutionPolicyRow = typeof executionPolicies.$inferSelect;
+export type NewExecutionPolicyRow = typeof executionPolicies.$inferInsert;
+
+
+/**
+ * run_step_approvals — a question asked of a person, and the answer.
+ *
+ * One row per step, enforced by the unique constraint on `step_id`. A step is
+ * executed once, so it can be asked once: two pending approvals for one step
+ * would mean two people could approve two different versions of the same post,
+ * and whichever the Runtime saw first would be the one published.
+ *
+ * `input` holds the step's **resolved** input — the text a person is approving,
+ * not the `{"$ref": …}` the plan stored. See `docs/approvals.md`; the short
+ * version is that an approval showing a reference is not an approval.
+ *
+ * `tool` is pinned rather than joined through the step, for the same reason
+ * `listFiringHistory` reports a capability name instead of a message: a
+ * tool name comes from a closed set this build knows, and it cannot be
+ * reinterpreted by a later build or edited by a client.
+ *
+ * `expires_at` is `timestamptz` and is stamped when the row is created, not
+ * computed from a constant at read time. A pending decision therefore keeps the
+ * window it was created with, so changing the default later cannot shorten a
+ * window a user is in the middle of.
+ */
+export const runStepApprovals = pgTable(
+  "run_step_approvals",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => runSteps.id, { onDelete: "cascade" }),
+    /**
+     * Who may answer. Denormalised from the run so authorizing a decision is one
+     * read of one table, and so the sweeper can find a user's overdue approvals
+     * without joining runs.
+     */
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** The tool this approval is about, from the registry. */
+    tool: text("tool").notNull(),
+    targetAccount: text("target_account"),
+    /** The resolved input shown for approval, as JSON. */
+    input: text("input").notNull(),
+    /** "pending" | "approved" | "rejected" | "expired" */
+    state: text("state").notNull().default("pending"),
+    /**
+     * When the decision was made. Null while pending.
+     *
+     * Not `timestamptz`: it is only ever displayed and ordered relatively
+     * against another timestamp in this table.
+     */
+    decidedAt: timestamp("decided_at"),
+    /**
+     * When the question stops being answerable. Compared against `now()` in a
+     * query, so it must be timezone-aware — the same reason
+     * `goals.next_firing_at` is (migration 0012).
+     */
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    unique("run_step_approvals_step_unique").on(t.stepId),
+    index("run_step_approvals_run_idx").on(t.runId),
+    index("run_step_approvals_user_state_idx").on(t.userId, t.state, t.createdAt),
+    // The sweeper's whole work list. Partial, because the overwhelming majority
+    // of rows are decided and only the unanswered ones can be overdue.
+    index("run_step_approvals_pending_expiry_idx")
+      .on(t.expiresAt)
+      .where(sql`${t.state} = 'pending'`),
+  ],
+);
+
+export type RunStepApproval = typeof runStepApprovals.$inferSelect;
+export type NewRunStepApproval = typeof runStepApprovals.$inferInsert;
+
+
+/**
  * run_events — the execution history and the runtime log.
  *
  * Append-only. Every state transition, retry, approval decision, and tool

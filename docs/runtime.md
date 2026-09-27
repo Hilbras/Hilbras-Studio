@@ -30,12 +30,12 @@ one, so history is append-only and `attempt` is monotonic.
 Execution runs on [Inngest](https://inngest.com), not on a Vercel cron and not
 on a worker we host.
 
-The deciding factor was **Phase 6**. A Human-in-the-Loop approval can wait
-hours or days for a human decision. On Inngest that is a first-class primitive
-(`step.waitFor`, `step.sleep`) — the function suspends and resumes on an
-external signal, holding no worker. Hand-rolled on top of a plain queue, it
-would be a state machine with leases, heartbeats, and expiry — code that exists
-only to wait.
+The deciding factor was **Phase 6**, and v0.8.0 is where that decision was cashed
+in. A Human-in-the-Loop approval can wait hours or days for a human decision, and
+a queued invocation that returns normally is a first-class way to express "this
+is waiting, not this is failing". Hand-rolled on top of a plain queue, it would be
+a state machine with leases, heartbeats, and expiry — code that exists only to
+wait.
 
 The alternatives, for the record:
 
@@ -46,9 +46,11 @@ The alternatives, for the record:
   full control, at the cost of new infrastructure to operate and monitor.
 
 The cost accepted is a vendor dependency and an outbound connection to Inngest's
-API. **Only identifiers cross that boundary** — a goal id, a user id, and a
-schedule slot. No content, no credentials, no tokens. Everything else is read
-from Postgres inside the function.
+API. **Only identifiers cross that boundary** — a goal id, a user id, a schedule
+slot, and since v0.8.0 a run id and an approval id. No content, no credentials,
+no tokens, and no record of what a post said or how it was answered. Everything
+else is read from Postgres inside the function, which is what makes a queue that
+could be inspected a queue that cannot leak an unapproved draft.
 
 ---
 
@@ -77,14 +79,21 @@ session or same-origin guard; adding one would break Inngest's callbacks.
 |---|---|
 | `src/lib/runtime/state.ts` | The execution state machine. Pure. |
 | `src/lib/runtime/plan.ts` | The gate a plan must pass before it may act. Pure. |
-| `src/lib/runtime/executor.ts` | Runs one step. Connector resolution and the retry decision. |
+| `src/lib/runtime/approvals.ts` | Approval states, the window, edit rules, policy targets. Pure. |
+| `src/lib/runtime/executor.ts` | Runs one step. Permission, connector resolution, the retry decision. |
+| `src/lib/runtime/approval-store.ts` | Policies, questions, decisions, and the permission gate. Server-only. |
 | `src/lib/runtime/service.ts` | The only writer of run state. Server-only. |
-| `src/lib/runtime/inngest/` | The durable function and its event schema. |
+| `src/lib/runtime/inngest/` | The durable functions and their event schema. |
 
 The split is deliberate: everything with a decision in it is pure and unit
 tested, and only the thin persistence layer needs a database. The most
 consequential code in the product — the part that can publish to a real account
 — is testable without Postgres, a queue, or a network.
+
+v0.8.0 added the permission gate as a **required** dependency of the executor
+rather than something the executor reaches for itself. A permissive default would
+mean forgotten wiring publishes unattended, with nothing at the call site saying
+so. See [`runtime/permissions.md`](./runtime/permissions.md#the-dependency-is-required-with-no-default).
 
 ---
 
@@ -132,6 +141,9 @@ inspects. The `retryable` flag is the only thing consulted:
 | `not_connected`, `expired` | ❌ | Only a user action fixes it. |
 | `target_unavailable` | ❌ | The grant is fine; the account behind it is gone. |
 | `forbidden`, `invalid_content` | ❌ | Retrying the identical request fails identically. |
+| `policy_denied` | ❌ | The user's own configuration forbids it. A retry cannot change a policy. |
+| `approval_rejected` | ❌ | A person said no. Asking again is not a retry. |
+| `approval_expired` | ❌ | Nobody answered in the window. An absence of consent is not consent. |
 | `unsupported` | ❌ | No publisher exists. |
 | `unknown` | ❌ | **Fail closed.** See below. |
 
@@ -172,7 +184,9 @@ start run
   ├─ load steps
   │
   ├─ for each step, in order
+  │     ├─ claim it          ── a compare-and-swap, see below
   │     ├─ resolve $refs against settled results
+  │     ├─ PERMISSION GATE   ── allow / ask / deny
   │     ├─ dispatch: a connector tool, or a Runtime tool
   │     └─ record the outcome
   │
@@ -183,11 +197,63 @@ Planning is the first thing that happens to a run, and it is the only step that
 can end one before a single dispatch. See
 [`runtime/planning.md`](./runtime/planning.md).
 
+The permission gate sits **after** reference resolution and **before** the
+connector lookup: the person being asked has to be shown the real text, and a
+forbidden action should not cost a database read. See
+[`runtime/permissions.md`](./runtime/permissions.md#where-it-sits-and-why-the-position-is-the-point).
+
+### A third ending: suspended
+
+v0.8.0 gave a run a state it did not have before. A step whose policy requires
+consent ends in `awaiting_approval`, the run transitions to `awaiting_approval`,
+and the function **returns normally** — it does not throw, and it does not ask the
+queue for another attempt, because another attempt would arrive at the same
+question.
+
+The run now lives in Postgres rather than in the queue. A decision or an expiry
+wakes it through `APPROVAL_DECIDED`, and a separate function picks up from the
+step that was waiting. Details in
+[`runtime/approvals.md`](./runtime/approvals.md).
+
+### All three decisions resume the run
+
+`approve`, `reject` and `approval_timeout` all lead back to `running`. v0.3.0
+shipped `reject → cancelled` and `approval_timeout → failed`; **both changed**,
+because they made a human decision about *one step* decide the fate of *every
+other step*. A goal pointed at X and Instagram whose X post is rejected should
+still post to Instagram, which is the settle-independently rule above applied
+consistently. `cancel` remains the one decision that ends a run. The reasoning is
+recorded in [`runtime/approvals.md`](./runtime/approvals.md#why-a-decision-resumes-the-run).
+
+---
+
+## Claiming a step, and giving the claim back
+
+```sql
+UPDATE run_steps SET state = 'running'
+ WHERE id = $1 AND state = $2          -- the state it was expected to be in
+```
+
+v0.8.0 added a second trigger alongside the scheduler's, so two invocations can
+now reach the same step — the scheduler's and the resume's — and both would
+dispatch a publish. Reading the state and then updating it is not the same thing:
+the gap between the two is wide enough for both to see `awaiting_approval` and
+both to act. The step's idempotency key does not save it either, because that
+only helps connectors which implement the cache, and not all of them do.
+
+A claim is also a *reservation*, so a step that cannot be executed even to
+completion hands it back — to the state it was in, not to `failed`. A step left
+`failed` would be skipped as terminal on the retry, and the run would report
+success having published nothing.
+
 ---
 
 ## Not yet implemented
 
-- **approvals**, which is what the queue was chosen for (Phase 6)
+- **The approval interface.** The system shipped in Phase 6 (v0.8.0) — policies,
+  questions, approve/reject/edit, the window, resumption. The screen to use them
+  is Phase 7, so today a user can configure nothing and answer nothing; a policy
+  set programmatically takes effect immediately.
 
 The **planner** and the **scheduler** shipped in Phase 5 (v0.7.0) and Phase 4
 (v0.6.0) respectively — see [`runtime/planning.md`](./runtime/planning.md) and

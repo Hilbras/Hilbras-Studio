@@ -13,6 +13,223 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.8.0] — 2026-09-28
+
+Human-in-the-Loop. A plan could publish, and nothing in the product could stop
+it: `awaiting_approval` had been modelled and unit-tested since v0.3.0 and
+nothing ever suspended on it, so the one state that says *a person should look at
+this* was a state the Runtime could reach only by hand. This release is where a
+person gets a vote.
+
+**Service only.** The approval interface is Phase 7, so a policy set
+programmatically takes effect immediately, and a suspended run already sits in
+the database waiting for a decision that today arrives through code rather than a
+button. Everything below is the system behind that screen.
+
+### Added
+
+- **Execution policies** (`execution_policies`, migration `0013`) — `auto`,
+  `approval`, or `disabled`, per account or per tool, with **per-account beating
+  per-tool**. Purely additive: no backfill, because the default is the absence of a
+  row and every existing user already has the absence.
+  - **The default is `auto`.** Every existing user publishes unattended today, and
+    a new deployment should work before it has been configured. A default of
+    `approval` would leave every existing account with a queue of posts nobody
+    asked for.
+  - **`disabled` fails without asking.** Asking a human to approve something their
+    own policy forbids is asking them to override their own configuration, and the
+    question would be a trap whose only outcome is to contradict the setting that
+    produced it.
+  - **Two refusals, both at write time.** A policy on a tool that changes nothing
+    (`compose_post`) and a policy on an account the user does not own are both
+    refused rather than accepted and ignored — a dead setting a user believes is
+    live is worse than a refusal. **Clearing is always allowed**, including for an
+    account no longer held, because a stuck setting is worse than a stale one.
+  - **An unrecognised stored value resolves to "no rule"**, not to the nearest
+    thing this build knows. The value that matters is `approval`, and a settings
+    screen from a later build must not be read by this one as permission to
+    publish unattended.
+- **The permission gate** (`src/lib/runtime/approval-store.ts`) — one question
+  every side effect passes through, with three answers: `allow`,
+  `needs_approval`, `deny`. It is built **once per run**, not once per step, and a
+  suspended run builds a fresh one — which is the case that matters, because a
+  user who switches to `disabled` while their post waits must be re-read.
+  - **`ToolSpec.sideEffect` is the discriminator**, a declared field rather than
+    `capability !== null`. A future read-only connector tool delegates to a
+    platform and has no side effect, and the derived version would put a question
+    in front of a step that cannot publish anything.
+  - **It sits after `$ref` resolution and before the connector lookup.** The
+    person has to be shown the real text, and a forbidden action should not cost a
+    database read: "you may not do this" beats "you might not be able to".
+  - **`disabled` is checked *before* a recorded approval.** A user who leaves a
+    post waiting, then disables publishing, then comes back and approves — because
+    the screen is still open — has not overridden their own setting. An approval
+    is consent to a permitted action, not a licence to perform a forbidden one.
+  - **`ExecutorDeps.approval` is required, with no default.** A permissive default
+    means forgotten wiring publishes unattended, invisibly. The v0.7.0
+    `defaultDeps` — which held a registry-only resolver and, as of this release, a
+    gate that allowed everything — is **deleted**, with a note at its old location
+    explaining why: an unused object that assembles a working set of dependencies
+    is an invitation.
+- **Approvals** (`run_step_approvals`, same migration) — the question, the answer,
+  and a deadline.
+  - **The snapshot holds the *resolved* input.** A `publish_post` step normally
+    takes its text from an earlier `compose_post` as `{"$ref": …}`, and a screen
+    showing a reference is a screen showing a JSON object. The approval is taken
+    after resolution, so the person reads what will be published and an edit is an
+    edit of real text.
+  - **What was approved is what publishes.** The resume hands the executor the
+    approval row's input, not `run_steps.input` — the plan's record still holds the
+    `$ref`, which may resolve to something other than what was shown. Anything else
+    makes the approval a formality. `UNIQUE (step_id)`: a step executes once, so it
+    can be asked once.
+  - **Edits are validated by the plan gate's own `validateToolInput`**, now
+    exported from `plan.ts` and shared rather than reimplemented. An approval
+    screen is a *later* stage than the gate, and a weaker check there would make
+    the one place a person reads the content the one place it is unchecked.
+    `publish_post.text` is the only editable field; `mediaUrl` is a new capability
+    being granted, not an edit.
+  - **A `$ref` in an edited value is refused.** Valid *plan* input, and the shared
+    validator rightly accepts one — but an edit is a literal, and an object shaped
+    like a reference is a client bug or an attempt to redirect the publish.
+  - **The target platform's real character limit is applied**, so an over-long edit
+    is refused with "this platform allows 280" rather than accepted and later
+    rejected by the platform, after the person had said yes.
+  - **A rejected key short-circuits the merge.** Reporting "text must be non-empty"
+    for a `text` the person did not submit describes a document they never wrote.
+- **Suspension and resumption** (`inngest/functions.ts`) — a step that needs
+  consent ends in `awaiting_approval`, the run transitions, and the function
+  **returns normally**.
+  - **A suspension is a return, not a throw.** It does not ask the queue for
+    another attempt, because another attempt would arrive at the same question and
+    asking twice is not a way of asking better. The run now lives in Postgres
+    rather than in the queue.
+  - **The resume is a separate function** (`resume-goal-run`, triggered by
+    `APPROVAL_DECIDED`). `execute-goal-run` claims a schedule slot and `createRun`
+    is idempotent on it, so a resume arriving as another `GOAL_SCHEDULED` would be
+    absorbed. The claim is what makes at-least-once safe (ADR-005), so it stays
+    intact and the resume gets its own trigger. Both call a shared `advanceRun`.
+  - **Planning is skipped on a resume.** `planRun` charges a model call *before* it
+    discovers the plan already exists, so calling it would spend a call to be told
+    about the plan this run already has.
+  - **The event carries ids only** — no content, and no record of which of the
+    three outcomes it is. The decision is already a fact in Postgres and the
+    function must read it before it can act, so naming the outcome in the message
+    would add a second thing that can disagree with the database. A queue that
+    could be inspected is not a queue an unapproved draft can come to rest in.
+  - **A claim on every step**, a compare-and-swap (`UPDATE … WHERE state =
+    $expected`). A second trigger now exists alongside the scheduler's, so two
+    invocations can reach one step, and a read-then-update has a window between
+    them wide enough for both to dispatch. The step's idempotency key does not save
+    it: that only helps connectors which implement the result cache.
+    `releaseStepClaim` returns a claim to the state the step was in — not to
+    `failed`, which would be skipped as terminal on the retry while the run
+    reported success having published nothing.
+- **Approval timeout** — 24 hours, stamped on the row at creation, so changing the
+  default later cannot shorten a window a user is counting down. `expires_at` is
+  `timestamptz` because it is compared against `now()` in a query (the migration
+  0012 lesson). A timeout **fails the step, never auto-approves**: publishing
+  because the user was asleep is the opposite of what "require approval" asked
+  for. The reader closes the window too, not just the sweeper, and both use the
+  same boundary, so a decision cannot be refused by one and published by the
+  other.
+- **The approval sweeper** (`settle-approvals`, on the same `*/5` tick) — expires
+  what nobody answered, and re-sends decisions whose step is still
+  `awaiting_approval`. The second query is the safety net for a crash between "the
+  person said yes" and "tell the queue", and it costs one query because a decision
+  is "picked up" exactly when the step it was about stops being `awaiting_approval`.
+  That is what makes suspension *durable* rather than usually durable, and it is
+  why no outbox table is needed.
+- **`policy_denied`, `approval_rejected`, `approval_expired`** in
+  `ConnectorErrorCode`, all non-retryable. A policy is a configuration, not a
+  transient fault, and a timeout has to be nameable so the history can say which of
+  the three things happened.
+- **`ToolField.editable`** on the tool spec, set on `publish_post.text` only.
+- **Docs** — `docs/runtime/approvals.md`, `docs/runtime/permissions.md`,
+  `docs/runtime/policies.md`; `execution.md` and `runtime.md` rewritten around
+  suspension, claiming, and the gate; `architecture.md` §4.1, §4.3, ADR-001,
+  ADR-003 and ADR-005 extended with what shipped.
+
+### Changed
+
+- **Two state transitions changed meaning.** v0.3.0 shipped `reject →
+  cancelled` and `approval_timeout → failed`; **both now resume the run to
+  `running`**. They made a human decision about *one step* decide the fate of
+  *every other step* — a goal pointed at X and Instagram whose X post is rejected
+  should still post to Instagram, which is the settle-independently rule v0.5.0
+  already applies to every other kind of step failure. Treating a human "no" as a
+  cancellation would make the one failure a user caused behave differently from
+  every other failure, and the user would have to learn that rule separately. The
+  difference is recorded on the step. `cancel` remains the one decision that ends a
+  run, and `FINISHES_RUN` lost `reject` and `approval_timeout` — stamping
+  `finished_at` would mark a run finished while it was still executing.
+- **`StepExecution` is an exhaustive discriminated union** on `state`
+  (`completed` | `failed` | `awaiting_approval`), with the unused fields spelled
+  `undefined` so `result.error?.code` still reads at unnarrowed call sites and
+  narrowing is enforced everywhere else.
+- **`validateToolInput` is exported** from `plan.ts`, and `approval-store.ts`
+  depends on it. One validator, not two that drift.
+- **`goal-migration.test.ts` stages a truncation rather than a hole.** It removed
+  only 0012's journal entry, which was correct while 0012 was the newest migration
+  and silently wrong the moment 0013 was added: Drizzle applies everything later
+  than the high-water mark, so the staged database applied 0013, 0013 became the
+  mark, and the real 0012 was then *behind* it and skipped. The column never
+  appeared and the test failed on a `SELECT`, four assertions from the cause. The
+  precondition test now asserts both the absent column and the absent tables.
+
+### Testing
+
+- 341 unit tests (was 307) and 126 integration (was 85). New:
+  `runtime/approvals.test.ts` (24) and `tests/integration/approvals.test.ts` (41);
+  seven gate tests in `runtime/executor.test.ts`; two tool-registry tests; the
+  updated transition table in `runtime/state.test.ts`.
+- **Nineteen mutations were checked against the new invariants, and the first pass
+  found a hole that turned out to be the mutation's fault and one that might not
+  have been.** Marking `mediaUrl` editable instead of `text` found a real gap in
+  intent — the original expression added a *duplicate* `editable: true` to a field
+  that already had one, which changes the file and changes no behaviour, and a
+  test suite that passed under it was correct to pass. Rewritten to target the
+  guarantee actually claimed. Also verified: never calling the gate, asking about
+  the raw `$ref`, checking the account before permission, checking `disabled`
+  after a recorded approval, dropping the ownership check on a decision, letting a
+  second answer overwrite the first, answering after expiry, recomputing the
+  deadline at read time, accepting a policy on someone else's account, reading an
+  unrecognised decision as a real one, inverting the sweeper's boundary, not
+  finding an unpicked-up decision, skipping the shared validator, un-approving a
+  delivering tool, re-asking a refused question, returning a rejected run to
+  `cancelled`, and un-CASing the step claim and its release. All nineteen fail
+  without the code. `scripts/mutate-phase6.sh` is checked in.
+- **A boundary was self-contradictory and is now fixed.** `isOverdue` used `<=`
+  while the integration test asserted the opposite. The window *closes* at the
+  deadline, so at the deadline it is closed: `now >= expiresAt`, and the sweeper's
+  query is `expires_at <= now()` — the exact negation, so the reader and the
+  writer cannot disagree about which side a decision fell on.
+
+### Not included, deliberately
+
+- **The approval interface.** Phase 7 (v0.9.0). A goal is created and a policy is
+  set through services; there is no screen for either, and the question a suspended
+  run is waiting on has no button. This release is the system behind it.
+- **A per-policy timeout.** A fixed 24-hour window, stamped at creation, so a
+  configuration change cannot move a deadline somebody is counting down.
+- **Wiring the plan gate's `policy` input.** `validatePlan` accepts one and would
+  report a `disabled` step as an issue; `planRun` does not supply it. A
+  `policy_disabled` issue is a *repair* signal, and the repair it invites is to
+  drop the step — so for a goal targeting two accounts where one is disabled, the
+  planner would drop it, fail `uncovered_goal_target`, and take the permitted
+  account's post down with it. Failing the disabled step at dispatch and continuing
+  to its sibling is strictly better, and is the rule every other step failure
+  already follows. The input stays available and tested; the dispatch gate is the
+  live one.
+- **A suspended run does not block the next firing.** `next_firing_at` already
+  advanced at dispatch, so a user who is slow to approve accumulates a backlog
+  rather than silently losing firings. The alternative means one missed approval
+  deletes a week of posts.
+- **A retry of a resumed run.** A resume is the same attempt continuing — it has
+  no attempt number and no schedule slot — so a retryable failure there waits for
+  the next scheduled firing, which is also what stops a second attempt
+  re-publishing a post that went out while the person was deciding.
+
 ## [0.7.0] — 2026-09-27
 
 AI Planning. A goal fired and did nothing: the Runtime was complete, and nothing

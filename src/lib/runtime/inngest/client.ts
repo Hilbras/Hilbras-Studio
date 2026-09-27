@@ -29,6 +29,10 @@ export const schemas = {
     /** 1 for the first attempt; incremented by the retry path. */
     attempt: "number",
   },
+  "hilbras/studio/approval-decided": {
+    runId: "string",
+    approvalId: "string",
+  },
 };
 
 export const inngest = new Inngest({
@@ -37,3 +41,19 @@ export const inngest = new Inngest({
 });
 
 export const GOAL_SCHEDULED = "hilbras/studio/goal-scheduled" as const;
+
+/**
+ * An approval was answered, or ran out of time to be answered.
+ *
+ * The only reason a suspended run wakes up. Carries identifiers only, like every
+ * other event: the function reads the decision from Postgres, so a queue
+ * message cannot say *what* a post said or whether it was approved. That matters
+ * here more than anywhere else — a queue that could be inspected would otherwise
+ * be a place a user's unapproved drafts came to rest.
+ *
+ * The event does not say *which* way it was decided. One event for all three
+ * outcomes is deliberate: the decision is a fact already stored, and the
+ * function has to read it before it can act, so naming the outcome here would
+ * add a second thing that can disagree with the database.
+ */
+export const APPROVAL_DECIDED = "hilbras/studio/approval-decided" as const;

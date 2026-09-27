@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.7.0
+**Current version:** v0.8.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -155,7 +155,7 @@ the gate accepts these tools, so "which capabilities exist" is one answer in one
 file rather than a prompt instruction the model can be talked out of. See
 [`ai/tools.md`](./ai/tools.md).
 
-#### Runtime *(Phase 1, goal engine in Phase 4, planning in Phase 5)*
+#### Runtime *(Phase 1, goal engine in Phase 4, planning in Phase 5, approvals in Phase 6)*
 
 - **Owns:** Goal -> Plan -> Run -> Step -> Result, execution state, retries,
   scheduling, and approval suspension.
@@ -164,11 +164,19 @@ file rather than a prompt instruction the model can be talked out of. See
 - **Location:** `src/lib/runtime/**`, `src/lib/runtime/inngest/**` (Inngest),
   `src/lib/goals/**`.
 
+Since v0.8.0 the Runtime also owns **what the user permits it to do unattended**,
+and the permission gate is a required dependency of the executor rather than
+something the executor reaches for. A permissive default would mean forgotten
+wiring publishes unattended with nothing at the call site saying so, so
+`ExecutorDeps.approval` has no default and the v0.7.0 `defaultDeps` object is
+deleted. See [`runtime/permissions.md`](./runtime/permissions.md) and
+[`runtime/policies.md`](./runtime/policies.md).
+
 The goal engine (`src/lib/goals/**`) sits under the Runtime rather than beside it:
 it is the only producer of `GOAL_SCHEDULED` events and the only writer of
 `goals`. It depends on the Runtime's run store, never the reverse.
 
-Three gates validate overlapping properties at three different times, and
+Four gates validate overlapping properties at four different times, and
 **none replaces the others**. `lib/goals/validation.ts` checks a goal when a user
 saves it, so a goal against a disconnected or incapable account is refused while
 someone is still looking at the form. `lib/runtime/planning.ts` re-checks the
@@ -176,6 +184,12 @@ same accounts at firing time, before spending a model call -- a goal validated
 today can have its account disconnected tomorrow. `lib/runtime/plan.ts` checks
 the plan itself, because a planner's output is untrusted by construction, and
 checks it against **the goal's targets**, not the user's account list.
+
+The fourth, `lib/runtime/approval-store.ts`, is the only one that reads an
+execution policy, and it is deliberately the last: it runs immediately before a
+dispatch, because a policy can change between a plan being written and a step
+being executed, so the reading that governs whether something happens has to be
+the one immediately before it happens.
 
 #### Infrastructure
 
@@ -278,15 +292,34 @@ These are finished, tested, and load the layers above them. Do not rewrite.
 
 ```
 Goal ──1:N──> Run ──1:N──> Step ──N:1──> Account
- │             │            │
- │             │            └── tool invocation (capability + args + result)
+ │             │            │      │
+ │             │            │      └── enabled, capabilities
+ │             │            ├── tool invocation (capability + args + result)
+ │             │            ├── 0..1 Approval  (the resolved input, a decision, a deadline)
+ │             │            └── execution state, attempt count, idempotency key
  │             └── execution state, attempt count, idempotency key
- └── schedule, constraints, target accounts, policy
+ ├── ExecutionPolicy  (per account, per tool: auto | approval | disabled)
+ └── schedule, constraints, target accounts
 ```
 
 Execution states: `pending -> running -> (completed | failed | cancelled)`,
 plus `awaiting_approval` as a **suspension**, not a terminal state. A suspended
 run holds no lease and consumes no budget.
+
+**An Approval holds the *resolved* input, not the plan's.** A `publish_post`
+step normally carries `{"$ref": {"step": 0, "field": "text"}}`, and a person
+cannot be asked to approve a reference -- so the snapshot is taken after
+reference resolution and is what gets published on approval. `UNIQUE (step_id)`:
+a step executes once, so it can be asked once. `expires_at` is `timestamptz`
+because it is compared against `now()` in a query, the same rule as
+`next_firing_at`.
+
+**v0.8.0 changed two transitions.** `reject` and `approval_timeout` used to lead
+to `cancelled` and `failed`; both now resume the run to `running`, because a
+human's "no" to one step says nothing about its siblings, and the
+settle-independently rule already governs every other step failure. `cancel`
+remains the one decision that ends a run. See
+[`runtime/approvals.md`](./runtime/approvals.md#why-a-decision-resumes-the-run).
 
 A goal additionally carries `next_firing_at`: a **derived** instant the scheduler
 selects on, so finding what is due is one index scan rather than a cron evaluation
@@ -322,13 +355,26 @@ Goal fires
   -> Plan gated against the goal's accounts + the tool registry       v0.7.0
        -> one repair with the gate's own issue text, then stop
   -> Steps execute through Tools -> Connectors                       v0.1.0
-  -> Side-effecting steps check the approval policy                  v0.8.0
+  -> Each step is claimed: a compare-and-swap on its state           v0.8.0
+  -> $refs resolved, then Side-effecting steps check the policy       v0.8.0
        -> auto        : proceed
-       -> approval    : suspend Run, emit ApprovalRequest
-       -> disabled    : fail the Step with a policy error
+       -> approval    : suspend Run, return normally, no retry
+       -> disabled    : fail the Step with a policy error, no question asked
+  -> Suspension lifted by a decision, or by the 24h window closing     v0.8.0
+       -> approve     : execute with the *approved* input
+       -> reject      : fail the Step, continue to its siblings
+       -> timeout     : fail the Step, continue to its siblings
   -> Verify step confirms the real platform state                    v1.0
   -> Report generated                                                v1.0
 ```
+
+A suspension is a **return, not a throw**. The invocation that hits the gate
+completes normally, having done everything it can; asking the queue for another
+attempt would arrive at the same question, and asking twice is not a way of asking
+better. The run lives in Postgres rather than in the queue until an
+`APPROVAL_DECIDED` event wakes a separate `resume-goal-run` function, which picks
+up from the step that was waiting. See
+[`runtime/approvals.md`](./runtime/approvals.md).
 
 **Copy is written at execution, not at planning time.** A plan says *what* each
 post should argue; a `compose_post` step writes the words when the step runs. A
@@ -367,10 +413,29 @@ outlives a 120s function timeout and must survive a crash mid-plan.
 
 **Why Inngest over the alternatives.** Phase 6 (Human-in-the-Loop) is the
 deciding constraint: an approval that waits hours or days for a human is a
-first-class primitive (`step.waitFor` / `step.sleep`) rather than a state machine
-hand-rolled on a queue. Phase 1's Plan -> Step model maps 1:1 onto Inngest steps.
-Phase 5 re-planning and Phase 8 crash recovery, retries, and idempotency are
-platform-provided rather than hand-built.
+first-class primitive rather than a state machine hand-rolled on a queue. Phase 1's
+Plan -> Step model maps 1:1 onto Inngest steps. Phase 5 re-planning and Phase 8
+crash recovery, retries, and idempotency are platform-provided rather than
+hand-built.
+
+**v0.8.0 is where this was cashed in,** and the shape it took is worth recording,
+because it is not the shape the ADR originally predicted. The decision anticipated
+`step.waitFor`. What was built instead is *suspend in Postgres, resume on an
+event*: a step that needs consent transitions the run to `awaiting_approval` and
+the invocation **returns normally**, and a separate `resume-goal-run` function
+picks the run back up when `APPROVAL_DECIDED` arrives.
+
+The reason is ownership. `step.waitFor` holds a function open for the length of
+the wait, and the state a user is looking at would then live in the queue rather
+than in the database we already own -- where it is queryable, where an
+approval row is a real row with a real deadline, and where a human can be shown
+what is waiting. A crash-safety net still exists, and it is one query: a decided
+approval whose step is still `awaiting_approval` is re-sent on the next sweep.
+
+The `APPROVAL_DECIDED` event carries identifiers only. Which of the three
+outcomes it is *not* in the payload, because the decision is already a fact in
+Postgres and the function has to read it before it can act; naming it in the
+message would add a second thing that can disagree with the database.
 
 Trigger.dev is an acceptable substitute -- comparable durability, TS-native
 background functions, a stronger local dashboard. QStash was rejected as
@@ -382,7 +447,14 @@ too low-level: it would leave the approval-suspension semantics to us.
 - `scheduled-posts.ts` keeps its claim/lease logic as the *fallback* for the
   daily sweep; it is not deleted, it is demoted.
 - We accept a vendor dependency and an outbound egress to Inngest's API. Tokens
-  are not sent; the payload carries Run and Step identifiers only.
+  are not sent; the payload carries Run, Step and Approval identifiers only --
+  and since v0.8.0 that includes no record of what a post said or how it was
+  answered, so a queue that could be inspected cannot leak an unapproved draft.
+- v0.8.0 added a second trigger alongside the scheduler's, so two invocations can
+  reach the same step. A step is now **claimed** with a compare-and-swap
+  (`UPDATE ... WHERE state = $expected`) rather than merely read, and a claim is
+  handed back if execution cannot be attempted. See
+  [`runtime.md`](./runtime.md#claiming-a-step-and-giving-the-claim-back).
 
 **Revisit if** execution volume or cost makes the managed tier uneconomic, or
 if data-residency requirements forbid a third-party control plane.
@@ -429,6 +501,25 @@ persists them; clients render them.
 **Consequences.** The AI cannot mark a step `completed` because it says so. A
 tool returns a typed result, and the Runtime decides what that means for state.
 
+**Extended in v0.8.0.** The same hazard reappears in a sharper form once a human
+is in the loop, because "a person said yes" is exactly the sort of claim a client
+could assert about a post it has not checked. So:
+
+- A decision is recorded by `decideApproval` in a `server-only` module, checked
+  against the **approval's own** `userId`, and nothing else -- not the step, not
+  the run, not the queue. All of that is the resume path, so there is exactly one
+  place where an approval becomes an action.
+- A rejected edit never reaches the database. `applyEdit` hands the merged input to
+  the *same* `validateToolInput` the plan gate uses, so a human writing input at
+  the approval screen is held to the check that exists to stop untrusted output
+  naming a destination.
+- An approval's `input` column is authoritative over `run_steps.input`, and the
+  resume uses it. What was approved is what publishes, and that is only true if
+  the same values are used.
+
+The pattern is the same as the AI case: the client says what it did, and the
+server decides what that means.
+
 ---
 
 ### ADR-004 — Server actions stay thin; invariants live in server-only services
@@ -466,6 +557,27 @@ of re-dispatching.
 **Consequences.** Connectors need a result cache keyed by idempotency key --
 another concrete Phase 3 deliverable, and a reason to define the interface early
 per ADR-002.
+
+**Extended in v0.8.0.** The key alone is not sufficient, because it only helps
+*connectors that implement the cache* -- and not all of them do. v0.8.0 added a
+second trigger alongside the scheduler's (an approval decision wakes a run), so
+two invocations can reach the same step and both would dispatch a publish. So
+every step is now **claimed** with a compare-and-swap:
+
+```sql
+UPDATE run_steps SET state = 'running'
+ WHERE id = $1 AND state = $2          -- the state it was expected to be in
+```
+
+Reading the state and then updating it is not the same thing; the gap between the
+two is wide enough for both invocations to see `awaiting_approval` and both to
+act. A claim is a *reservation* too, so a step that cannot be executed even to
+completion hands it back -- to the state it was in, not to `failed`, because a
+step left `failed` would be skipped as terminal on the retry and the run would
+report success having published nothing.
+
+This is the same instinct as `dispatch_started_at` -- mark the point before the
+irreversible thing -- moved one layer inward, to the step.
 
 ---
 

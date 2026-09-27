@@ -209,6 +209,27 @@ pnpm dev                        # http://localhost:3000`}</code>
           budget, then resolves the provider. New model call sites inside the
           Runtime must go through it.
         </li>
+        <li>
+          <strong>Approvals.</strong> A step whose tool has{" "}
+          <code>sideEffect: true</code> in <code>src/lib/runtime/tools.ts</code>{" "}
+          consults the user&apos;s execution policy
+          (<code>auto</code> | <code>approval</code> | <code>disabled</code>) via
+          a gate built once per run in{" "}
+          <code>src/lib/runtime/approval-store.ts</code>. The gate is a{" "}
+          <strong>required</strong> field of <code>ExecutorDeps</code> with no
+          default, so a call site cannot forget it. On{" "}
+          <code>approval</code> the run suspends in the database and the
+          invocation returns normally; a decision or the 24h window closing wakes{" "}
+          <code>resume-goal-run</code>, and a five-minute sweep closes overdue
+          approvals and re-sends any decision the queue missed.
+        </li>
+        <li>
+          <strong>A new side-effecting tool is approvable automatically.</strong>{" "}
+          It needs no policy work: set <code>sideEffect: true</code> on the{" "}
+          <code>ToolSpec</code> and mark any field a human may change with{" "}
+          <code>editable: true</code>. A policy naming a tool without a side
+          effect is refused at write time rather than accepted and ignored.
+        </li>
       </ul>
 
       <h2>Deployment</h2>

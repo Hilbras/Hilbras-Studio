@@ -71,6 +71,31 @@ describe("the tool registry", () => {
     expect(tool("publish_post").sideEffect).toBe(true);
   });
 
+  it("makes anything that reaches an account approvable", () => {
+    // A tool that delivers to a user's account changes something they can see,
+    // so it must be one the approval policy can gate. If a future tool breaks
+    // this, a side-effecting step is publishable with nobody asked — which is
+    // the phase's entire failure mode.
+    for (const spec of toolCatalogue()) {
+      if (spec.deliversToAccount) expect(spec.sideEffect).toBe(true);
+    }
+  });
+
+  it("lets a human edit only the content of a side-effecting tool", () => {
+    // `compose_post` has no editable field because there is nothing a person
+    // could meaningfully approve at that point: the text it writes does not
+    // exist yet, so approving the brief would be approving a plan, not a post.
+    const compose = tool("compose_post");
+    expect(compose.fields.filter((field) => field.editable)).toEqual([]);
+
+    // Of the publishing tool's fields, only the text. `mediaUrl` is a new
+    // capability being granted, not an edit to what was written.
+    const publish = tool("publish_post");
+    expect(publish.fields.filter((f) => f.editable).map((f) => f.name)).toEqual([
+      "text",
+    ]);
+  });
+
   it("reports one delivering tool and its capability", () => {
     expect(deliveringTools().map((spec) => spec.name)).toEqual(["publish_post"]);
     expect(deliveryCapability()).toBe("publish_post");

@@ -24,8 +24,8 @@ Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
 | **v0.5.0** | Unified Platform API — targets |
 | v0.5.1 | Unified Platform API: connectors |
 | v0.6.0 | Goal Engine |
-| **v0.7.0** | **Current — AI Planning** |
-| v0.8.0 | Human-in-the-Loop |
+| v0.7.0 | AI Planning |
+| **v0.8.0** | **Current — Human-in-the-Loop** |
 | v0.9.0 | Studio 2.0 |
 | v0.9.5 | Release Candidate |
 | **v1.0.0** | **Goal-Driven AI Runtime** |
@@ -34,7 +34,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full plan and
 [`docs/architecture.md`](docs/architecture.md) for the layer contracts and
 architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
 
-## Today's capabilities (v0.7.0)
+## Today's capabilities (v0.8.0)
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
   provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.
@@ -50,7 +50,16 @@ architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
   A tool registry decides what a step may invoke, the plan is gated against the
   goal's own target accounts before anything runs, and each post is written at
   execution time rather than frozen at planning time, so a daily goal does not
-  publish the same words daily. Human approval of that plan is the next phase.
+  publish the same words daily.
+- **Human-in-the-Loop** — A side effect can require a person to approve it
+  first. Set a policy per account or per tool to `auto`, `approval`, or
+  `disabled`; an `approval` policy suspends the run mid-plan and the question
+  holds the real post text, so the person sees what will be published and may
+  edit it. Approve, reject, or let the 24-hour window close — all three let the
+  run continue to its other accounts rather than abandoning them. Unanswered
+  approvals expire; a decision that fails to reach the queue is picked up by a
+  sweep, so a suspension is never lost. The interface for setting policies and
+  answering questions is the next phase; the system behind it ships now.
 - **Inbox** — X mentions and Instagram conversations.
 - **Assistant** — Streaming chat with persistent sessions and long-term memory.
 - **Analytics** — Publishing outcomes and weekly activity.

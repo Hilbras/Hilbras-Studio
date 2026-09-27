@@ -54,6 +54,7 @@ function fakeLocalTool(
 
 const step = (over: Partial<ExecutableStep> = {}): ExecutableStep => ({
   id: "step-1",
+  runId: "run-1",
   capability: "publish_post",
   targetAccount: "x:hilbras",
   input: JSON.stringify({ text: "hello" }),
@@ -61,8 +62,18 @@ const step = (over: Partial<ExecutableStep> = {}): ExecutableStep => ({
   ...over,
 });
 
+/**
+ * A gate that allows everything.
+ *
+ * Named and passed explicitly rather than defaulted, so a test in this file is
+ * always saying what it believes about policy. The dependency has no default for
+ * the same reason.
+ */
+const allowAll: ExecutorDeps["approval"] = async () => ({ kind: "allow" });
+
 const depsFor = (connector: Connector | null): ExecutorDeps => ({
   resolveConnector: () => connector,
+  approval: allowAll,
 });
 
 const ok = (): PublishPostResult => ({
@@ -417,7 +428,7 @@ describe("executeStep — local tools", () => {
     const result = await executeStep(
       step({ id: "step-0", capability: "compose_post", input: JSON.stringify({ brief: "a" }) }),
       "user-1",
-      { resolveConnector: () => null, runLocalTool: run },
+      { resolveConnector: () => null, runLocalTool: run, approval: allowAll },
     );
     expect(result.error?.code).toBe("not_connected");
     expect(calls).toHaveLength(0);
@@ -475,6 +486,156 @@ describe("executeStep — local tools", () => {
     expect(result.error?.code).toBe("unknown");
     expect(result.error?.message).toBe("something broke");
     expect(result.shouldRetry).toBe(false);
+  });
+});
+
+describe("executeStep — the permission gate", () => {
+  it("suspends instead of publishing, and dispatches nothing", async () => {
+    // The point of the whole phase. A step that needs consent ends in
+    // `awaiting_approval` — a third outcome, neither completed nor failed — and
+    // the connector is never called.
+    const { connector, calls } = fakeConnector("x", ["publish_post"], ok());
+    const seen: unknown[] = [];
+    const expiresAt = new Date("2026-09-28T09:00:00Z");
+
+    const result = await executeStep(
+      step(),
+      "user-1",
+      {
+        ...depsFor(connector),
+        approval: async (request) => {
+          seen.push(request);
+          return { kind: "needs_approval", approvalId: "ap-1", expiresAt };
+        },
+      },
+    );
+
+    expect(result.state).toBe("awaiting_approval");
+    expect(result.approval).toEqual({ id: "ap-1", expiresAt });
+    expect(result.result).toBeUndefined();
+    expect(calls).toHaveLength(0);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("asks about the resolved text, not the reference to it", async () => {
+    // An approval screen showing `{"$ref": …}` is a screen showing a JSON
+    // object, and the one moment a person reads the content is the moment it is
+    // not there. The gate must receive what will actually be published.
+    const { connector } = fakeConnector("x", ["publish_post"], ok());
+    let asked: Record<string, unknown> | null = null;
+
+    await executeStep(
+      step({ input: JSON.stringify({ text: makeRef(0, "text") }) }),
+      "user-1",
+      {
+        ...depsFor(connector),
+        priorResults: new Map([[0, { data: { text: "the real words" }, summary: "" }]]),
+        approval: async (request) => {
+          asked = request.input;
+          return { kind: "allow" };
+        },
+      },
+    );
+
+    expect(asked).toEqual({ text: "the real words" });
+  });
+
+  it("tells the gate which run and step the question is about", async () => {
+    // An approval that could not say which run it was for would be a question
+    // nobody could answer, so the ids travel with the step rather than beside it.
+    const { connector } = fakeConnector("x", ["publish_post"], ok());
+    let seen: { runId: string; stepId: string; tool: string } | null = null;
+
+    await executeStep(
+      step({ id: "step-7", runId: "run-9" }),
+      "user-1",
+      {
+        ...depsFor(connector),
+        approval: async (request) => {
+          seen = request;
+          return { kind: "allow" };
+        },
+      },
+    );
+
+    expect(seen).toMatchObject({
+      runId: "run-9",
+      stepId: "step-7",
+      tool: "publish_post",
+      targetAccount: "x:hilbras",
+    });
+  });
+
+  it("fails without dispatching when the policy forbids the action", async () => {
+    const { connector, calls } = fakeConnector("x", ["publish_post"], ok());
+
+    const result = await executeStep(
+      step(),
+      "user-1",
+      {
+        ...depsFor(connector),
+        approval: async () => ({
+          kind: "deny",
+          error: {
+            code: "policy_denied",
+            message: "Publishing is disabled for x:hilbras.",
+            retryable: false,
+          },
+        }),
+      },
+    );
+
+    expect(result.state).toBe("failed");
+    expect(result.error?.code).toBe("policy_denied");
+    // A policy that forbids this will forbid it on the next attempt too, so
+    // asking the queue to try again would burn a run to achieve nothing.
+    expect(result.shouldRetry).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("does not look up the account for an action that is forbidden", async () => {
+    // "You may not do this" is a stronger answer than "you might not be able to",
+    // and a forbidden action should not cost a database read to find out about.
+    const { connector } = fakeConnector("x", ["publish_post"], ok());
+    const resolveConnector = vi.fn(() => connector);
+
+    await executeStep(
+      step(),
+      "user-1",
+      {
+        resolveConnector,
+        approval: async () => ({
+          kind: "deny",
+          error: { code: "policy_denied", message: "no", retryable: false },
+        }),
+      },
+    );
+
+    expect(resolveConnector).not.toHaveBeenCalled();
+  });
+
+  it("checks permission before the step's own inputs are usable", async () => {
+    // A step whose inputs never arrived has nothing to approve, and asking about
+    // it would put a question in front of a person that no answer can fix.
+    const { connector, calls } = fakeConnector("x", ["publish_post"], ok());
+    const approval = vi.fn(async () => ({ kind: "allow" as const }));
+
+    const result = await executeStep(
+      step({ input: JSON.stringify({ text: makeRef(0, "text") }) }),
+      "user-1",
+      { ...depsFor(connector), priorResults: new Map([[0, null]]), approval },
+    );
+
+    expect(result.error?.code).toBe("invalid_content");
+    expect(approval).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("publishes when the gate allows, having asked nothing", async () => {
+    const { connector, calls } = fakeConnector("x", ["publish_post"], ok());
+    const result = await executeStep(step(), "user-1", depsFor(connector));
+    expect(result.state).toBe("completed");
+    expect(calls).toHaveLength(1);
   });
 });
 

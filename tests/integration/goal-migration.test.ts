@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -47,27 +47,51 @@ let testDb: ReturnType<typeof drizzle<typeof schema>>;
 let staging: string;
 
 /**
- * A copy of the migrations folder with 0012 removed.
+ * A copy of the migrations folder truncated at 0011.
  *
  * Copying rather than pointing at a fixture keeps the first half of this test
  * honest: it runs the real 0000–0011 against a real Postgres, so a schema drift
  * in an earlier migration shows up here too.
+ *
+ * **Truncated, not hollowed out.** An earlier version removed only 0012's journal
+ * entry and its file, which was correct while 0012 was the newest migration and
+ * silently wrong the moment 0013 was added. Drizzle's migrator applies everything
+ * with a `folderMillis` later than the most recent applied row, and records what
+ * it applied — so the staged database applied 0013, 0013 became the high-water
+ * mark, and the real 0012 was then *behind* it and skipped. The column never
+ * appeared and the test failed on a `SELECT`, four assertions away from the cause.
+ *
+ * A backfill test has to model "everything up to the release", and with more than
+ * one migration in a release that means cutting the journal at the release
+ * boundary rather than deleting a single entry.
  */
-function stageWithoutBackfill(): string {
+function stageBeforeBackfill(): string {
   const dir = mkdtempSync(join(tmpdir(), "hilbras-migrations-"));
   cpSync(MIGRATIONS, dir, { recursive: true });
 
-  rmSync(join(dir, `${BACKFILL}.sql`), { force: true });
+  const cut = (entries: { tag: string }[]) => {
+    const at = entries.findIndex((entry) => entry.tag === BACKFILL);
+    if (at < 0) throw new Error(`no journal entry for ${BACKFILL}`);
+    return entries.slice(0, at);
+  };
 
   // The journal is what the migrator reads, not the directory. A .sql file with
   // no journal entry is silently ignored — which is exactly the failure this
   // file has to avoid reproducing in reverse.
   const journalPath = join(dir, "meta", "_journal.json");
   const journal = JSON.parse(readFileSync(journalPath, "utf8"));
-  journal.entries = journal.entries.filter(
-    (entry: { tag: string }) => entry.tag !== BACKFILL,
-  );
+  journal.entries = cut(journal.entries);
   writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+
+  // The snapshots are the journal's own view of what has been applied, so leaving
+  // the later ones behind would describe a database that does not exist.
+  for (const file of readdirSync(join(dir, "meta"))) {
+    if (file === "_journal.json" || file === "0000_snapshot.json") continue;
+    const index = Number(file.slice(0, 4));
+    if (Number.isFinite(index) && index >= journal.entries.length) {
+      rmSync(join(dir, "meta", file), { force: true });
+    }
+  }
 
   return dir;
 }
@@ -122,7 +146,7 @@ beforeAll(async () => {
   testDb = drizzle(pool, { schema });
 
   // 1. The schema as it stood before this release.
-  staging = stageWithoutBackfill();
+  staging = stageBeforeBackfill();
   await migrate(testDb, { migrationsFolder: staging });
 });
 
@@ -133,16 +157,26 @@ afterAll(async () => {
 });
 
 describe("migration 0012", () => {
-  it("stops at 0011, so the column does not exist yet", async () => {
+  it("stops before the release, so nothing in it exists yet", async () => {
     // The precondition. If this fails, every assertion below is measuring
     // nothing — the rows would be inserted into a table that already has the
     // column, which is what the ordinary integration tests do.
+    //
+    // Both halves matter. `next_firing_at` is what the backfill writes, and the
+    // approval tables are what a *later* migration in the same release creates: a
+    // staged database that already had them would set the high-water mark past
+    // 0012 and skip the backfill entirely.
     const columns = await pool.query<{ column_name: string }>(
       `SELECT column_name FROM information_schema.columns
        WHERE table_name = 'goals' AND column_name = 'next_firing_at'`,
     );
-
     expect(columns.rows).toEqual([]);
+
+    const tables = await pool.query<{ table_name: string }>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_name IN ('run_step_approvals', 'execution_policies')`,
+    );
+    expect(tables.rows).toEqual([]);
   });
 
   it("makes an existing active goal due when 0012 runs", async () => {
@@ -154,7 +188,8 @@ describe("migration 0012", () => {
       status: "active",
     });
 
-    // 2. Now apply the release.
+    // 2. Now apply the release. Everything from 0012 onwards, in order — which is
+    // what an operator's `migrate` does and what the staging above models.
     await migrate(testDb, { migrationsFolder: MIGRATIONS });
 
     const [row] = await testDb

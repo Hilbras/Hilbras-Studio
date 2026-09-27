@@ -39,18 +39,26 @@ import type {
   PublishPostResult,
 } from "@/lib/connectors/types";
 
+import type { StepPermissionGate } from "./approvals";
 import {
   describeRef,
   resolveReferences,
   unmetDependencies,
   type StepResults,
 } from "./references";
-import type { ExecutionState } from "./state";
 import { getTool, ToolExecutionError, type ToolResult, type ToolSpec } from "./tools";
 
 /** The persisted shape of a step, as far as execution is concerned. */
 export interface ExecutableStep {
   id: string;
+  /**
+   * The run this step belongs to.
+   *
+   * Carried on the step rather than passed alongside it because the permission
+   * gate below has to create an approval row, and an approval that could not
+   * say which run it was about would be a question nobody could answer.
+   */
+  runId: string;
   capability: string;
   targetAccount?: string | null;
   /** Stored tool arguments, JSON. May contain unresolved `$ref`s. */
@@ -95,6 +103,20 @@ export interface ExecutorDeps {
     accountKey: string,
   ) => Connector | null | Promise<Connector | null>;
   /**
+   * Decide whether this step may act, and ask a person when it may not.
+   *
+   * **Required, with no default.** A default that allowed everything would mean
+   * a call site which forgot to wire it publishes unattended, and wiring it is
+   * one line. A default that asked about everything would be safer and would put
+   * an approval in front of every test that is not about approvals. Neither
+   * default is worth the convenience, so the type carries the requirement.
+   *
+   * Called after references are resolved and before the target account is
+   * looked up: the gate records the *resolved* input for a person to read, and
+   * "you may not do this" is a stronger answer than "you might not be able to".
+   */
+  approval: StepPermissionGate;
+  /**
    * Runs a tool the Runtime owns. Absent means the Runtime can only dispatch
    * connector-backed tools — which is what a test with no model configured
    * wants, and a real failure with a clear message if a plan reaches
@@ -111,14 +133,46 @@ export interface ExecutorDeps {
   priorResults?: StepResults;
 }
 
-export interface StepExecution {
-  /** The state the step ends in. */
-  state: ExecutionState;
-  result?: ToolResult;
-  error?: ConnectorError;
-  /** Whether the queue should schedule another attempt. */
-  shouldRetry: boolean;
+/** An approval this step is waiting on. */
+export interface PendingApproval {
+  id: string;
+  expiresAt: Date;
 }
+
+/**
+ * The three things that can happen to a step.
+ *
+ * Discriminated on `state` and exhaustive, so a caller cannot read a `result`
+ * from a step that failed. Each variant spells the other two as `undefined`
+ * rather than omitting them, so `result.error?.code` still reads at a call site
+ * that has not yet narrowed — the narrow type is a convenience, not a
+ * precondition for compiling.
+ *
+ * `awaiting_approval` is an outcome, not an absence of one. A suspended step has
+ * run, has produced no result, and will produce one only if a person says so.
+ */
+export type StepExecution =
+  | {
+      state: "completed";
+      result: ToolResult;
+      error?: undefined;
+      approval?: undefined;
+      shouldRetry: false;
+    }
+  | {
+      state: "failed";
+      error: ConnectorError;
+      result?: undefined;
+      approval?: undefined;
+      shouldRetry: boolean;
+    }
+  | {
+      state: "awaiting_approval";
+      approval: PendingApproval;
+      result?: undefined;
+      error?: undefined;
+      shouldRetry: false;
+    };
 
 const failed = (error: ConnectorError): StepExecution => ({
   state: "failed",
@@ -211,6 +265,36 @@ export async function executeStep(
     });
   }
   const input = resolved.value as Record<string, unknown>;
+
+  // --- may this step act? --------------------------------------------------
+  // After resolution, so a person is asked about the text rather than about a
+  // reference to it. Before the account lookup, because "you may not do this" is
+  // a stronger answer than "you might not be able to", and because a forbidden
+  // action should not cost a database read to find out about.
+  const permission = await deps.approval({
+    runId: step.runId,
+    stepId: step.id,
+    tool: tool.name,
+    targetAccount: step.targetAccount ?? null,
+    input,
+  });
+
+  if (permission.kind === "deny") return failed(permission.error);
+
+  if (permission.kind === "needs_approval") {
+    // Not a failure and not a retry. The step has done everything it can, and
+    // the run holds here until a person answers or the window closes. The queue
+    // is not asked for another attempt, because another attempt would arrive at
+    // this same question.
+    return {
+      state: "awaiting_approval",
+      approval: {
+        id: permission.approvalId,
+        expiresAt: permission.expiresAt,
+      },
+      shouldRetry: false,
+    };
+  }
 
   // --- the target account ---------------------------------------------------
   let connector: Connector | null = null;
@@ -405,12 +489,19 @@ export function resolverForUser(
 }
 
 /**
- * The registry-only resolver.
+ * A resolver that identifies the platform from the account key's prefix.
  *
- * Identifies the platform from the account key's prefix. It cannot confirm
- * that *this* account is connected or enabled, so it is a development and
- * unit-test default only — production execution uses
- * `createAccountResolver`.
+ * Identifies the platform from the account key's prefix. It cannot confirm that
+ * *this* account is connected or enabled, so it is for unit tests only —
+ * production execution uses `resolverForUser`.
+ *
+ * Note what is *not* here: a matching `defaultDeps`. v0.7.0 shipped one, holding
+ * a registry-only resolver and — as of v0.8.0 — a permission gate that allowed
+ * everything. Nothing imported it, and an unused object that assembles a working
+ * set of dependencies is an invitation: the next caller to reach for
+ * `defaultDeps` gets a runtime that publishes unattended, with nothing at the
+ * call site saying so. `ExecutorDeps` is required in full, and there is no
+ * bundled way to satisfy it by accident.
  */
 export const defaultResolver: ExecutorDeps["resolveConnector"] = (
   accountKey,
@@ -418,5 +509,3 @@ export const defaultResolver: ExecutorDeps["resolveConnector"] = (
   const platform = accountKey.split(":")[0];
   return platform ? getConnector(platform) : null;
 };
-
-export const defaultDeps: ExecutorDeps = { resolveConnector: defaultResolver };

@@ -17,6 +17,20 @@
  *    must equally not look "in progress" to the lease logic, which is why
  *    `awaiting_approval` is modelled as its own state rather than a flavour of
  *    `running`.
+ *
+ * ## A decision suspends; it does not conclude
+ *
+ * `approve`, `reject`, and `approval_timeout` all lead back to `running`. The
+ * three are separate events because three different things happened, and the
+ * run's history has to say which. The destination is the same because the run's
+ * fate was never in question — one step was waiting, and now it is not.
+ *
+ * v0.3.0 shipped `reject → cancelled` and `approval_timeout → failed`. Both
+ * changed in v0.8.0, and the reason is the same: they made a human decision
+ * about *one step* decide the fate of *every other step*. A goal pointed at X
+ * and Instagram whose X post is rejected should still post to Instagram, which
+ * is the settle-independently rule v0.5.0 already applies to every other kind of
+ * step failure. See `./approvals` for where each decision is recorded.
  */
 
 /** Every state a Run or a Step can occupy. */
@@ -93,10 +107,23 @@ const TRANSITIONS: Readonly<
     request_approval: "awaiting_approval",
     cancel: "cancelled",
   },
+  // All three decisions resume the run. They are three distinct *events* because
+  // a decision is distinct — an approval that was edited and one that was
+  // rejected are different facts, and the run's history records which happened.
+  // But the run's fate is not decided here: what differed was the fate of the
+  // one step that was waiting, and the run settles from its step outcomes the
+  // same way it does for any other failure.
+  //
+  // A rejection therefore does *not* cancel the run. The rule from v0.5.0 is
+  // that each target settles independently — a goal pointed at X and Instagram
+  // should still publish to the one the user did not object to. Treating a human
+  // "no" as a cancellation would make the one failure a user caused behave
+  // differently from every other failure, and the user would have to learn that
+  // rule separately.
   awaiting_approval: {
     approve: "running",
-    reject: "cancelled",
-    approval_timeout: "failed",
+    reject: "running",
+    approval_timeout: "running",
     cancel: "cancelled",
   },
   completed: {},

@@ -29,9 +29,9 @@ v0.5.1 — Unified Platform API: connectors
    ▼
 v0.6.0 — Goal Engine
    ▼
-v0.7.0  (current) — AI Planning
+v0.7.0 — AI Planning
    ▼
-v0.8.0 — Human-in-the-Loop
+v0.8.0  (current) — Human-in-the-Loop
    ▼
 v0.9.0 — Studio 2.0
    ▼
@@ -101,7 +101,9 @@ recorded history.
 - The **planner** that turns a goal into a plan → Phase 5. Until it lands, a run
   executes whatever steps are persisted for it.
 - **Approvals** — `awaiting_approval` is modelled and tested, but nothing
-  suspends on it yet → Phase 6.
+  suspends on it yet → Phase 6. *(Shipped in v0.8.0; a run now suspends, and the
+  two transitions v0.3.0 guessed were wrong — `reject` and `approval_timeout` now
+  resume rather than end the run — are corrected.)*
 - **Connector result caches** keyed by idempotency key, so a partial re-run is
   safe → Phase 3. Until then the Runtime declines to re-run a plan whose earlier
   steps already published.
@@ -367,20 +369,61 @@ The Runtime pauses and requests approval for sensitive or configurable actions.
 AI → Generate Post → Approval Required → User → Approve → Runtime → Publish
 ```
 
-- [ ] Approval system; pending actions.
-- [ ] Approve, reject, edit-before-approval.
-- [ ] Approval timeout.
-- [ ] Execution policies; per-tool and per-account approval settings.
-- [ ] Action permissions.
+- [x] Approval system; pending actions.
+- [x] Approve, reject, edit-before-approval.
+- [x] Approval timeout.
+- [x] Execution policies; per-tool and per-account approval settings.
+- [x] Action permissions.
 
 ```
 Publishing:  [ Auto ]  [ Approval Required ]  [ Disabled ]
 ```
 
-> Durable suspension across hours or days comes from the queue's wait/sleep
-> primitives (ADR-001) — this is why the managed queue was chosen.
+> Durable suspension across hours or days comes from the queue (ADR-001) — this is
+> why the managed queue was chosen.
 
-**Docs:** `approvals.md`, `permissions.md`, `policies.md`
+### v0.8.0 — shipped ✅
+
+A plan could publish, and nothing in the product could stop it. `awaiting_approval`
+had been modelled and unit-tested since v0.3.0 and nothing ever suspended on it,
+so the one state that says *a person should look at this* was a state the Runtime
+could reach only by hand. This phase is where a person gets a vote.
+
+**Docs:** [`docs/runtime/approvals.md`](docs/runtime/approvals.md),
+[`docs/runtime/permissions.md`](docs/runtime/permissions.md),
+[`docs/runtime/policies.md`](docs/runtime/policies.md)
+
+### What it cost, and what it changed
+
+**Service only — no interface.** Phase 7 owns the screens. v0.8.0 ships the
+system, so a policy set programmatically takes effect immediately, and a
+suspended run is already in the database waiting for a decision that today
+arrives through code rather than a button.
+
+**`ToolSpec.sideEffect` is the discriminator**, and it is a declared field rather
+than `capability !== null`: a future read-only connector tool delegates to a
+platform and has no side effect, and the derived version would put a question in
+front of a step that cannot publish anything. Only `publish_post.text` is
+editable — `mediaUrl` is a new capability being granted, not an edit.
+
+**An edit is validated by the plan gate's own `validateToolInput`**, now exported
+and shared, because a human at the approval screen is a *later* stage than the
+gate and a weaker check there would make the one place a person reads the content
+the one place it is unchecked.
+
+**A timeout fails, it never approves.** Publishing because the user was asleep is
+the opposite of what "require approval" asked for.
+
+**All three decisions resume the run to `running`.** v0.3.0 shipped
+`reject → cancelled` and `approval_timeout → failed`, which made a human decision
+about *one step* decide the fate of *every other step*. Corrected in v0.8.0; the
+difference is recorded on the step, and `cancel` remains the one decision that
+ends a run.
+
+**A suspension is a return, not a throw** — and it lives in Postgres, not in the
+queue, so a decision that never reaches the queue is recovered by a five-minute
+sweep rather than needing an outbox. See ADR-001 for why that shape was chosen
+over `step.waitFor`.
 
 ---
 

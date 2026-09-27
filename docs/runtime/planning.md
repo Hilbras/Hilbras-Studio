@@ -202,12 +202,15 @@ not bound.
 executeGoalRun
   ├─ start run
   ├─ plan-run            ← this
-  ├─ load steps
-  ├─ for each step
-  │    ├─ resolve $refs from settled results
-  │    ├─ dispatch: connector tool, or a Runtime tool
-  │    └─ record outcome
-  └─ finish run
+  ├─ advanceRun
+  │    ├─ load steps
+  │    ├─ for each step
+  │    │    ├─ claim it
+  │    │    ├─ resolve $refs from settled results
+  │    │    ├─ PERMISSION GATE
+  │    │    ├─ dispatch: connector tool, or a Runtime tool
+  │    │    └─ record outcome
+  │    └─ finish run
 ```
 
 A planning failure is a run failure, with `outcome: "no_plan"` or the specific
@@ -215,6 +218,50 @@ code. It is not a step failure — nothing ran.
 
 ---
 
+## Planning happens exactly once per run, and never on a resume
+
+`persistPlan` refuses a second write, so a redelivered plan cannot change what a
+run is about to publish. That is what makes the *outcome* safe.
+
+Since v0.8.0 it is also what makes the *cost* safe. A resumed run re-enters
+`advanceRun` and skips `planRun` entirely, because `planRun` charges a model call
+before it discovers the plan already exists — calling it on a resume would spend a
+call to be told about the plan this run already has.
+
+The step order above is therefore the order for a fresh firing only. On a resume:
+
+```
+resumeGoalRun
+  ├─ read the run and the decision
+  └─ advanceRun          ← no plan-run, no spend for planning
+```
+
+A fresh budget is created for the fresh invocation. The meter is a ceiling, and a
+resumed run is a new invocation, so a run that composes, suspends, resumes, and
+composes again gets a fresh allowance rather than one shared across a day. That
+is the honest accounting for an at-least-once queue with no cross-invocation
+ledger, and it is the same bound documented for redeliveries above.
+
+---
+
+## The planner never sees a policy
+
+`validatePlan` accepts a policy and would report a `disabled` step as an issue.
+`planRun` does not supply one, so plans validate under the default.
+
+The reason is not oversight. A `policy_disabled` issue is a **repair** signal,
+and the repair it invites is to drop the step — so for a goal targeting two
+accounts where one is policy-disabled, the planner would drop the step, fail
+`uncovered_goal_target`, and take the *permitted* account's post down with it.
+Failing the disabled step at dispatch and continuing to its sibling is strictly
+better, and is the rule every other kind of step failure already follows.
+
+The full argument, and what it means for `validatePlan`'s `policy` input, is in
+[`policies.md`](./policies.md#where-the-policy-is-read).
+
+---
+
 See also [`../ai/planner.md`](../ai/planner.md),
-[`../ai/context.md`](../ai/context.md), [`../ai/tools.md`](../ai/tools.md), and
-[`../runtime.md`](../runtime.md).
+[`../ai/context.md`](../ai/context.md), [`../ai/tools.md`](../ai/tools.md),
+[`approvals.md`](./approvals.md), [`permissions.md`](./permissions.md),
+[`policies.md`](./policies.md), and [`../runtime.md`](../runtime.md).

@@ -204,6 +204,25 @@ function checkField(
   return null;
 }
 
+/**
+ * Every problem with a step's input, against the tool's own declaration.
+ *
+ * Exported rather than kept private because the approval editor must use *this*
+ * function, and nothing else. A human editing a post at approval time is
+ * supplying the same thing a planner supplied at plan time; if the two were
+ * checked by different code, then the approval screen would be a way to write
+ * input that no plan would ever be allowed to contain — which turns the one
+ * place a person is looking at the content into the one place it is unchecked.
+ */
+export function validateToolInput(
+  tool: ToolSpec,
+  input: Record<string, unknown> | undefined,
+): string[] {
+  return tool.fields
+    .map((field) => checkField(tool, field, input))
+    .filter((problem): problem is string => problem !== null);
+}
+
 const KNOWN_TOOLS: ReadonlySet<string> = new Set(TOOL_NAMES);
 
 /**
@@ -310,9 +329,7 @@ export function validatePlan(input: PlanValidationInput): PlanValidation {
       return;
     }
 
-    const inputProblems = tool.fields
-      .map((field) => checkField(tool, field, step.input))
-      .filter((problem): problem is string => problem !== null);
+    const inputProblems = validateToolInput(tool, step.input);
     if (inputProblems.length > 0) {
       for (const message of inputProblems) {
         issues.push({ code: "invalid_step_input", stepIndex, message });

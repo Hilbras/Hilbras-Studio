@@ -141,12 +141,15 @@ export async function createRun(input: {
 
 /** Events that start or finish a run, and therefore stamp a timestamp. */
 const STARTS_RUN: ReadonlySet<ExecutionEvent["type"]> = new Set(["start"]);
+
+// Deliberately *not* `reject` or `approval_timeout`. Both resume a run in v0.8.0
+// — a decision about one step is not a conclusion about the run — so stamping
+// `finished_at` on them would mark a run finished while it was still executing
+// the steps the user did not object to.
 const FINISHES_RUN: ReadonlySet<ExecutionEvent["type"]> = new Set([
   "succeed",
   "fail",
   "cancel",
-  "reject",
-  "approval_timeout",
 ]);
 
 /**
@@ -219,6 +222,99 @@ export async function settleStep(
     level: outcome.state === "completed" ? "info" : "error",
     event: `step.${outcome.state}`,
     detail: outcome.error ?? outcome.result,
+  });
+}
+
+/**
+ * Take a step for execution, or report that someone else already has it.
+ *
+ * A compare-and-swap on the state: the update applies only from a state the
+ * caller expected, and the `returning` clause says whether it applied. That is
+ * what makes a step safe to execute when two invocations can reach it — and two
+ * can, since v0.8.0 added a resume trigger alongside the scheduler's, and a
+ * queue retry of the resume can overlap the resume the sweeper sent.
+ *
+ * Reading the state and then updating it is not the same thing. The gap between
+ * the two is wide enough for both invocations to see `awaiting_approval`, and both
+ * would dispatch a publish. The step's idempotency key would not save it: that
+ * key is what a *connector* uses to absorb a duplicate, and it only works for
+ * connectors that implement the cache, which not all of them do.
+ */
+export async function claimStep(
+  stepId: string,
+  from: ExecutionState,
+): Promise<boolean> {
+  const claimed = await db
+    .update(runSteps)
+    .set({ state: "running", startedAt: new Date() })
+    .where(and(eq(runSteps.id, stepId), eq(runSteps.state, from)))
+    .returning({ id: runSteps.id });
+
+  return claimed.length > 0;
+}
+
+/**
+ * Put a step back into a settled state from `running`.
+ *
+ * The counterpart to `claimStep`, and needed because a claim is a *reservation*:
+ * once taken, nothing else will execute that step, so a crash between claiming
+ * and dispatching would otherwise leave it `running` forever — which reads as
+ * in-progress to the lease logic and is settled by nobody.
+ *
+ * Called when execution cannot even be attempted, which after a successful claim
+ * means a defect rather than a plan problem, and is recorded as one.
+ */
+export async function releaseStepClaim(
+  runId: string,
+  stepId: string,
+  to: ExecutionState,
+  detail: unknown,
+): Promise<void> {
+  const released = await db
+    .update(runSteps)
+    .set({ state: to })
+    .where(and(eq(runSteps.id, stepId), eq(runSteps.state, "running")))
+    .returning({ id: runSteps.id });
+
+  if (released.length === 0) return;
+
+  await recordEvent(runId, {
+    stepId,
+    level: "warn",
+    event: "step.claim_released",
+    detail,
+  });
+}
+
+/**
+ * Move a step into `awaiting_approval` and record the question.
+ *
+ * Separate from `settleStep` because a suspension is not an outcome: the step
+ * produced nothing, and it will produce something only if a person says so. It
+ * also leaves `finishedAt` null, because the step is not finished — it is
+ * waiting, and the two mean different things to anything reading the run.
+ */
+export async function suspendStep(
+  runId: string,
+  stepId: string,
+  approval: { id: string; expiresAt: Date },
+): Promise<void> {
+  const suspended = await db
+    .update(runSteps)
+    .set({ state: "awaiting_approval" })
+    .where(eq(runSteps.id, stepId))
+    .returning({ id: runSteps.id });
+
+  if (suspended.length === 0) return;
+
+  await recordEvent(runId, {
+    stepId,
+    level: "info",
+    event: "step.awaiting_approval",
+    detail: {
+      approvalId: approval.id,
+      expiresAt: approval.expiresAt.toISOString(),
+    },
   });
 }
 

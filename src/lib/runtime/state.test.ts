@@ -33,8 +33,8 @@ const EXPECTED: Record<ExecutionState, Partial<Record<string, ExecutionState>>> 
   },
   awaiting_approval: {
     approve: "running",
-    reject: "cancelled",
-    approval_timeout: "failed",
+    reject: "running",
+    approval_timeout: "running",
     cancel: "cancelled",
   },
   completed: {},
@@ -87,22 +87,32 @@ describe("execution state machine", () => {
     expect(isTerminal("awaiting_approval")).toBe(false);
   });
 
-  it("lets a suspended run resume, and treats rejection as a cancellation", () => {
-    // Rejection is not a failure: nothing went wrong, the user said no.
-    expect(transition("awaiting_approval", { type: "approve" })).toEqual({
-      ok: true,
-      from: "awaiting_approval",
-      to: "running",
-    });
-    expect(transition("awaiting_approval", { type: "reject" })).toEqual({
+  it("resumes the run on every decision, because the run was never the question", () => {
+    // All three lead back to `running`, and that is the change from v0.3.0.
+    //
+    // What was waiting was one step. A person answering "no" to the X post has
+    // not said anything about the Instagram post, and the rule from v0.5.0 is
+    // that each target settles independently — so a rejection that cancelled the
+    // run would make the one failure a human caused behave differently from
+    // every other failure, and the user would have to learn that separately.
+    // v0.3.0's `reject → cancelled` and `approval_timeout → failed` are corrected
+    // here; the difference is recorded on the step, not on the run.
+    for (const type of ["approve", "reject", "approval_timeout"] as const) {
+      expect(transition("awaiting_approval", { type })).toEqual({
+        ok: true,
+        from: "awaiting_approval",
+        to: "running",
+      });
+    }
+  });
+
+  it("still lets a user stop a suspended run outright", () => {
+    // Resuming on a decision is not the same as being unable to stop. `cancel`
+    // remains, and it is the one decision that ends the run.
+    expect(transition("awaiting_approval", { type: "cancel" })).toEqual({
       ok: true,
       from: "awaiting_approval",
       to: "cancelled",
-    });
-    expect(transition("awaiting_approval", { type: "approval_timeout" })).toEqual({
-      ok: true,
-      from: "awaiting_approval",
-      to: "failed",
     });
   });
 

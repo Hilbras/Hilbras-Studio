@@ -74,6 +74,31 @@ export type ConnectorErrorCode =
    * run to achieve exactly nothing, so this is never retryable.
    */
   | "budget_exhausted"
+  /**
+   * The user's own policy forbids this action, outright.
+   *
+   * Not `forbidden` — that is a platform refusing, and this is the user having
+   * said no in advance. Never retryable: a policy that forbids an action will
+   * forbid it on the next attempt too, and the way to change it is the settings
+   * screen rather than another attempt.
+   */
+  | "policy_denied"
+  /**
+   * A person was asked and said no.
+   *
+   * Never retryable, and deliberately not a run-ending event: the step failed,
+   * the run continues, and any sibling step for a different account still runs.
+   */
+  | "approval_rejected"
+  /**
+   * Nobody answered in time.
+   *
+   * A timeout is an absence of consent, so it fails the step rather than
+   * publishing it. Auto-approving on expiry would mean a user who was asleep
+   * had their content published by the system that was waiting for them to stop
+   * it.
+   */
+  | "approval_expired"
   /** Unclassified. */
   | "unknown";
 

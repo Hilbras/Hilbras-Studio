@@ -88,6 +88,20 @@ export interface ToolField {
    * and the tool that consumes it is the one that knows the limit.
    */
   maxChars?: number;
+  /**
+   * Whether a human may replace this field when approving.
+   *
+   * Only on a tool with `sideEffect: true`, and only for the field carrying the
+   * content that goes to the platform. `publish_post.text` is editable because
+   * reading a post and deciding to publish it are different acts, and the second
+   * is where a person is worth consulting. `mediaUrl` is not: adding an image to
+   * somebody else's post is a new capability, not an edit, and an approval
+   * screen is the wrong place to grant it.
+   *
+   * An absent flag means not editable, so adding a field to a tool cannot
+   * accidentally make it human-writable.
+   */
+  editable?: boolean;
 }
 
 export interface ToolSpec {
@@ -177,6 +191,7 @@ const PUBLISH_POST: ToolSpec = {
       describe:
         "The post text. Usually a $ref to an earlier compose_post step, so each platform gets copy written for its own limits.",
       maxChars: 20_000,
+      editable: true,
     },
     {
       name: "mediaUrl",

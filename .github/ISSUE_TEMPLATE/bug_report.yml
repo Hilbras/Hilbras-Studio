@@ -1,0 +1,64 @@
+name: Bug report
+description: Something behaves differently from what is documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The deployed release, e.g. v0.2.0. `Settings → About` or the footer.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Runtime / Goals
+        - Scheduler
+        - Composer
+        - Assistant
+        - Accounts / Connections
+        - Inbox
+        - Analytics
+        - Security / Auth
+        - Deploy / Infrastructure
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error output
+      description: Redact tokens, keys, and cookies before pasting.
+      render: text
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues for this.
+          required: true
+        - label: This does not involve posting to a real social account unintentionally.

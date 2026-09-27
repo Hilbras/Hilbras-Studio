@@ -1,0 +1,27 @@
+# Every pull request runs the full quality gate (lint, typecheck, unit tests,
+# PostgreSQL integration tests, production build, migration validation, dependency
+# audit). The connector contract, runtime, and database schema are the areas
+# where a silent regression is most expensive, so changes there are held to the
+# same gate and reviewed deliberately.
+#
+# The default owner applies to everything not matched below.
+* @lacrous
+
+# Contract surfaces — reviewed as interfaces, not just implementations.
+/src/lib/connectors/ @lacrous
+/src/lib/runtime/ @lacrous
+/src/db/ @lacrous
+/drizzle/ @lacrous
+
+# Security and deployment surface.
+/src/lib/crypto.ts @lacrous
+/src/lib/credential-store.ts @lacrous
+/src/lib/platform-credential-store.ts @lacrous
+/src/lib/net-guard.ts @lacrous
+/src/lib/pinned-provider-fetch.ts @lacrous
+/src/proxy.ts @lacrous
+/.github/ @lacrous
+
+# Release contract: version and changelog move together (ADR-007).
+/CHANGELOG.md @lacrous
+/package.json @lacrous

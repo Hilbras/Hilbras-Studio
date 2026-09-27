@@ -1,0 +1,50 @@
+name: Feature
+description: A change to how the product behaves
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't a user do today? Describe the situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Architectural layer
+      description: See docs/architecture.md §2.1.
+      options:
+        - Studio UI
+        - Interface
+        - Services / Domain
+        - Runtime
+        - Connectors
+        - Accounts & Connections
+        - AI Layer
+        - Infrastructure
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This changes a data model or a public contract.
+          required: false
+        - label: This can dispatch to a real social account.
+          required: false

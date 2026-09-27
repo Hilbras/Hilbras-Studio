@@ -1,0 +1,40 @@
+# Keep runtime dependencies current. pnpm-lock.yaml is committed, so PRs
+# generated here are reproducible and safe to test through the normal CI gates.
+#
+# Version updates are grouped so a single PR never touches many ecosystems at
+# once, and grouped again for the `next` major line because a Next.js minor
+# carries breaking API changes (see AGENTS.md).
+version: 2
+
+updates:
+  # Framework and runtime — highest risk, reviewed most carefully.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    labels: [dependencies, next]
+    groups:
+      next-patch:
+        patterns: ["next@16.3.*", "@types/react@19.3.*", "@types/react-dom@19.3.*"]
+      react-ecosystem:
+        patterns: ["react*", "framer-motion", "next-themes"]
+      tooling:
+        patterns: ["typescript", "eslint", "eslint-config-next", "vitest", "tailwindcss", "drizzle*", "prettier"]
+
+  # Drizzle schema changes ship as migrations; those need a human.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies, ci]
+
+  # Postgres container image used by the integration tests.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies, test-infra]

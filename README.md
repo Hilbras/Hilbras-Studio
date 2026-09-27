@@ -5,7 +5,7 @@ Runtime plans and executes it using AI, tools, platform connections, accounts,
 schedules, and human approvals.
 
 > "Every day at 10 AM, publish two AI-related posts on the Hilbras X and
-> LinkedIn accounts."
+> Instagram accounts."
 
 ---
 

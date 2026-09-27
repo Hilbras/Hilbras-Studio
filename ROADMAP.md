@@ -14,7 +14,7 @@ Release history: [`CHANGELOG.md`](CHANGELOG.md).
 ## Version ladder
 
 ```
-v0.1.0  (current)
+v0.1.0 — Platform integrations
    │
    ▼
 v0.2.0 — Architecture Foundation
@@ -23,7 +23,9 @@ v0.3.0 — Runtime Foundation
    ▼
 v0.4.0 — Multi-Account Connections
    ▼
-v0.5.0 — Unified Platform API
+v0.5.0  (current) — Unified Platform API: targets
+   ▼
+v0.5.1 — Unified Platform API: connectors
    ▼
 v0.6.0 — Goal Engine
    ▼
@@ -162,14 +164,30 @@ covered by nine integration tests.
 
 The Runtime depends on standardized capabilities, never on platform APIs.
 
+Split across two releases. v0.5.0 lands the target model the capability work
+reads from; v0.5.1 finishes the connectors themselves.
+
+### v0.5.0 — shipped ✅
+
+- [x] Contract `posts.platforms` → `post_targets` (§6 resolution 6) —
+      `0011_post_targets_contract`.
+- [x] `post_targets.account_key` can address a specific account, and is covered
+      by `UNIQUE NULLS NOT DISTINCT (post_id, platform, account_key)`.
+- [x] Post + targets written in one transaction — `src/lib/posts/service.ts`.
+- [x] `getPostTargets(ids)` — bulk read replacing four `split(",")` sites.
+
+### v0.5.1 — open
+
 - [ ] Connector interface *(defined in Phase 1 — standardised here)*.
 - [ ] Capability interface: `create_post`, `publish_post`, `get_posts`,
       `get_account`, `delete_post`.
-- [ ] Standardized responses and errors.
+- [ ] Standardized responses and errors — retire `legacy.ts`'s string
+      classification.
 - [ ] Capability discovery; map accounts to available capabilities.
-- [ ] Idempotency-key result cache on every side-effecting capability (ADR-005).
 - [ ] Platform adapters for the remaining registries.
 - [ ] Document connector development standards.
+- [ ] Wire `createAccountResolver()` so a run resolves through the accounts
+      table instead of the account key's prefix (deferred from v0.4.0).
 
 **Docs:** `connectors.md`, `capabilities.md`, `platform-development.md`
 

@@ -60,6 +60,12 @@ Goals store these in `goals.target_accounts`, plan steps carry them in
 `run_steps.target_account`, and `post_targets.account_key` records which
 account a post went to.
 
+`account_key` is NULL for a post aimed at a platform rather than a specific
+account — which is all the Composer can express today, since it offers platforms
+and not accounts. The column exists so that per-account targeting does not need
+another migration, and the uniqueness constraint covers it (see
+[below](#migration-status)).
+
 An account with no handle falls back to its platform id rather than producing a
 bare `x:`, which would collide across every handle-less account.
 
@@ -122,11 +128,18 @@ nothing — never Alice's, even though the key is identical.
 `post_targets`, and **backfills** from `social_accounts` and `posts.platforms`.
 It alters nothing existing.
 
-`social_accounts` and `posts.platforms` remain authoritative for the v0.1.0
-publish path through v0.4.x and are contracted in **v0.5.0** (architecture §6,
-resolution 6). The backfill reuses `social_accounts` ids, so a rollback needs no
-re-derivation.
+`0010_drop_social_accounts` dropped `social_accounts`, guarded by a row-count
+check that aborts if the 0008 backfill is incomplete.
 
-The OAuth callbacks still write to `social_accounts`; switching them to
-`registerConnection()` is the last step of the phase and lands in v0.5.0 with the
-column contraction, so the two writers never disagree.
+`0011_post_targets_contract` completes the switchover: it backfills any target
+rows missed since 0008, collapses duplicates, adds
+`UNIQUE NULLS NOT DISTINCT (post_id, platform, account_key)`, and then drops
+`posts.platforms`. It aborts if any post would be left with no target row — the
+old column is still intact at that point, so the backfill can be re-run by hand.
+
+Both contractions are now done. `post_targets` is the only record of where a post
+goes, written in the same transaction as the post itself
+(`src/lib/posts/service.ts`).
+
+The OAuth callbacks now write through `registerConnection()`, so the two writers
+that briefly coexisted can no longer disagree.

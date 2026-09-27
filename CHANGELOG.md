@@ -11,6 +11,109 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] — 2026-09-27
+
+Unified Platform API, part 1 of 2. The last of the legacy data model is gone:
+`post_targets` is now the only record of where a post goes, and the Runtime's
+target model can finally express *which account* a post goes to.
+
+### Features
+
+- **`post_targets` is authoritative.** `posts.platforms` — the comma-separated
+  `"instagram,x,facebook"` string — is dropped. It could not be counted,
+  indexed, joined, or narrowed to a specific account, and it had accumulated
+  four independent `split(",")` implementations, each with its own idea of what
+  to do with an empty segment. All four now read the join table.
+- **`post_targets.account_key` can address an account.** The column existed but
+  nothing wrote it, because the Composer offers platforms and not accounts. It
+  is now covered by the uniqueness constraint, so per-account targeting needs no
+  further migration. See [`docs/accounts.md`](docs/accounts.md).
+- **One row per (post, platform, account), enforced by the database.**
+  `UNIQUE NULLS NOT DISTINCT (post_id, platform, account_key)`. `NULLS NOT
+  DISTINCT` is the load-bearing part: `account_key` is NULL for a
+  platform-level target and Postgres treats NULLs as distinct in a unique index
+  by default, so a plain constraint would accept the same pair twice.
+- **`getPostTargets(ids)`** reads targets for up to 50 posts in one query. The
+  analytics, dashboard, and scheduler views each did one lookup per post before.
+- **New `PostItem.platforms` is `string[]`**, not a string. The type now matches
+  what the code always did to it.
+
+### Bug Fixes
+
+- **A post's targets could be recorded more than once.** `setPostTargets`
+  documented itself as replacing the previous set but only ever appended, and
+  its `onConflictDoNothing()` was inert — the table carried no unique constraint
+  for it to conflict against. Every re-write of a post's platforms grew the row
+  set, and since the read paths report one platform per row, a post aimed at one
+  platform could render as "3 platforms" in the Composer and Scheduler. The
+  write now deletes before it inserts, and the constraint closes the concurrent
+  case. Covered by `tests/integration/post-targets.test.ts`.
+- **A post and its targets were two separate writes.** A failure between them
+  left a post that exists, is schedulable, looks normal in the Composer's list,
+  and then fails at publish time with "Post has no target platforms" — hours
+  later, for something the user never saw go wrong. Both writes are now one
+  transaction, owned by `src/lib/posts/service.ts` (ADR-004 keeps orchestration
+  out of the server action).
+- **`PlatformIcon` threw on an unrecognised platform id.**
+  `PLATFORM_REGISTRY[platform].name` is a `TypeError` on any value not in the
+  registry, and ids reach this component from stored data — a post's targets, an
+  account's platform, a stored publish result. The Composer already produced the
+  literal `"unknown"` here, so a post with no recorded target could crash the
+  page rather than render. An unknown id now renders a neutral dot labelled
+  "Unknown platform".
+- **Eight `as never` casts on `PlatformIcon` props are gone.** They were
+  silencing exactly that type error: `platform={x as never}` compiles against
+  any value, so the crash could never be caught at the call site where it
+  originated. The prop is now honestly typed and every call site is checked.
+
+### Improvements
+
+- Post creation moved out of `createPostAction` into a server-only service, and
+  the first `db.transaction()` in the codebase was introduced. The transaction
+  handle type is derived from `db.transaction` rather than hand-written, so a
+  Drizzle upgrade cannot silently drift it.
+
+### Documentation
+
+- `docs/accounts.md` — `account_key`'s role, and the migration status for both
+  contractions.
+- `docs/architecture.md` — §3.2 marked done, §6 resolution 6 marked executed.
+- `README.md` — status table and capabilities heading moved to v0.5.0.
+
+### Breaking Changes
+
+- **`posts.platforms` is dropped.** Any query selecting it fails; use
+  `getPostTargets()`. Hand-written SQL touching that column must move to
+  `post_targets`.
+- **`PostItem.platforms` is `string[]`.** Client components that called
+  `.split(",")` on it must drop the call.
+- **`setPostTargets(tx, postId, platforms)` takes a transaction** as its first
+  argument. It is no longer callable outside one, by design.
+
+### Migration Notes
+
+`0011_post_targets_contract` is the second irreversible step in the ADR-006
+chain, and it is ordered so the old column is destroyed last:
+
+1. Backfills target rows from `posts.platforms` for any post written since 0008.
+2. Collapses duplicate rows the unconstrained table accumulated.
+3. **Aborts** if any post would be left with no target row. The column is still
+   present at this point, so the backfill can be re-run by hand.
+4. Adds the unique constraint.
+5. Drops `posts.platforms`.
+
+```bash
+npx drizzle-kit push        # or: pnpm exec drizzle-kit migrate
+```
+
+If step 3 raises, the fix is to populate the missing `post_targets` rows from the
+still-intact `posts.platforms` column and re-run. Do not drop the column by hand.
+
+No application downtime: every read path uses the join table, and step 1 runs
+before anything is removed.
+
 ## [0.4.1] — 2026-09-27
 
 Publish receipts. A retried run step could publish twice; it now cannot.

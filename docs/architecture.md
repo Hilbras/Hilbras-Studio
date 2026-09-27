@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.4.1
+**Current version:** v0.5.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -214,7 +214,7 @@ These are finished, tested, and load the layers above them. Do not rewrite.
 
 | Asset | Problem | Target phase |
 |---|---|---|
-| `social_accounts` table | Conflates Connection and Account. No unique constraint on `(user_id, platform, platform_account_id)`, so reconnects append duplicate rows. `posts.platforms` is a comma-separated string, which cannot express per-account targeting. | Phase 2 |
+| `social_accounts` table | Conflates Connection and Account. No unique constraint on `(user_id, platform, platform_account_id)`, so reconnects append duplicate rows. `posts.platforms` is a comma-separated string, which cannot express per-account targeting. | **Done** — split in v0.4.0, both legacy tables dropped in v0.5.0 |
 | `getConnectedAccount()` (`publish.ts:138`) | `.orderBy(connectedAt desc).limit(1)` -- publishing always targets the **most recently connected** account. Multi-account is structurally possible but not implemented. | Phase 2 |
 | `publish.ts` (926 lines) | Five unconnected `publishToX()` functions, no shared interface, inconsistent error shapes. The single highest-value refactor in the roadmap. | Phase 1 (wrap) -> Phase 3 (standardize) |
 | `PUBLISHING_CAPABILITIES` | `status: "supported" \| "connect_only"` is a boolean wearing a type. Cannot express `get_posts`, `delete_post`, or per-account capability sets. | Phase 3 |
@@ -474,7 +474,7 @@ revisit it deliberately rather than discover it.
 | 3 | Two documentation surfaces: `docs/*.md` vs `src/app/docs/*`. | **Confirmed split.** `docs/*.md` is **developer** documentation — architecture, runtime, connectors, deployment. `src/app/docs/*` is the **public in-app user guide** rendered as pages. The roadmap's `docs/*.md` list is developer-only; user-facing changes update `src/app/docs/*`. |
 | 4 | Remediation Task 0 (secret inventory and rotation) before v0.2.0? | **Yes.** The non-rotational parts (permission check, name-only inventory, tracked-history scan) are done and recorded in `docs/security.md`. Actual rotation is an operational action for the owner of each credential. |
 | 5 | Target schedule granularity, to size the queue plan quota. | **15 minutes** for v1.0. Fits the stated product need and keeps the run volume per goal predictable. Coarser cadences are expressed as multiple daily slots rather than as a new scheduling primitive. |
-| 6 | `posts.platforms` becomes a join table in Phase 2 — migrate or drain first? | **Migrate additively.** Draining is not viable: users have scheduled posts. Add the table, backfill from the comma-separated column, keep a compatibility read path for one phase, and contract the old column in **v0.5.0**. |
+| 6 | `posts.platforms` becomes a join table in Phase 2 — migrate or drain first? | **Migrate additively.** Draining is not viable: users have scheduled posts. Add the table, backfill from the comma-separated column, keep a compatibility read path for one phase, and contract the old column in **v0.5.0**. **Executed:** `0011_post_targets_contract` dropped the column in v0.5.0. |
 
 ### Consequences of these resolutions
 

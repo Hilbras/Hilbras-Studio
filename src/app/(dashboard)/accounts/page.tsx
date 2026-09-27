@@ -441,7 +441,7 @@ export default function AccountsPage() {
                 <motion.div whileHover={{ y: -4 }} transition={{ type: "spring", stiffness: 300, damping: 22 }} className="h-full rounded-2xl border border-border bg-card p-5 hover:border-gold-500/30 hover:shadow-xl hover:shadow-gold-500/5 transition-colors">
                   <div className="flex items-start gap-3">
                     <motion.div whileHover={{ scale: 1.1, rotate: 3 }} transition={{ type: "spring", stiffness: 400, damping: 15 }}>
-                      <PlatformIcon platform={platform.id as never} size={32} />
+                      <PlatformIcon platform={platform.id} size={32} />
                     </motion.div>
                     <div className="flex-1 min-w-0">
                       <CardTitle className="text-base">{platform.name}</CardTitle>
@@ -539,7 +539,7 @@ export default function AccountsPage() {
         <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2.5">
-              <PlatformIcon platform={selectedPlatform as never} size={22} />
+              <PlatformIcon platform={selectedPlatform} size={22} />
               {selectedMeta?.name} Settings
             </DialogTitle>
             <DialogDescription>

@@ -62,7 +62,7 @@ export function RecentPostsClient({ posts }: { posts: PublishedPost[] }) {
                 className="flex items-center gap-3 p-4 rounded-xl border border-border bg-muted/30 hover:bg-muted/50 hover:shadow-md transition-all"
               >
                 <div className="w-8 h-8 rounded-lg bg-gold-500/10 flex items-center justify-center shrink-0">
-                  <PlatformIcon platform={post.platform as never} size={18} />
+                  <PlatformIcon platform={post.platform} size={18} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate">{post.text}</p>

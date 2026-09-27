@@ -6,6 +6,7 @@ import { and, asc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { publishToAllForUser, type PublishResult } from "@/lib/publish";
+import { getPostTargets } from "@/lib/posts/targets";
 
 /**
  * Scheduled-post runner.
@@ -292,12 +293,14 @@ export async function publishDuePosts(
       userId: posts.userId,
       content: posts.content,
       imageUrl: posts.imageUrl,
-      platforms: posts.platforms,
     })
     .from(posts)
     .where(and(...conditions))
     .orderBy(asc(posts.scheduledAt))
     .limit(limit);
+
+  // One query for every due post rather than one per post inside the loop.
+  const targets = await getPostTargets(due.map((p) => p.id));
 
   const outcomes: ScheduledPostOutcome[] = [];
 
@@ -329,10 +332,11 @@ export async function publishDuePosts(
 
     if (!claimed) continue;
 
-    const platforms = post.platforms
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean);
+    // `post_targets` is the only record of where a post goes (ADR-006). A post
+    // with no target rows cannot be published, and `createPost` writes both in
+    // one transaction — so this is unreachable through the app, and is kept only
+    // to fail a row that predates the join table with a legible reason.
+    const platforms = targets.get(post.id) ?? [];
 
     if (platforms.length === 0) {
       const noTargets: PublishResult[] = [

@@ -1,11 +1,12 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { listConnectedPlatforms } from "@/lib/accounts/store";
+import { createPost } from "@/lib/posts/service";
+import { getPostTargets } from "@/lib/posts/targets";
 import { getSessionUser } from "@/lib/session";
 import { publishDuePosts } from "@/lib/scheduled-posts";
 
@@ -43,7 +44,13 @@ export interface PostItem {
   id: string;
   content: string;
   imageUrl: string | null;
-  platforms: string;
+  /**
+   * Target platform ids, from `post_targets`.
+   *
+   * An array, not a comma-separated string: the old shape could not be counted,
+   * indexed, or joined, which is why every consumer carried its own `split(",")`.
+   */
+  platforms: string[];
   status: string;
   scheduledAt: string | null;
   results: string | null;
@@ -75,14 +82,12 @@ export async function createPostAction(
   const input = parsed.data;
   const scheduled = input.scheduledAt ?? null;
 
-  const postId = randomUUID();
-  await db.insert(posts).values({
-    id: postId,
+  // The post and its targets are one fact — created together or not at all.
+  const postId = await createPost({
     userId: session.id,
     content: input.content,
-    imageUrl: input.imageUrl || null,
-    platforms: input.platforms.join(","),
-    status: scheduled ? "scheduled" : "draft",
+    platforms: input.platforms,
+    imageUrl: input.imageUrl,
     scheduledAt: scheduled,
   });
 
@@ -106,11 +111,13 @@ export async function listPosts(status?: string): Promise<PostItem[]> {
     .orderBy(desc(posts.createdAt))
     .limit(50);
 
+  const targets = await getPostTargets(rows.map((r) => r.id));
+
   return rows.map((r) => ({
     id: r.id,
     content: r.content,
     imageUrl: r.imageUrl,
-    platforms: r.platforms,
+    platforms: targets.get(r.id) ?? [],
     status: r.status,
     scheduledAt: r.scheduledAt?.toISOString() ?? null,
     results: r.results,
@@ -161,11 +168,13 @@ export async function getScheduledPosts(): Promise<PostItem[]> {
     )
     .orderBy(desc(posts.scheduledAt));
 
+  const targets = await getPostTargets(rows.map((r) => r.id));
+
   return rows.map((r) => ({
     id: r.id,
     content: r.content,
     imageUrl: r.imageUrl,
-    platforms: r.platforms,
+    platforms: targets.get(r.id) ?? [],
     status: r.status,
     scheduledAt: r.scheduledAt?.toISOString() ?? null,
     results: r.results,

@@ -129,7 +129,7 @@ export function InboxClient({
                       </AvatarFallback>
                     </Avatar>
                     <PlatformIcon
-                      platform={m.platform as never}
+                      platform={m.platform}
                       size={14}
                       className="absolute -bottom-0.5 -right-0.5 ring-2 ring-card rounded"
                     />
@@ -184,7 +184,7 @@ export function InboxClient({
                     <CardTitle className="text-sm">{selected.name}</CardTitle>
                     <CardDescription className="flex items-center gap-1.5 text-xs">
                       <PlatformIcon
-                        platform={selected.platform as never}
+                        platform={selected.platform}
                         size={12}
                       />
                       {selected.handle}

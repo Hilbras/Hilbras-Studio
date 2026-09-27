@@ -3,6 +3,7 @@
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
+import { getPostTargets } from "@/lib/posts/targets";
 import { getSessionUser } from "@/lib/session";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 
@@ -57,13 +58,6 @@ function parseResults(raw: string | null): StoredPublishResult[] {
   }
 }
 
-function splitPlatforms(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((p) => p.trim())
-    .filter(Boolean);
-}
-
 /** "Sep 20" style date for the charts, or an em dash when unknown. */
 function shortDate(value: Date | null): string {
   return value
@@ -110,13 +104,14 @@ export async function getAnalyticsData() {
     )
     .orderBy(desc(posts.publishedAt));
 
+  // One query for the whole page rather than one per post.
+  const targets = await getPostTargets(publishedPosts.map((p) => p.id));
+
   // Platform breakdown: count posts per platform
   const platformCounts: Record<string, number> = {};
   for (const post of publishedPosts) {
-    const platforms = post.platforms.split(",");
-    for (const p of platforms) {
-      const trimmed = p.trim();
-      if (trimmed) platformCounts[trimmed] = (platformCounts[trimmed] || 0) + 1;
+    for (const platform of targets.get(post.id) ?? []) {
+      platformCounts[platform] = (platformCounts[platform] || 0) + 1;
     }
   }
 
@@ -133,7 +128,7 @@ export async function getAnalyticsData() {
   const statsMap = new Map<string, PlatformPublishStats>();
 
   for (const post of publishedPosts) {
-    const platforms = splitPlatforms(post.platforms);
+    const platforms = targets.get(post.id) ?? [];
     const results = parseResults(post.results);
 
     // Attribute each result to the platform it names. Rows published before
@@ -166,7 +161,7 @@ export async function getAnalyticsData() {
   // Most recent posts, with the permalink captured at publish time so a row can
   // link straight to the live post when the platform returned one.
   const recentPosts: PublishedPost[] = publishedPosts.slice(0, 5).map((post) => {
-    const platforms = splitPlatforms(post.platforms);
+    const platforms = targets.get(post.id) ?? [];
     const url = parseResults(post.results).find((r) => r.success && r.url)?.url;
 
     return {

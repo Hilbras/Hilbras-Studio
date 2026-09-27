@@ -71,7 +71,7 @@ export function SchedulerGridClient({
 
             <div className="space-y-2">
               {dayPosts.map((post, pi) => {
-                const platforms = post.platforms.split(",");
+                const platforms = post.platforms;
                 const time = new Date(post.scheduledAt!).toLocaleTimeString(
                   "en-US",
                   { hour: "2-digit", minute: "2-digit", hour12: false }
@@ -87,10 +87,7 @@ export function SchedulerGridClient({
                     className="rounded-lg border border-border bg-card p-2.5 cursor-pointer hover:border-gold-500/30 hover:shadow-md hover:shadow-gold-500/10 transition-all"
                   >
                     <div className="flex items-center gap-1.5 mb-1.5">
-                      <PlatformIcon
-                        platform={platforms[0] as never}
-                        size={14}
-                      />
+                      <PlatformIcon platform={platforms[0]} size={14} />
                       <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
                         <Clock className="size-2.5" /> {time}
                       </span>

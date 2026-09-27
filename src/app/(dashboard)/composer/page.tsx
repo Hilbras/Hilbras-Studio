@@ -494,7 +494,7 @@ export default function ComposerPage() {
                     <CardContent className="space-y-2">
                       {publishResults.map((r, i) => (
                         <div key={i} className={`flex items-center gap-2 p-3 rounded-xl text-sm ${r.success ? "bg-emerald-500/10 border border-emerald-500/20" : "bg-red-500/10 border border-red-500/20"}`}>
-                          <PlatformIcon platform={r.platform as Platform} size={20} className="shrink-0" />
+                          <PlatformIcon platform={r.platform} size={20} className="shrink-0" />
                           <span className="capitalize font-medium">{r.platform}</span>
                           {r.success ? (
                             <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 text-xs ml-auto">
@@ -597,7 +597,7 @@ export default function ComposerPage() {
                                   {post.status}
                                 </Badge>
                                 <span className="text-[10px] text-muted-foreground">
-                                  {post.platforms.split(",").length} platforms
+                                  {post.platforms.length} platforms
                                 </span>
                                 <span className="text-[10px] text-muted-foreground">
                                   {new Date(post.createdAt).toLocaleDateString()}

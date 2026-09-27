@@ -16,6 +16,7 @@ const {
   chatSessions,
   connections,
   memories,
+  postTargets,
   posts,
   users,
 } = schema;
@@ -105,16 +106,20 @@ describe("PostgreSQL migrations and tenant boundaries", () => {
         id: alicePostId,
         userId: aliceId,
         content: "Alice post",
-        platforms: "instagram",
         status: "draft",
       },
       {
         id: bobPostId,
         userId: bobId,
         content: "Bob post",
-        platforms: "x",
         status: "draft",
       },
+    ]);
+
+    // Targets live in their own table (ADR-006) — see 0011.
+    await testDb.insert(postTargets).values([
+      { postId: alicePostId, platform: "instagram", accountKey: null },
+      { postId: bobPostId, platform: "x", accountKey: null },
     ]);
 
     const alicePosts = await testDb

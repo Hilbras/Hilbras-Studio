@@ -100,14 +100,30 @@ export function PlatformIcon({
   className,
   size = 16,
 }: {
-  platform: Platform;
+  /**
+   * A platform id.
+   *
+   * `string | undefined` rather than `PlatformId` on purpose: ids reach this
+   * component from stored data — a post's target platforms, an account's
+   * platform — and those rows are not statically known to be current. A stored
+   * value can name a platform this build has never heard of.
+   */
+  platform: Platform | (string & {}) | undefined;
   className?: string;
   size?: number;
 }) {
+  // An unrecognised id renders as a neutral dot rather than throwing. Callers
+  // used to paper over this with `as never`, which silenced the type error
+  // instead of fixing the crash: `PLATFORM_REGISTRY[platform].name` threw a
+  // TypeError on the first unknown value to reach it.
+  const spec = platform ? PLATFORM_REGISTRY[platform as PlatformId] : undefined;
+  const label = spec?.name ?? "Unknown platform";
+  const brand = platform ? BRAND_COLORS[platform as PlatformId] : undefined;
+
   return (
     <span
-      aria-label={PLATFORM_REGISTRY[platform].name}
-      title={PLATFORM_REGISTRY[platform].name}
+      aria-label={label}
+      title={label}
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-lg",
         className
@@ -115,10 +131,18 @@ export function PlatformIcon({
       style={{
         width: size + 8,
         height: size + 8,
-        background: `${BRAND_COLORS[platform]}12`,
+        background: `${brand ?? "#888888"}12`,
       }}
     >
-      <PlatformSvg platform={platform} size={size} />
+      {spec ? (
+        <PlatformSvg platform={platform as PlatformId} size={size} />
+      ) : (
+        <span
+          aria-hidden
+          className="rounded-full bg-muted-foreground/40"
+          style={{ width: size / 2, height: size / 2 }}
+        />
+      )}
     </span>
   );
 }

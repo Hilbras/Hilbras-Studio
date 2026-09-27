@@ -78,6 +78,13 @@
       "when": 1790522603834,
       "tag": "0010_drop_social_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790528811226,
+      "tag": "0011_post_targets_contract",
+      "breakpoints": true
     }
   ]
 }

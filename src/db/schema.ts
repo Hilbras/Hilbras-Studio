@@ -89,8 +89,14 @@ export const posts = pgTable("posts", {
   content: text("content").notNull(),
   /** Optional image URL for visual posts. */
   imageUrl: text("image_url"),
-  /** Target platforms as comma-separated list: "instagram,x,facebook" */
-  platforms: text("platforms").notNull(),
+  /**
+   * Where this post goes lives in `post_targets`, not here.
+   *
+   * This used to be `platforms text` holding "instagram,x,facebook". It could
+   * not be counted, indexed, joined, or narrowed to a specific account, and
+   * every consumer grew its own `split(",")` with its own idea of what to do
+   * with an empty segment. Dropped in migration 0011.
+   */
   /** draft | scheduled | publishing | published | failed */
   status: text("status").notNull().default("draft"),
   /** ISO timestamp — set when status = scheduled. */
@@ -496,12 +502,11 @@ export type Account = typeof accounts.$inferSelect;
 export type NewAccount = typeof accounts.$inferInsert;
 
 /**
- * post_targets — which platforms a post went to.
+ * post_targets — which platforms (and which accounts) a post goes to.
  *
  * Replaces `posts.platforms`, a comma-separated string that cannot express
  * per-account targeting. Backfilled by splitting that column in migration 0008;
- * the old column is still written and still read during v0.4.x, and is dropped
- * in v0.5.0.
+ * the column itself is dropped in migration 0011.
  */
 export const postTargets = pgTable(
   "post_targets",
@@ -516,6 +521,22 @@ export const postTargets = pgTable(
   (t) => [
     index("post_targets_post_idx").on(t.postId),
     index("post_targets_platform_idx").on(t.platform),
+    /**
+     * One row per (post, platform, account) — the invariant the reads assume.
+     *
+     * `NULLS NOT DISTINCT` is the load-bearing part. `account_key` is NULL for a
+     * platform-level target, and Postgres treats NULLs as distinct in a unique
+     * index by default, so a plain unique constraint would accept the same
+     * `(post, platform)` twice and the read paths would then report a
+     * single-platform post as going to three platforms.
+     *
+     * Covering `account_key` rather than constraining `(post, platform)` alone
+     * keeps per-account targeting expressible: one platform reached through two
+     * different accounts is two legitimate rows.
+     */
+    unique("post_targets_unique")
+      .on(t.postId, t.platform, t.accountKey)
+      .nullsNotDistinct(),
   ]
 );
 

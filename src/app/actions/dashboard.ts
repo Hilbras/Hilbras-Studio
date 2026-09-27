@@ -4,6 +4,7 @@ import { eq, and, gte, lte, desc, count } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { accounts, posts } from "@/db/schema";
+import { getPostTargets } from "@/lib/posts/targets";
 import { getSessionUser } from "@/lib/session";
 
 export interface DashboardStat {
@@ -188,9 +189,11 @@ export async function getRecentActivity(limit = 5): Promise<ActivityItem[]> {
     .orderBy(desc(posts.createdAt))
     .limit(safeLimit);
 
+  const targets = await getPostTargets(rows.map((r) => r.id));
+
   return rows.map((r) => ({
     id: r.id,
-    platform: r.platforms.split(",")[0] || "unknown",
+    platform: targets.get(r.id)?.[0] ?? "unknown",
     action: actionLabel(r.status),
     detail: r.content.slice(0, 80) + (r.content.length > 80 ? "…" : ""),
     timestamp: relativeTime(r.createdAt),

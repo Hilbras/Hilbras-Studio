@@ -146,7 +146,7 @@ export function RecentActivityClient({ activity }: { activity: ActivityItem[] })
                   className="flex gap-3 p-3 -mx-3 rounded-lg cursor-pointer transition-colors"
                 >
                   <div className="w-8 h-8 rounded-lg bg-gold-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <PlatformIcon platform={a.platform as never} size={18} />
+                    <PlatformIcon platform={a.platform} size={18} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium">{a.action}</p>
@@ -218,7 +218,7 @@ export function ConnectedAccountsClient({
                 className="flex items-center gap-3 p-2 -mx-2 rounded-lg cursor-pointer transition-colors"
               >
                 <motion.div whileHover={{ scale: 1.2, rotate: 5 }}>
-                  <PlatformIcon platform={a.platform as never} size={32} />
+                  <PlatformIcon platform={a.platform} size={32} />
                 </motion.div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium capitalize">{a.platform}</p>

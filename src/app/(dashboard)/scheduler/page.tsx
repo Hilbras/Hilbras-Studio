@@ -101,7 +101,7 @@ export default async function SchedulerPage() {
                   key={s.platform}
                   className="flex items-center gap-3 rounded-xl border border-border p-3.5"
                 >
-                  <PlatformIcon platform={s.platform as never} size={28} />
+                  <PlatformIcon platform={s.platform} size={28} />
                   <div className="flex-1">
                     <p className="text-sm font-medium capitalize">{s.platform}</p>
                     <p className="text-xs text-muted-foreground flex items-center gap-1">

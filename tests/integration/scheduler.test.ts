@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import * as schema from "../../src/db/schema";
 
-const { posts, users } = schema;
+const { postTargets, posts, users } = schema;
 
 /**
  * The runner must never talk to a real platform from tests. The mock is
@@ -81,24 +81,40 @@ interface PostOverrides {
   claimExpiresAt?: Date | null;
   dispatchStartedAt?: Date | null;
   publishedAt?: Date | null;
-  platforms?: string;
+  /** Target platforms, recorded in `post_targets` rather than on the post. */
+  platforms?: string[];
 }
 
+/**
+ * Seeds a post the way `createPost` does: row and targets together.
+ *
+ * The runner reads targets exclusively from `post_targets` since migration 0011
+ * dropped `posts.platforms`, so a fixture that only inserted the post row would
+ * create a post that can never publish.
+ */
 async function createPost(userId: string, overrides: PostOverrides = {}): Promise<string> {
   const id = randomUUID();
   const past = new Date(Date.now() - 60_000);
-  await testDb.insert(posts).values({
-    id,
-    userId,
-    content: "Scheduled content",
-    platforms: overrides.platforms ?? "instagram,x",
-    status: overrides.status ?? "scheduled",
-    scheduledAt: overrides.scheduledAt === undefined ? past : overrides.scheduledAt,
-    claimId: overrides.claimId ?? null,
-    claimExpiresAt: overrides.claimExpiresAt ?? null,
-    dispatchStartedAt: overrides.dispatchStartedAt ?? null,
-    publishedAt: overrides.publishedAt ?? null,
+  const platforms = overrides.platforms ?? ["instagram", "x"];
+
+  await testDb.transaction(async (tx) => {
+    await tx.insert(posts).values({
+      id,
+      userId,
+      content: "Scheduled content",
+      status: overrides.status ?? "scheduled",
+      scheduledAt: overrides.scheduledAt === undefined ? past : overrides.scheduledAt,
+      claimId: overrides.claimId ?? null,
+      claimExpiresAt: overrides.claimExpiresAt ?? null,
+      dispatchStartedAt: overrides.dispatchStartedAt ?? null,
+      publishedAt: overrides.publishedAt ?? null,
+    });
+
+    await tx
+      .insert(postTargets)
+      .values(platforms.map((platform) => ({ postId: id, platform, accountKey: null })));
   });
+
   return id;
 }
 

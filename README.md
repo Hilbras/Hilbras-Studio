@@ -1,16 +1,51 @@
 # Hilbras Studio
 
-AI-powered social media management platform. Create, schedule, and publish content across Instagram, Facebook, Threads, X, LinkedIn, TikTok, YouTube, Pinterest, Reddit, and Telegram — all from one place.
+**A Goal-Driven AI Runtime.** You describe what you want to accomplish; the
+Runtime plans and executes it using AI, tools, platform connections, accounts,
+schedules, and human approvals.
 
-## Features
+> "Every day at 10 AM, publish two AI-related posts on the Hilbras X and
+> LinkedIn accounts."
 
-- **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible provider (OpenRouter, Groq, Together, etc.)
-- **Multi-platform Publishing** — Publish to 10 platforms: nine via OAuth 2.0, Telegram via bot token
-- **Smart Composer** — AI adapts tone, length, and format per platform
-- **Post Scheduler** — Queue posts with AI-optimized timing
-- **Inbox** — Unified notification feed across connected platforms
-- **Analytics** — Track engagement across platforms
-- **Dark Mode** — Full light/dark theme support
+---
+
+## Status
+
+The product is being rebuilt from a social media management tool into a
+Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
+**v1.0.0**.
+
+| Version | Release |
+|---|---|
+| v0.1.0 | Current — platform connections, AI Composer, scheduler, Assistant |
+| v0.2.0 | Architecture Foundation |
+| v0.3.0 | Runtime Foundation |
+| v0.4.0 | Multi-Account Connections |
+| v0.5.0 | Unified Platform API |
+| v0.6.0 | Goal Engine |
+| v0.7.0 | AI Planning |
+| v0.8.0 | Human-in-the-Loop |
+| v0.9.0 | Studio 2.0 |
+| v0.9.5 | Release Candidate |
+| **v1.0.0** | **Goal-Driven AI Runtime** |
+
+See [`ROADMAP.md`](ROADMAP.md) for the full plan and
+[`docs/architecture.md`](docs/architecture.md) for the layer contracts and
+architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
+
+## Today's capabilities (v0.1.0)
+
+- **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
+  provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.
+- **Multi-platform Publishing** — Instagram, Facebook, Threads, X, and Telegram
+  publish today. LinkedIn, TikTok, YouTube, Pinterest, and Reddit complete OAuth
+  but have no publisher yet.
+- **Smart Composer** — AI rewrites content with the selected platforms' limits in view.
+- **Post Scheduler** — Queue posts for scheduled publishing.
+- **Inbox** — X mentions and Instagram conversations.
+- **Assistant** — Streaming chat with persistent sessions and long-term memory.
+- **Analytics** — Publishing outcomes and weekly activity.
+- **Dark Mode** — Full light/dark theme support.
 
 ## Tech Stack
 

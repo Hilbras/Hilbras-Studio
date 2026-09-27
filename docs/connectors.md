@@ -70,13 +70,25 @@ different user actions even though both are unfixable by retrying.
 ### 4. Every side-effecting capability is idempotent (ADR-005)
 
 `PublishPostInput.idempotencyKey` is derived from
-`(runId, stepIndex, accountId)`. A connector that has already fulfilled a key
-returns the recorded result instead of dispatching again.
+`(runId, stepIndex, accountId)`. A connector checks its **publish receipt**
+before dispatching and records one after a successful publish. A retry with a
+known key returns the recorded result — including the real `platformPostId` and
+`permalink` — instead of calling the platform again.
 
-The key is accepted and ignored by connectors that have not implemented the
-cache yet. That is deliberate: the field ships in the interface now, and each
-connector adopts it individually as it is upgraded, so honouring it never
-requires an interface change.
+This matters because the run-level guard only protects *within* one run, and a
+retry is a **new** run with a new id. Without the receipt, a retried step
+published twice with nothing to stop it.
+
+The order is deliberately **check → dispatch → record**:
+
+- A crash between dispatch and record leaves no receipt, so the next attempt may
+  dispatch again. That is the uncertain-outcome case, and it **fails** rather
+  than reporting success.
+- A failed dispatch records nothing, so a legitimate later retry is never
+  suppressed.
+
+Receipts are never expired. The table grows only with distinct step keys, a
+stale receipt is harmless, and a deleted one is a double post.
 
 ---
 

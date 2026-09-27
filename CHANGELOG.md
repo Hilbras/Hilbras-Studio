@@ -11,6 +11,50 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-27
+
+Publish receipts. A retried run step could publish twice; it now cannot.
+
+### Bug Fixes
+
+- **A retried run step could double-post.** The run-level guard only protects
+  *within* one run, and a retry is a **new** run with a new id — so its step
+  keys differed and nothing stopped the second dispatch. This is the dependency
+  v0.3.0's release notes flagged ("connectors need a result cache before a
+  partial re-run is safe").
+  - `publish_receipts` (migration `0009`) is keyed on the step's derived
+    idempotency key and stores the platform's own `post_id` and `permalink`, so
+    a redelivery reports where the post actually went rather than a bare
+    "already done".
+  - The legacy adapter checks a receipt before dispatching and records one
+    after a successful publish.
+  - The order is deliberately check → dispatch → record. A crash between
+    dispatch and record leaves no receipt, so the next attempt may dispatch
+    again — that is the uncertain-outcome case, and it fails rather than
+    reporting success. A failed dispatch records nothing, so a legitimate later
+    retry is never suppressed.
+
+### Documentation
+
+- `docs/connectors.md` — the receipt, documented as rule 4 of the contract.
+
+### Breaking Changes
+
+None.
+
+### Migration Notes
+
+`0009_publish_receipts` creates one table and alters nothing:
+
+```bash
+npx drizzle-kit push        # or: pnpm exec drizzle-kit migrate
+```
+
+Receipts are never expired. That is intentional: the table grows only with
+distinct step keys, a stale receipt is harmless, and a deleted one is a double
+post.
+
+
 ## [0.4.0] — 2026-09-27
 
 Multi-Account Connections. Connection and Account are now separate entities
@@ -99,11 +143,6 @@ callbacks still write to `social_accounts` for the same reason — switching the
 to `registerConnection()` happens in the same release that drops the columns, so
 the old and new writers are never live at the same time.
 
-[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Hilbras/Hilbras-Studio/releases/tag/v0.1.0
 
 ## [0.3.0] — 2026-09-27
 
@@ -194,10 +233,6 @@ required **only** for goal execution. The signing key must be set wherever
 `/api/inngest` is exposed, or that route accepts requests from anyone. Without
 either, the rest of the application is unaffected.
 
-[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Hilbras/Hilbras-Studio/releases/tag/v0.1.0
 
 ## [0.2.0] — 2026-09-27
 
@@ -255,9 +290,6 @@ approvals.
 
 None. No application code, schema, or configuration changed in this release.
 
-[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Hilbras/Hilbras-Studio/releases/tag/v0.1.0
 
 ## [0.1.0] — 2026-09-24
 
@@ -327,5 +359,9 @@ Goal-Driven AI Runtime roadmap builds on.
 - GitHub Actions pipeline running lint, typecheck, unit tests, integration
   tests, production build, migration validation, and a dependency audit.
 
-[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Hilbras/Hilbras-Studio/releases/tag/v0.1.0

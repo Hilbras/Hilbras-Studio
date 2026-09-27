@@ -74,21 +74,38 @@ Goal → Runtime → Plan → Tasks → Execution → Result
 - [x] **Define the `Connector` / `Capability` interface and wrap the five
       existing publishers in it** (ADR-002 — pulled forward from Phase 3) —
       `src/lib/connectors/`, documented in `docs/connectors.md`.
-- [ ] Runtime Engine on the durable queue (ADR-001).
-- [ ] Define `Goal`, `Task`, `Run` — the state machine and connector interface
-      are done; the persistence model is not.
-- [ ] Execution history.
-- [ ] Runtime logging.
-- [ ] Error handling and a basic retry mechanism — `shouldRetry` and
-      `ConnectorError.retryable` are in place; the executor loop is not.
-- [ ] Persist execution state.
+- [x] Runtime Engine on the durable queue (ADR-001) — `inngest` v4, served at
+      `/api/inngest`.
+- [x] Define `Goal`, `Task`, `Run` — migration `0007`: `goals`, `runs`,
+      `run_steps`, `run_events`.
+- [x] Execution history — `run_events`, append-only.
+- [x] Runtime logging — the same table; refusals and retries recorded.
+- [x] Error handling and a basic retry mechanism — `ConnectorError.retryable`,
+      `shouldRetry`, `MAX_ATTEMPTS`.
+- [x] Persist execution state — `src/lib/runtime/service.ts`.
+- [x] Plan validation gate (`src/lib/runtime/plan.ts`) and the step executor
+      (`executor.ts`).
 
-**Docs:** `architecture.md` ✅, `connectors.md` ✅, `runtime.md`, `goals.md`,
-`execution.md`
+**Docs:** `architecture.md` ✅, `connectors.md` ✅, `runtime.md` ✅,
+`execution.md` ✅, `goals.md` ✅
 
-**Progress:** first increment landed. The two pure cores — the connector
-contract and the execution state machine — are complete and tested, which is the
-part that everything else depends on and the part ADR-002 existed to protect.
+**Progress: complete → v0.3.0.** A goal's steps are persisted and executed
+end to end through the connector contract, with idempotent claiming and
+recorded history.
+
+**Carried into later phases:**
+
+- The **scheduler** that turns a goal's cron into events → Phase 4.
+- The **planner** that turns a goal into a plan → Phase 5. Until it lands, a run
+  executes whatever steps are persisted for it.
+- **Approvals** — `awaiting_approval` is modelled and tested, but nothing
+  suspends on it yet → Phase 6.
+- **Connector result caches** keyed by idempotency key, so a partial re-run is
+  safe → Phase 3. Until then the Runtime declines to re-run a plan whose earlier
+  steps already published.
+- **Account resolution** through the `accounts` table → Phase 2. Today the
+  resolver takes the platform from the account id and the connector reports
+  the real connection state, which still means newest-connection-wins.
 
 ---
 

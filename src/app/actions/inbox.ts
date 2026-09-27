@@ -1,9 +1,7 @@
 "use server";
 
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { listGrants } from "@/lib/accounts/store";
 import { getSessionUser } from "@/lib/session";
 import { decryptSecret } from "@/lib/crypto";
 
@@ -111,10 +109,15 @@ export async function getInboxMessages(): Promise<InboxMessage[]> {
   const session = await getSessionUser();
   if (!session) return [];
 
-  const accounts = await db
-    .select()
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, session.id));
+  // Grants, not connections: the inbox needs a token, and several accounts can
+  // share one grant. Deduplicated because a grant behind three accounts would
+  // otherwise be fetched three times.
+  const seen = new Set<string>();
+  const accounts = (await listGrants(session.id)).filter((g) => {
+    if (seen.has(g.connectionId)) return false;
+    seen.add(g.connectionId);
+    return true;
+  });
 
   const allMessages: InboxMessage[] = [];
 
@@ -158,13 +161,9 @@ export async function sendReply(
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const account = await db
-    .select()
-    .from(socialAccounts)
-    .where(
-      eq(socialAccounts.userId, session.id)
-    )
-    .then((rows) => rows.find((r) => r.platform === parsed.data.platform));
+  const account = (await listGrants(session.id)).find(
+    (g) => g.platform === parsed.data.platform,
+  );
 
   if (!account?.accessTokenEnc) {
     return { success: false, error: "Platform not connected" };

@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { listConnectedPlatforms } from "@/lib/accounts/store";
 import { getSessionUser } from "@/lib/session";
 import { checkConnectionHealth } from "@/lib/connection-health";
 
@@ -11,12 +9,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ connected: [], permissionsMissing: [], expired: [] });
   }
 
-  const rows = await db
-    .select({ platform: socialAccounts.platform })
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, session.id));
-
-  const connected = [...new Set(rows.map((r) => r.platform))];
+  const connected = await listConnectedPlatforms(session.id);
 
   // `connected` only says a token is stored. The health check says whether it
   // can do anything: `permissionsMissing` covers Meta's empty-grant answer

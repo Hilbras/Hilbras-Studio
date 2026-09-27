@@ -1,10 +1,7 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { registerConnection } from "@/lib/accounts/store";
 import { encryptSecret } from "@/lib/crypto";
 import { getSessionUser } from "@/lib/session";
 import { telegramApi } from "@/lib/publish";
@@ -125,26 +122,20 @@ export async function connectTelegramAction(
 
   // Reconnecting replaces the connection — same rule as the OAuth callback,
   // so the publish path can never pick up a stale bot token.
-  // Still writes to `social_accounts` — see the note in the OAuth callback.
-  // Switching writers before the publish path's reads would silently break every
-  // reconnect, so both switch together when the table is dropped.
-  await db
-    .delete(socialAccounts)
-    .where(
-      and(
-        eq(socialAccounts.userId, session.id),
-        eq(socialAccounts.platform, "telegram")
-      )
-    );
-
-  await db.insert(socialAccounts).values({
-    id: randomUUID(),
+  // Records the grant and the chat it targets (ADR-006). Never deletes, so a
+  // second bot or a second chat does not destroy the first.
+  await registerConnection({
     userId: session.id,
     platform: "telegram",
-    platformAccountId: String(chat.result.id),
-    username: displayName,
     accessTokenEnc: encryptSecret(token),
     tokenExpiresAt: null,
+    accounts: [
+      {
+        platformAccountId: String(chat.result.id),
+        handle: displayName,
+        displayName,
+      },
+    ],
   });
 
   return { success: true, chat: displayName };

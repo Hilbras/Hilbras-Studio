@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { accounts, connections } from "@/db/schema";
 import { readThreadsAppSecrets, verifyThreadsSignedRequest } from "@/lib/signed-request";
 
 /**
@@ -44,16 +44,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "invalid signature" }, { status: 401 });
   }
 
+  // Deletes the *account* (ADR-006). Its grant cascades away only if this was
+  // its last account, so a grant shared by several Pages keeps its token.
   const conditions = [
-    eq(socialAccounts.platform, "threads"),
-    eq(socialAccounts.platformAccountId, threadsUserId),
+    eq(accounts.platform, "threads"),
+    eq(accounts.platformAccountId, threadsUserId),
   ];
   // A tenant's own saved secret may only ever touch that tenant's rows; the
   // deployment-level env secret (owner null) is trusted across the deploy.
   if (verified.ownerUserId !== null) {
-    conditions.push(eq(socialAccounts.userId, verified.ownerUserId));
+    conditions.push(eq(accounts.userId, verified.ownerUserId));
   }
-  await db.delete(socialAccounts).where(and(...conditions));
+  const removed = await db
+    .delete(accounts)
+    .where(and(...conditions))
+    .returning({ connectionId: accounts.connectionId });
+
+  // Reclaim a grant nothing reaches any more.
+  for (const { connectionId } of removed) {
+    const [stillUsed] = await db
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(eq(accounts.connectionId, connectionId))
+      .limit(1);
+    if (!stillUsed) {
+      await db.delete(connections).where(eq(connections.id, connectionId));
+    }
+  }
 
   return new NextResponse(null, { status: 200 });
 }

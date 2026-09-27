@@ -25,7 +25,7 @@
 
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
@@ -337,6 +337,67 @@ export async function listAccountsNeedingAttention(
     }
     return [];
   });
+}
+
+
+/**
+ * Platforms a user has at least one account on.
+ *
+ * The v0.1.0 read paths asked `SELECT platform FROM social_accounts` to answer
+ * "what is this user connected to?". After ADR-006 that question is about
+ * *accounts*, not grants, and a user may hold several accounts on one platform —
+ * so this returns distinct platforms rather than assuming one connection each.
+ */
+export async function listConnectedPlatforms(
+  userId: string,
+): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ platform: accounts.platform })
+    .from(accounts)
+    .where(eq(accounts.userId, userId));
+  return rows.map((r) => r.platform);
+}
+
+/** How many accounts a user has on a platform — the UI shows a count, not a toggle. */
+export async function countAccountsOnPlatform(
+  userId: string,
+  platform: string,
+): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(accounts)
+    .where(and(eq(accounts.userId, userId), eq(accounts.platform, platform)));
+  return row?.count ?? 0;
+}
+
+/**
+ * A grant with the accounts behind it, for token readers.
+ *
+ * `connection-health` and `token-maintenance` need the token, not the account
+ * identity — so they read grants rather than accounts, and report per account
+ * where a user can see it.
+ */
+export async function listGrants(userId: string) {
+  return db
+    .select({
+      connectionId: connections.id,
+      platform: connections.platform,
+      accessTokenEnc: connections.accessTokenEnc,
+      tokenExpiresAt: connections.tokenExpiresAt,
+      connectedAt: connections.connectedAt,
+      accountKey: accounts.accountKey,
+      enabled: accounts.enabled,
+    })
+    .from(connections)
+    .innerJoin(
+      accounts,
+      eq(accounts.connectionId, connections.id),
+    )
+    .where(eq(accounts.userId, userId))
+    // Newest first: connection-health takes the first row per platform, and it
+    // has always resolved "newest grant wins". Ascending here would silently
+    // probe the oldest token instead.
+    .orderBy(desc(connections.connectedAt));
 }
 
 /** Bulk lookup the planner uses to resolve a plan's targets. */

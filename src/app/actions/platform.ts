@@ -1,14 +1,12 @@
 "use server";
 
 import { headers } from "next/headers";
-import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { savePlatformCredentialsForUser } from "@/lib/platform-credential-store";
 import { getUserCredentialValue } from "@/lib/credential-store";
 import { getSessionUser } from "@/lib/session";
-import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { disconnectPlatform as removeAllAccountsForPlatform } from "@/lib/accounts/store";
 import { verifyAppCredentials } from "@/lib/platform-app-check";
 import { originFromHeaders } from "@/lib/request-origin";
 import { toPlatformCredentialStatus } from "@/lib/credential-status";
@@ -135,14 +133,10 @@ export async function disconnectPlatform(platform: string): Promise<{ success: b
   if (!spec) return { success: false, error: `Unknown platform: ${platform}` };
 
   try {
-    await db
-      .delete(socialAccounts)
-      .where(
-        and(
-          eq(socialAccounts.userId, session.id),
-          eq(socialAccounts.platform, spec.id)
-        )
-      );
+    // Removes every account on the platform and the grants behind them
+    // (ADR-006). This action is the coarse "remove this platform" control;
+    // per-account removal is disconnectAccount() in the accounts store.
+    await removeAllAccountsForPlatform(session.id, spec.id);
     return { success: true };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : "Failed to disconnect" };

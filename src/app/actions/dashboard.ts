@@ -3,7 +3,7 @@
 import { eq, and, gte, lte, desc, count } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { posts, socialAccounts } from "@/db/schema";
+import { accounts, posts } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 
 export interface DashboardStat {
@@ -123,10 +123,12 @@ export async function getDashboardStats(): Promise<DashboardStat[]> {
         .then((r) => r[0]?.value ?? 0),
     ]);
 
+  // Counts accounts, not connections: a user with three X accounts has three
+  // accounts, and "3 connected accounts" is the number they recognise.
   const connectedCount = await db
     .select({ value: count() })
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, session.id))
+    .from(accounts)
+    .where(eq(accounts.userId, session.id))
     .then((r) => r[0]?.value ?? 0);
 
   const calcChange = (curr: number, prev: number) => {
@@ -243,15 +245,17 @@ export async function getConnectedAccountsWithDetails(): Promise<
   const session = await getSessionUser();
   if (!session) return [];
 
+  // Accounts, not connections: the user recognises their accounts, and one
+  // grant can back several of them.
   const rows = await db
     .select({
-      platform: socialAccounts.platform,
-      username: socialAccounts.username,
-      connectedAt: socialAccounts.connectedAt,
+      platform: accounts.platform,
+      username: accounts.handle,
+      connectedAt: accounts.createdAt,
     })
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, session.id))
-    .orderBy(desc(socialAccounts.connectedAt));
+    .from(accounts)
+    .where(eq(accounts.userId, session.id))
+    .orderBy(desc(accounts.createdAt));
 
   return rows.map((r) => ({
     platform: r.platform,

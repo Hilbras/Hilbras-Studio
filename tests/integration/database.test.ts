@@ -10,7 +10,15 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import * as schema from "../../src/db/schema";
 
-const { chatMessages, chatSessions, memories, posts, socialAccounts, users } = schema;
+const {
+  accounts,
+  chatMessages,
+  chatSessions,
+  connections,
+  memories,
+  posts,
+  users,
+} = schema;
 
 let container: StartedPostgreSqlContainer;
 let pool: Pool;
@@ -150,11 +158,21 @@ describe("PostgreSQL migrations and tenant boundaries", () => {
       userId,
       content: "This memory should cascade",
     });
-    await testDb.insert(socialAccounts).values({
+    // A grant and an account, so the cascade is asserted on the model that now
+    // owns platform state (ADR-006) rather than the dropped `social_accounts`.
+    const connectionId = randomUUID();
+    await testDb.insert(connections).values({
+      id: connectionId,
+      userId,
+      platform: "x",
+    });
+    await testDb.insert(accounts).values({
       id: randomUUID(),
+      connectionId,
       userId,
       platform: "x",
       platformAccountId: "cascade-account",
+      accountKey: "x:cascade",
     });
 
     await testDb.delete(users).where(eq(users.id, userId));
@@ -173,13 +191,18 @@ describe("PostgreSQL migrations and tenant boundaries", () => {
       .where(eq(memories.userId, userId));
     const remainingAccounts = await testDb
       .select()
-      .from(socialAccounts)
-      .where(eq(socialAccounts.userId, userId));
+      .from(accounts)
+      .where(eq(accounts.userId, userId));
+    const remainingConnections = await testDb
+      .select()
+      .from(connections)
+      .where(eq(connections.userId, userId));
 
     expect(remainingSession).toBeUndefined();
     expect(remainingMessages).toHaveLength(0);
     expect(remainingMemories).toHaveLength(0);
     expect(remainingAccounts).toHaveLength(0);
+    expect(remainingConnections).toHaveLength(0);
   });
 
   it("keeps a stored platform secret when only the client ID is edited", async () => {

@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
 import { getSessionUser } from "@/lib/session";
 import { db, schema } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { registerConnection } from "@/lib/accounts/store";
 import { encryptSecret } from "@/lib/crypto";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
@@ -247,33 +245,24 @@ export async function GET(
 
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
 
-  // NOTE: the v1.0 account model (ADR-006) has `registerConnection` ready, but
-  // this callback still writes to `social_accounts` because the publish path,
-  // token maintenance, and connection health all still read that table.
-  // Switching the writer before the readers would mean a reconnect lands in
-  // `connections` while `publish.ts` looks in `social_accounts` — the user's
-  // connection would appear missing with no error anywhere. Both sides switch
-  // together, in the release that drops the table.
-  await db
-    .delete(socialAccounts)
-    .where(
-      and(
-        eq(socialAccounts.userId, session.id),
-        eq(socialAccounts.platform, platformIdStr)
-      )
-    );
-
-  await db.insert(schema.socialAccounts).values({
-    id: randomUUID(),
+  // Records the grant and the account it identifies (ADR-006). This never
+  // deletes: a reconnect repoints the existing account at the fresh grant, so
+  // other accounts on the same platform survive. The previous code deleted every
+  // row for (user, platform) first, which destroyed them.
+  await registerConnection({
     userId: session.id,
     platform: platformIdStr,
-    platformAccountId: platformAccountId ?? tokenData.user_id ?? "unknown",
-    username: profileUsername ?? tokenData.username ?? null,
     accessTokenEnc: encryptSecret(accessToken),
     refreshTokenEnc: tokenData.refresh_token
       ? encryptSecret(tokenData.refresh_token)
       : null,
     tokenExpiresAt: expiresAt,
+    accounts: [
+      {
+        platformAccountId: platformAccountId ?? tokenData.user_id ?? "unknown",
+        handle: profileUsername ?? tokenData.username ?? null,
+      },
+    ],
   });
 
   return respond(

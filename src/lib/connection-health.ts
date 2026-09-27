@@ -2,8 +2,7 @@ import "server-only";
 
 import { desc, eq } from "drizzle-orm";
 
-import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { listGrants } from "@/lib/accounts/store";
 import { decryptSecret } from "@/lib/crypto";
 import {
   isExpiredSessionError,
@@ -55,16 +54,14 @@ export interface ConnectionHealth {
  * prompt is worse than none.
  */
 export async function checkConnectionHealth(userId: string): Promise<ConnectionHealth> {
-  const rows = await db
-    .select({
-      platform: socialAccounts.platform,
-      accessTokenEnc: socialAccounts.accessTokenEnc,
-      tokenExpiresAt: socialAccounts.tokenExpiresAt,
-      connectedAt: socialAccounts.connectedAt,
-    })
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, userId))
-    .orderBy(desc(socialAccounts.connectedAt));
+  // Grants, not connections: health is a property of the token, and several
+  // accounts can share one. Deduplicated below to one probe per platform.
+  const seen = new Set<string>();
+  const rows = (await listGrants(userId)).filter((g) => {
+    if (seen.has(g.connectionId)) return false;
+    seen.add(g.connectionId);
+    return true;
+  });
 
   // Newest row per platform wins — the same rule the publish path resolves by.
   type Newest = (typeof rows)[number];

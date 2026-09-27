@@ -87,6 +87,9 @@ async function publishPost(
     platform,
     input.text,
     input.mediaUrl,
+    // `context.accountId` is the `platform:handle` the step targeted — this is
+    // where a specific account is actually resolved.
+    context.accountId,
   ).then(
     (result) => toPublishResult(platform, result),
     (cause: unknown) => ({ ok: false, error: unknownError(platform, cause) }),

@@ -3,7 +3,7 @@ import "server-only";
 import { and, eq, inArray } from "drizzle-orm";
 
 import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { accounts, connections } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import {
   DEFAULT_TOKEN_LIFETIME_SECONDS,
@@ -53,19 +53,25 @@ export async function refreshExpiringTokens(userId?: string): Promise<TokenRefre
   const refreshable = refreshablePlatforms();
   if (refreshable.length === 0) return summary;
 
-  const conditions = [inArray(socialAccounts.platform, refreshable)];
-  if (userId) conditions.push(eq(socialAccounts.userId, userId));
-
+  // Grants, not accounts (ADR-006): the token lives on the connection, and
+  // refreshing per account would refresh the same grant once per account behind
+  // it. `userId` still scopes the scan by joining through the user's accounts.
+  const conditions = [inArray(connections.platform, refreshable)];
   const rows = await db
     .select({
-      id: socialAccounts.id,
-      platform: socialAccounts.platform,
-      accessTokenEnc: socialAccounts.accessTokenEnc,
-      tokenExpiresAt: socialAccounts.tokenExpiresAt,
-      connectedAt: socialAccounts.connectedAt,
+      id: connections.id,
+      platform: connections.platform,
+      accessTokenEnc: connections.accessTokenEnc,
+      tokenExpiresAt: connections.tokenExpiresAt,
+      connectedAt: connections.connectedAt,
     })
-    .from(socialAccounts)
-    .where(and(...conditions));
+    .from(connections)
+    .innerJoin(accounts, eq(accounts.connectionId, connections.id))
+    .where(
+      userId
+        ? and(and(...conditions), eq(accounts.userId, userId))
+        : and(...conditions),
+    );
 
   const now = Date.now();
 
@@ -101,14 +107,14 @@ export async function refreshExpiringTokens(userId?: string): Promise<TokenRefre
     }
 
     await db
-      .update(socialAccounts)
+      .update(connections)
       .set({
         accessTokenEnc: encryptSecret(refreshed.accessToken),
         tokenExpiresAt: new Date(
           now + (refreshed.expiresIn ?? DEFAULT_TOKEN_LIFETIME_SECONDS) * 1000
         ),
       })
-      .where(eq(socialAccounts.id, row.id));
+      .where(eq(connections.id, row.id));
 
     summary.refreshed++;
   }

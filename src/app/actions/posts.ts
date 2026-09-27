@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import { eq, and, desc } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { posts, socialAccounts } from "@/db/schema";
+import { posts } from "@/db/schema";
+import { listConnectedPlatforms } from "@/lib/accounts/store";
 import { getSessionUser } from "@/lib/session";
 import { publishDuePosts } from "@/lib/scheduled-posts";
 
@@ -123,12 +124,7 @@ export async function getConnectedPlatforms(): Promise<string[]> {
   const session = await getSessionUser();
   if (!session) return [];
 
-  const rows = await db
-    .select({ platform: socialAccounts.platform })
-    .from(socialAccounts)
-    .where(eq(socialAccounts.userId, session.id));
-
-  return rows.map((r) => r.platform);
+  return listConnectedPlatforms(session.id);
 }
 
 /** Check which platforms have credentials configured (but may not have OAuth yet). */

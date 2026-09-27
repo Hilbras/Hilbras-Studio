@@ -2,7 +2,7 @@ import "server-only";
 
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
-import { socialAccounts } from "@/db/schema";
+import { accounts, connections } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getPublishingCapability, PLATFORM_REGISTRY } from "@/lib/platforms";
 import {
@@ -137,26 +137,46 @@ function delay(ms: number): Promise<void> {
  */
 async function getConnectedAccount(
   userId: string,
-  platform: string
+  platform: string,
+  accountKey?: string | null
 ): Promise<AccountLookup> {
-  const [account] = await db
+  // Resolves through `accounts` -> `connections` (ADR-006). This used to read
+  // `social_accounts` and take `.limit(1)` by newest `connected_at`, so the most
+  // recently connected account always won.
+  const candidates = await db
     .select({
-      id: socialAccounts.id,
-      accessTokenEnc: socialAccounts.accessTokenEnc,
-      platformAccountId: socialAccounts.platformAccountId,
-      tokenExpiresAt: socialAccounts.tokenExpiresAt,
-      connectedAt: socialAccounts.connectedAt,
+      connectionId: accounts.connectionId,
+      platformAccountId: accounts.platformAccountId,
+      accessTokenEnc: connections.accessTokenEnc,
+      tokenExpiresAt: connections.tokenExpiresAt,
+      connectedAt: connections.connectedAt,
     })
-    .from(socialAccounts)
+    .from(accounts)
+    .innerJoin(connections, eq(accounts.connectionId, connections.id))
     .where(
       and(
-        eq(socialAccounts.userId, userId),
-        eq(socialAccounts.platform, platform)
-      )
+        eq(accounts.userId, userId),
+        eq(accounts.platform, platform),
+        ...(accountKey
+          ? [eq(accounts.accountKey, accountKey)]
+          : [eq(accounts.enabled, true)]),
+      ),
     )
-    .orderBy(desc(socialAccounts.connectedAt))
-    .limit(1);
+    .orderBy(desc(connections.connectedAt));
 
+  // An explicit key that resolves to nothing is a caller error and must not
+  // fall back to some other account.
+  if (accountKey && candidates.length === 0) {
+    return { ok: false, problem: "not_connected" };
+  }
+
+  // No key: exactly one enabled account is unambiguous. Several means the
+  // caller must say which — guessing is how a post lands on the wrong account.
+  if (!accountKey && candidates.length !== 1) {
+    return { ok: false, problem: "not_connected" };
+  }
+
+  const account = candidates[0];
   if (!account?.accessTokenEnc) return { ok: false, problem: "not_connected" };
 
   let accessToken: string;
@@ -184,12 +204,12 @@ async function getConnectedAccount(
             (refreshed.expiresIn ?? DEFAULT_TOKEN_LIFETIME_SECONDS) * 1000
         );
         await db
-          .update(socialAccounts)
+          .update(connections)
           .set({
             accessTokenEnc: encryptSecret(accessToken),
             tokenExpiresAt: newExpiry,
           })
-          .where(eq(socialAccounts.id, account.id));
+          .where(eq(connections.id, account.connectionId));
       }
       // A failed refresh keeps the still-valid old token: the window is wide
       // enough that the next publish or cron run gets another attempt.
@@ -332,9 +352,10 @@ async function instagramPermalink(
 async function publishToTelegram(
   userId: string,
   text: string,
-  imageUrl?: string
+  imageUrl?: string,
+  accountKey?: string
 ): Promise<PublishResult> {
-  const account = await getConnectedAccount(userId, "telegram");
+  const account = await getConnectedAccount(userId, "telegram", accountKey);
   if (!account.ok) {
     return {
       platform: "telegram",
@@ -419,8 +440,8 @@ async function publishToTelegram(
  * Host must be `graph.instagram.com` because credentials come from the
  * Instagram API with Instagram Login product (see Meta "Content Publishing").
  */
-async function publishToInstagram(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
-  const account = await getConnectedAccount(userId, "instagram");
+async function publishToInstagram(userId: string, text: string, imageUrl?: string, accountKey?: string): Promise<PublishResult> {
+  const account = await getConnectedAccount(userId, "instagram", accountKey);
   if (!account.ok) {
     return { platform: "instagram", success: false, error: connectionError("instagram", account.problem) };
   }
@@ -507,8 +528,8 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
 /**
  * Publish to Facebook Pages via Graph API.
  */
-async function publishToFacebook(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
-  const account = await getConnectedAccount(userId, "facebook");
+async function publishToFacebook(userId: string, text: string, imageUrl?: string, accountKey?: string): Promise<PublishResult> {
+  const account = await getConnectedAccount(userId, "facebook", accountKey);
   if (!account.ok) {
     return { platform: "facebook", success: false, error: connectionError("facebook", account.problem) };
   }
@@ -578,8 +599,8 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
  * Publish to X (Twitter) via API v2.
  * Note: X posting requires elevated access (Basic or Pro tier).
  */
-async function publishToX(userId: string, text: string): Promise<PublishResult> {
-  const account = await getConnectedAccount(userId, "x");
+async function publishToX(userId: string, text: string, accountKey?: string): Promise<PublishResult> {
+  const account = await getConnectedAccount(userId, "x", accountKey);
   if (!account.ok) {
     return { platform: "x", success: false, error: connectionError("x", account.problem) };
   }
@@ -716,8 +737,8 @@ async function threadsPermalink(
  *
  * Docs: POST /{threads-user-id}/threads → POST /{threads-user-id}/threads_publish
  */
-async function publishToThreads(userId: string, text: string, imageUrl?: string): Promise<PublishResult> {
-  const account = await getConnectedAccount(userId, "threads");
+async function publishToThreads(userId: string, text: string, imageUrl?: string, accountKey?: string): Promise<PublishResult> {
+  const account = await getConnectedAccount(userId, "threads", accountKey);
   if (!account.ok) {
     return { platform: "threads", success: false, error: connectionError("threads", account.problem) };
   }
@@ -840,19 +861,20 @@ export async function publishForUser(
   userId: string,
   platform: string,
   text: string,
-  imageUrl?: string
+  imageUrl?: string,
+  accountKey?: string
 ): Promise<PublishResult> {
   switch (platform) {
     case "instagram":
-      return publishToInstagram(userId, text, imageUrl);
+      return publishToInstagram(userId, text, imageUrl, accountKey);
     case "facebook":
-      return publishToFacebook(userId, text, imageUrl);
+      return publishToFacebook(userId, text, imageUrl, accountKey);
     case "x":
-      return publishToX(userId, text);
+      return publishToX(userId, text, accountKey);
     case "threads":
-      return publishToThreads(userId, text, imageUrl);
+      return publishToThreads(userId, text, imageUrl, accountKey);
     case "telegram":
-      return publishToTelegram(userId, text, imageUrl);
+      return publishToTelegram(userId, text, imageUrl, accountKey);
     default: {
       const capability = getPublishingCapability(platform);
       return {

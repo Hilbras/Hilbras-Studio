@@ -27,27 +27,6 @@ export const users = pgTable("users", {
 });
 
 /**
- * social_accounts — OAuth connections to external platforms (Instagram, X, etc.).
- * Tokens are encrypted at rest before insertion (encryption layer comes with the connectors phase).
- */
-export const socialAccounts = pgTable("social_accounts", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  platform: text("platform").notNull(), // instagram | facebook | threads | x | linkedin | tiktok | youtube | pinterest | reddit
-  platformAccountId: text("platform_account_id").notNull(), // id on the external platform
-  username: text("username"),
-  accessTokenEnc: text("access_token_enc"),
-  refreshTokenEnc: text("refresh_token_enc"),
-  tokenExpiresAt: timestamp("token_expires_at"),
-  connectedAt: timestamp("connected_at").notNull().defaultNow(),
-});
-
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-
-/**
  * user_preferences — per-user AI behavior toggles (Settings page).
  * One row per user, created lazily with defaults on first read.
  */

@@ -130,7 +130,18 @@ check("the tag does not already exist", () => {
   if (existing) throw new Error(`${tag} already exists`);
 });
 
-check("HEAD has not been pushed yet", () => {
+/**
+ * The tag must point at a commit the remote already has.
+ *
+ * A tag on an unpushed commit publishes nothing: `git push --tags` would send
+ * the tag, but a clone would resolve it to a commit it cannot fetch, and the
+ * release would exist without its contents.
+ *
+ * This check was previously inverted — it threw when HEAD *equalled* the remote
+ * while its message told you to push, so with any upstream configured it could
+ * never pass. Found by running the gate for v0.5.0, not by reading it.
+ */
+check("HEAD is pushed to its upstream", () => {
   const sha = git("rev-parse", "HEAD");
   let remote;
   try {
@@ -138,12 +149,13 @@ check("HEAD has not been pushed yet", () => {
   } catch {
     return "no upstream configured — skipping";
   }
-  if (sha === remote) {
+  if (sha !== remote) {
     throw new Error(
-      "HEAD is already pushed. Push the release commit first, then tag it, " +
-        "so the tag and the commit are published together.",
+      `HEAD (${sha.slice(0, 7)}) is not on ${remote}. Push the release commit ` +
+        "before tagging, so the tag and the commit are published together.",
     );
   }
+  return sha.slice(0, 7);
 });
 
 // --- secrets -------------------------------------------------------------

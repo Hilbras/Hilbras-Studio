@@ -74,6 +74,11 @@ target model can finally express *which account* a post goes to.
   the first `db.transaction()` in the codebase was introduced. The transaction
   handle type is derived from `db.transaction` rather than hand-written, so a
   Drizzle upgrade cannot silently drift it.
+- **Fixed an inverted check in the release gate.** `release:check` verified that
+  HEAD had *not* been pushed, while its own error message told you to push the
+  release commit before tagging. With any upstream configured the check could
+  never pass, so no release could clear the gate. It now verifies HEAD **is**
+  pushed, which is what the message always meant and what ADR-007 requires.
 
 ### Documentation
 

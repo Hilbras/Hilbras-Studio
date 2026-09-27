@@ -248,3 +248,185 @@ export const memories = pgTable(
 );
 
 export type Memory = typeof memories.$inferSelect;
+
+/**
+ * goals — what the user asked for, in their own words.
+ *
+ * A Goal is the stable, user-owned object. It outlives any individual Run: the
+ * schedule fires it repeatedly, and each firing produces a new Run (see
+ * `runs`). Nothing here is machine-generated — `statement` is the user's text
+ * and `scheduleCron` is the cadence they chose. Phase 4 adds the parser that
+ * turns the statement into a structured target set.
+ */
+export const goals = pgTable(
+  "goals",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Short label the user gives the goal, e.g. "Daily AI posts". */
+    title: text("title").notNull(),
+    /** The goal as the user stated it. Kept verbatim for the AI planner. */
+    statement: text("statement").notNull(),
+    /**
+     * Cron expression, UTC. Phase 4 owns parsing; this column only records the
+     * already-validated value so the scheduler never re-parses user input.
+     */
+    scheduleCron: text("schedule_cron").notNull(),
+    /** IANA zone the schedule is expressed in, e.g. "Europe/Berlin". */
+    scheduleTimezone: text("schedule_timezone").notNull().default("UTC"),
+    /**
+     * Account identifiers this goal targets, as a JSON array of
+     * `platform:handle` strings. Phase 2 replaces this with a real join to the
+     * accounts table; the shape is already a list of accounts rather than a
+     * comma-separated string like `posts.platforms`.
+     */
+    targetAccounts: text("target_accounts").notNull().default("[]"),
+    /** active | paused | archived */
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [index("goals_user_status_idx").on(t.userId, t.status)]
+);
+
+export type Goal = typeof goals.$inferSelect;
+export type NewGoal = typeof goals.$inferInsert;
+
+
+/**
+ * runs — one execution of a Goal.
+ *
+ * A scheduled goal creates a new Run per fire; a retry creates a new Run rather
+ * than reviving a failed one (see `src/lib/runtime/state.ts`). That keeps
+ * "attempt" monotonic and makes history an append-only record instead of
+ * overwritten state.
+ *
+ * `idempotencyKey` is unique and is what makes the queue safe to re-deliver: a
+ * duplicate delivery for the same goal + schedule slot collides here and is
+ * discarded rather than publishing twice (ADR-005).
+ */
+export const runs = pgTable(
+  "runs",
+  {
+    id: text("id").primaryKey(),
+    goalId: text("goal_id")
+      .notNull()
+      .references(() => goals.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** pending | running | awaiting_approval | completed | failed | cancelled */
+    state: text("state").notNull().default("pending"),
+    /** 1 for the first attempt; incremented per retry. */
+    attempt: integer("attempt").notNull().default(1),
+    /**
+     * Unique per (goal, schedule slot). The queue is at-least-once, so this is
+     * the only thing standing between a redelivery and a duplicate publish.
+     */
+    idempotencyKey: text("idempotency_key").notNull(),
+    /** The schedule slot this run belongs to, e.g. "2026-09-27T10:00Z". */
+    scheduleSlot: text("schedule_slot").notNull(),
+    /** The generated plan, as JSON. Null until a planner has run. */
+    plan: text("plan"),
+    /** Short human-readable summary of why the run ended, if it failed. */
+    errorSummary: text("error_summary"),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    unique("runs_idempotency_key_unique").on(t.idempotencyKey),
+    index("runs_goal_created_idx").on(t.goalId, t.createdAt),
+    index("runs_state_idx").on(t.state),
+  ]
+);
+
+export type Run = typeof runs.$inferSelect;
+export type NewRun = typeof runs.$inferInsert;
+
+
+/**
+ * run_steps — one step of a plan.
+ *
+ * A step names a *capability*, never a platform API. The connector is resolved
+ * at execution time from the target account, which is what lets the same plan
+ * run against different platforms and lets an unsupported target be caught
+ * during plan validation rather than mid-publish.
+ */
+export const runSteps = pgTable(
+  "run_steps",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    /** Position in the plan. The idempotency key is derived from this. */
+    stepIndex: integer("step_index").notNull(),
+    /** Human label, e.g. "Publish to X". */
+    label: text("label").notNull(),
+    /** The capability this step invokes, e.g. "publish_post". */
+    capability: text("capability").notNull(),
+    /** `platform:handle` this step targets. Null for steps with no target. */
+    targetAccount: text("target_account"),
+    /** pending | running | awaiting_approval | completed | failed | cancelled */
+    state: text("state").notNull().default("pending"),
+    /** Tool arguments, as JSON. Never contains a credential. */
+    input: text("input"),
+    /** Result, as JSON. Written by the Runtime, never by a client (ADR-003). */
+    result: text("result"),
+    /** Typed ConnectorError, as JSON. */
+    error: text("error"),
+    /** Derived from (runId, stepIndex, targetAccount) — see ADR-005. */
+    idempotencyKey: text("idempotency_key").notNull(),
+    startedAt: timestamp("started_at"),
+    finishedAt: timestamp("finished_at"),
+  },
+  (t) => [
+    unique("run_steps_run_index_unique").on(t.runId, t.stepIndex),
+    unique("run_steps_idempotency_key_unique").on(t.idempotencyKey),
+    index("run_steps_run_idx").on(t.runId, t.stepIndex),
+  ]
+);
+
+export type RunStep = typeof runSteps.$inferSelect;
+export type NewRunStep = typeof runSteps.$inferInsert;
+
+
+/**
+ * run_events — the execution history and the runtime log.
+ *
+ * Append-only. Every state transition, retry, approval decision, and tool
+ * outcome lands here, which is what makes a run explainable after the fact
+ * without reconstructing it from the mutable tables above. Nothing updates or
+ * deletes a row.
+ */
+export const runEvents = pgTable(
+  "run_events",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    /** Null for run-level events; set for step-scoped ones. */
+    stepId: text("step_id").references(() => runSteps.id, {
+      onDelete: "cascade",
+    }),
+    /** debug | info | warn | error */
+    level: text("level").notNull().default("info"),
+    /** A stable event name, e.g. "run.started", "step.retry_scheduled". */
+    event: text("event").notNull(),
+    /** Structured detail, as JSON. Must never contain a secret. */
+    detail: text("detail"),
+    at: timestamp("at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("run_events_run_at_idx").on(t.runId, t.at),
+    index("run_events_step_idx").on(t.stepId),
+  ]
+);
+
+export type RunEvent = typeof runEvents.$inferSelect;
+export type NewRunEvent = typeof runEvents.$inferInsert;
+

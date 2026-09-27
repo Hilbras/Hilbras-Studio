@@ -11,6 +11,100 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-27
+
+Multi-Account Connections. Connection and Account are now separate entities
+(ADR-006), and connecting a second account on a platform no longer destroys the
+first.
+
+### Features
+
+- **`connections` and `accounts` tables** — a grant is a connection; an identity
+  is an account. One grant can reach several accounts (a Facebook login covering
+  several Pages), and one platform can have several grants (two X logins). The
+  v0.1.0 model had no way to express either.
+- **`account_key` (`platform:handle`)** — the stable reference a Goal, a plan
+  step, and `post_targets` all use. Unique per user, so "which account is this?"
+  is answerable exactly.
+- **`registerConnection()`** — the single write path for a grant and the accounts
+  it reaches. Idempotent per identity: a reconnect updates the account in place
+  and repoints it at the fresh grant, so its id stays stable and the v0.1.0
+  duplicate-row problem cannot recur.
+- **Granular disconnect** — `disconnectAccount` removes one account and drops the
+  grant only if it was that grant's last account, so removing a single Facebook
+  Page does not revoke the login covering two others.
+- **Per-account enable/disable** — user intent, separate from health. A disabled
+  account is refused by plan validation with `account_disabled` rather than
+  silently dropped from a run, and disabling one account never affects others on
+  the same platform.
+- **Per-account capabilities** — narrower than the platform's set, because a
+  Facebook profile and a Page are not the same account type. Connect-only
+  platforms resolve to an empty set, so they stay visible and selectable-free.
+- **`listAccountsNeedingAttention()`** — surfaces accounts whose grant is
+  expired or tokenless, as distinct from disabled ones.
+- **Async account resolver** — the Runtime can now resolve *which* account a
+  step targets through the accounts table, rather than reading the platform off
+  an account key.
+
+### Bug Fixes
+
+- **Connecting a second account on a platform deleted the first.** Both OAuth
+  callbacks ran `DELETE FROM social_accounts WHERE user_id = ? AND platform = ?`
+  before inserting. This was not "the newest connection wins" — the earlier
+  account was destroyed outright. `registerConnection()` never deletes.
+- **Reconnecting appended duplicate rows.** `social_accounts` had no unique
+  constraint on `(user_id, platform, platform_account_id)`, so repeated connects
+  accumulated rows for accounts the user no longer intended to keep, and the
+  publish path could select a stale one.
+- **Cross-tenant access is refused in the query.** Every account read and write
+  takes `userId` and filters on it, so one user's account key cannot resolve to
+  another user's account even though the key text is identical.
+
+### Documentation
+
+- `docs/accounts.md` — the account model, `account_key`, enable-vs-health, and
+  per-account capabilities
+- `docs/connections.md` — grants, why they are not unique per platform,
+  registering and disconnecting
+- `docs/runtime.md`, `docs/execution.md`, `docs/goals.md` — unchanged in v0.4.0
+
+### Breaking Changes
+
+None. No existing behaviour changed. The five publishers and the v0.1.0 publish
+path are untouched.
+
+### Migration Notes
+
+`0008_accounts_and_connections` creates `connections`, `accounts`, and
+`post_targets`, and **backfills** them. It alters and drops nothing.
+
+```bash
+npx drizzle-kit push        # or: pnpm exec drizzle-kit migrate
+```
+
+Backfill behaviour worth knowing:
+
+- Each `social_accounts` row becomes one connection plus the one account it
+  identified, **reusing the same ids** so a rollback needs no re-derivation.
+- Accounts with no `username` fall back to the platform account id for their
+  `account_key` rather than producing a bare `x:`.
+- Pre-existing duplicate handles are disambiguated with a `#<row id>` suffix so
+  the new unique index still holds.
+- `posts.platforms` is split on commas into `post_targets`; empty entries are
+  skipped rather than becoming phantom targets that plan validation would reject.
+
+**`social_accounts` and `posts.platforms` remain authoritative** for the v0.1.0
+publish path through v0.4.x, and are contracted in **v0.5.0**. The OAuth
+callbacks still write to `social_accounts` for the same reason — switching them
+to `registerConnection()` happens in the same release that drops the columns, so
+the old and new writers are never live at the same time.
+
+[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Hilbras/Hilbras-Studio/releases/tag/v0.1.0
+
 ## [0.3.0] — 2026-09-27
 
 Runtime Foundation. The Runtime now exists and can execute a Goal end to end:

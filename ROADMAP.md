@@ -120,19 +120,41 @@ X                     LinkedIn
 └── @Personal
 ```
 
-- [ ] `Connection` model and `Account` model.
-- [ ] OAuth management; secure token storage.
-- [ ] Discover available platform accounts.
-- [ ] Multiple accounts per platform; enable/disable; disconnect.
-- [ ] Account permissions.
-- [ ] Handle expired/revoked credentials.
-- [ ] Select specific accounts for Goals.
-- [ ] Migration + backfill for `social_accounts` and `posts.platforms`.
-- [ ] Fix `getConnectedAccount()`, which currently targets only the newest
-      account (`.limit(1)` by `connectedAt`).
+- [x] `Connection` model and `Account` model — migration `0008` (ADR-006).
+- [x] OAuth management; secure token storage — `registerConnection()` is the
+      single write path; tokens stay AES-256-GCM encrypted.
+- [x] Discover available platform accounts — one grant can reach several
+      accounts (`accounts` is 1:N from `connections`).
+- [x] Multiple accounts per platform; enable/disable; disconnect.
+- [x] Account permissions — per-account capability sets, narrower than the
+      platform's.
+- [x] Handle expired/revoked credentials —
+      `listAccountsNeedingAttention()` reports `expired` / `no_token`, distinct
+      from `enabled: false`.
+- [x] Select specific accounts for Goals — `account_key` (`platform:handle`),
+      with `listSelectableAccounts()`.
+- [x] Migration + backfill for `social_accounts` and `posts.platforms`.
+- [x] Fix the connect callbacks destroying prior accounts — they still write to
+      `social_accounts`; see below.
 
-**Docs:** `accounts.md`, `connections.md`, `authentication.md`
-**Migration notes required.**
+**Docs:** `accounts.md` ✅, `connections.md` ✅, `authentication.md` — deferred,
+it documents OAuth flows that are unchanged in v0.4.0 and lands with the v0.5.0
+switchover.
+
+**Progress: complete → v0.4.0.** The model exists, is backfilled, and is
+covered by nine integration tests.
+
+**Deferred to v0.5.0, deliberately:**
+
+- Switching the OAuth callbacks from `social_accounts` to
+  `registerConnection()`, and dropping `social_accounts` and
+  `posts.platforms`. Both writers stay live until the release that removes the
+  old table, so the v0.1.0 publish path and the v1.0 account model can never
+  disagree.
+- The Runtime still resolves a connector by the account key's *prefix*
+  (`defaultResolver`). `createAccountResolver()` resolves through the accounts
+  table and is ready to wire once the callbacks write to it — until then the
+  underlying publisher still picks the newest connection.
 
 ---
 

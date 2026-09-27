@@ -46,11 +46,15 @@ export interface ExecutableStep {
 
 export interface ExecutorDeps {
   /**
-   * Resolve a `platform:handle` to a connector. Injected so a test can supply
-   * a fake, and so Phase 2 can resolve through the accounts table without
-   * changing this file.
+   * Resolve a `platform:handle` to a connector, or `null` if it cannot act.
+   *
+   * May be async: the real resolver looks the account up in the `accounts`
+   * table, which is a database read. A sync resolver is still valid, so
+   * `executeStep` stays testable with a plain function.
    */
-  resolveConnector: (accountId: string) => Connector | null;
+  resolveConnector: (
+    accountKey: string,
+  ) => Connector | null | Promise<Connector | null>;
 }
 
 export interface StepExecution {
@@ -97,7 +101,7 @@ export async function executeStep(
   }
 
   // Fail closed. An account that cannot be resolved is not a silent success.
-  const connector = deps.resolveConnector(step.targetAccount);
+  const connector = await deps.resolveConnector(step.targetAccount);
   if (!connector) {
     return failed({
       code: "not_connected",
@@ -168,17 +172,48 @@ export async function executeStep(
 }
 
 /**
- * The default resolver, wired to the connector registry.
+ * A resolver that consults the accounts table (ADR-006).
  *
- * It splits `platform:handle` and looks the platform up. It cannot yet confirm
- * that *this* account is connected — that is the `.limit(1)`-by-newest
- * limitation Phase 2 removes — so the account id is carried into the connector
- * context and the connector reports the real connection state.
+ * This is what makes multi-account real. The registry-only resolver can only
+ * read the platform off an account key, so two accounts on the same platform
+ * are indistinguishable and the underlying publisher still picks the newest
+ * connection.
+ *
+ * Three things are refused here rather than at publish time, where the message
+ * would be much harder to act on: an unknown account key, a **disabled** one,
+ * and an account whose platform has no publisher. Plan validation already
+ * catches these, so reaching one here means the plan was built against a stale
+ * view of the accounts — refusing is the correct response, not a fallback.
+ *
+ * A server action wires this in; the registry-only resolver stays the default
+ * so `executeStep` remains usable without a database.
+ */
+export function createAccountResolver(
+  userId: string,
+): ExecutorDeps["resolveConnector"] {
+  return async (accountKey) => {
+    if (!accountKey) return null;
+
+    const { resolveAccount } = await import("@/lib/accounts/store");
+    const account = await resolveAccount(userId, accountKey);
+    if (!account || !account.enabled) return null;
+
+    return getConnector(account.platform);
+  };
+}
+
+/**
+ * The registry-only resolver.
+ *
+ * Identifies the platform from the account key's prefix. It cannot confirm
+ * that *this* account is connected or enabled, so it is a development and
+ * unit-test default only — production execution uses
+ * `createAccountResolver`.
  */
 export const defaultResolver: ExecutorDeps["resolveConnector"] = (
-  accountId,
+  accountKey,
 ) => {
-  const platform = accountId.split(":")[0];
+  const platform = accountKey.split(":")[0];
   return platform ? getConnector(platform) : null;
 };
 

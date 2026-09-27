@@ -430,3 +430,116 @@ export const runEvents = pgTable(
 export type RunEvent = typeof runEvents.$inferSelect;
 export type NewRunEvent = typeof runEvents.$inferInsert;
 
+/**
+ * connections — an authorization grant (ADR-006).
+ *
+ * A connection is the *permission*: a user's signed token for a platform, its
+ * expiry, and its refresh state. It is not an account. One grant can cover
+ * several accounts — a single Facebook login may authorise several Pages — and
+ * a user may hold several grants for the same platform by connecting twice.
+ * That is why this is not unique on (user_id, platform).
+ *
+ * Backfilled from `social_accounts` in migration 0008. That table stays in use
+ * through v0.4.x and is contracted in v0.5.0 (architecture §6, resolution 6).
+ */
+export const connections = pgTable(
+  "connections",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    accessTokenEnc: text("access_token_enc"),
+    refreshTokenEnc: text("refresh_token_enc"),
+    tokenExpiresAt: timestamp("token_expires_at"),
+    connectedAt: timestamp("connected_at").notNull().defaultNow(),
+  },
+  (t) => [index("connections_user_platform_idx").on(t.userId, t.platform)]
+);
+
+export type Connection = typeof connections.$inferSelect;
+export type NewConnection = typeof connections.$inferInsert;
+
+/**
+ * accounts — an identity on a platform, reached through a connection.
+ *
+ * This is what a Goal targets. The unique constraint is what makes
+ * "discover the accounts this grant can reach" idempotent: reconnecting the
+ * same account updates the existing row instead of appending a duplicate.
+ * `social_accounts` had no such constraint, which is how it accumulated rows
+ * for accounts the user no longer intended to keep.
+ *
+ * `enabled` is user intent, not health. A disabled account is skipped by plan
+ * validation rather than being silently dropped from a run, and disabling one
+ * account never disables publishing on the same platform elsewhere.
+ */
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: text("id").primaryKey(),
+    connectionId: text("connection_id")
+      .notNull()
+      .references(() => connections.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    /** The identity's id on the platform. */
+    platformAccountId: text("platform_account_id").notNull(),
+    /** Stable `platform:handle` reference used by goals and plans. */
+    accountKey: text("account_key").notNull(),
+    /** @handle or login, for display. */
+    handle: text("handle"),
+    displayName: text("display_name"),
+    enabled: boolean("enabled").notNull().default(true),
+    /**
+     * Capability names this account supports, as a JSON array. Narrower than
+     * the platform's set — a Facebook profile and a Page are not the same
+     * account type. Null until capabilities are resolved for the account.
+     */
+    capabilities: text("capabilities"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    unique("accounts_user_platform_identity_unique").on(
+      t.userId,
+      t.platform,
+      t.platformAccountId,
+    ),
+    unique("accounts_account_key_unique").on(t.userId, t.accountKey),
+    index("accounts_user_platform_idx").on(t.userId, t.platform),
+    index("accounts_connection_idx").on(t.connectionId),
+  ]
+);
+
+export type Account = typeof accounts.$inferSelect;
+export type NewAccount = typeof accounts.$inferInsert;
+
+/**
+ * post_targets — which platforms a post went to.
+ *
+ * Replaces `posts.platforms`, a comma-separated string that cannot express
+ * per-account targeting. Backfilled by splitting that column; the old column
+ * is still written and still read during v0.4.x, and is dropped in v0.5.0.
+ */
+export const postTargets = pgTable(
+  "post_targets",
+  {
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    /** `platform:handle` when a specific account was chosen. */
+    accountKey: text("account_key"),
+  },
+  (t) => [
+    index("post_targets_post_idx").on(t.postId),
+    index("post_targets_platform_idx").on(t.platform),
+  ]
+);
+
+export type PostTarget = typeof postTargets.$inferSelect;
+export type NewPostTarget = typeof postTargets.$inferInsert;
+
+

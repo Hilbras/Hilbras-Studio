@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.3.0
+**Current version:** v0.4.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and

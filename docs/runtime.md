@@ -162,16 +162,39 @@ run that already finished on its own.
 
 ---
 
+## The step order
+
+```
+start run
+  │
+  ├─ plan-run ────────────  writes run_steps, or fails the run
+  │
+  ├─ load steps
+  │
+  ├─ for each step, in order
+  │     ├─ resolve $refs against settled results
+  │     ├─ dispatch: a connector tool, or a Runtime tool
+  │     └─ record the outcome
+  │
+  └─ finish run
+```
+
+Planning is the first thing that happens to a run, and it is the only step that
+can end one before a single dispatch. See
+[`runtime/planning.md`](./runtime/planning.md).
+
+---
+
 ## Not yet implemented
 
-- the **planner** that turns a goal into a plan (Phase 5)
 - **approvals**, which is what the queue was chosen for (Phase 6)
 
-The **scheduler** that converts a goal's cron into events shipped in Phase 4
-(v0.6.0) — see [`scheduling.md`](./scheduling.md).
+The **planner** and the **scheduler** shipped in Phase 5 (v0.7.0) and Phase 4
+(v0.6.0) respectively — see [`runtime/planning.md`](./runtime/planning.md) and
+[`scheduling.md`](./scheduling.md).
 
-A goal's steps are written by the planner when it lands. Until then a fired goal
-has none, and `executeGoalRun` now **fails** the run with a `run.no_steps` event
-rather than settling it as `completed`. A no-op that reports success is the worst
-outcome available here: the user sees a green run and no post.
+`run.no_steps` remains in `executeGoalRun` as a backstop. It was the honest
+failure for a goal that fired with nothing to do; now that the planner writes the
+steps, reaching it means the planner was bypassed, and that is still worth a loud
+failure rather than a green one.
 

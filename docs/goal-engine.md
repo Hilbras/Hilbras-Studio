@@ -29,9 +29,9 @@ Scheduling itself is documented separately in [`scheduling.md`](./scheduling.md)
 
 **A run with no steps reported `completed`.**
 
-Nothing in the codebase has ever written a `run_steps` row — that is Phase 5's
-planner's job. So a goal would fire, load zero steps, execute nothing, and settle
-as a successful run. The user sees a green run and no post.
+Nothing in the codebase had ever written a `run_steps` row, so a goal would fire,
+load zero steps, execute nothing, and settle as a successful run. The user sees a
+green run and no post.
 
 A no-op that reports success is the worst outcome available to this system, so
 `executeGoalRun` now refuses:
@@ -40,9 +40,11 @@ A no-op that reports success is the worst outcome available to this system, so
 run.no_steps → transitionRun(fail) → outcome: "no_plan"
 ```
 
-The gap is now loud, in the run's own history, instead of silent. The event's
-detail says it is expected until AI planning ships, so the failure reads as a
-known limitation rather than a bug.
+The gap became loud, in the run's own history, instead of silent. That check is
+still there in v0.7.0 and is now a **backstop**: the planner writes the steps, so
+a run with none means the planner was bypassed, and that is worth a loud failure
+rather than a green one. It is not the mechanism by which a goal with no plan
+gets through.
 
 ---
 
@@ -164,12 +166,6 @@ Some things it correctly refuses to do:
 
 **No Goals UI.** Phase 7 (v0.9.0) owns the Goals dashboard and the creation form.
 This phase ships the engine and the service those screens will call.
-
-**No natural-language planning.** Phase 5 (v0.7.0). The statement is stored and
-served verbatim; nothing here interprets it beyond the prefill above.
-
-**No `run_steps`.** Still Phase 5. Until the planner exists, a fired goal produces
-a `no_plan` failure rather than a silent success.
 
 **No retry policy for a failed dispatch.** The slot advances and the failure is
 reported in the tick's summary. A firing is lost rather than queued for retry,

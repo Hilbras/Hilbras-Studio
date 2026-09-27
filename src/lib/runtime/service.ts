@@ -231,6 +231,107 @@ export async function listRunSteps(runId: string) {
     .orderBy(asc(runSteps.stepIndex));
 }
 
+/**
+ * The idempotency key for one step of one run (ADR-005).
+ *
+ * Derived from `(runId, stepIndex, targetAccount)`, exactly as the schema says.
+ * Two details are load-bearing:
+ *
+ * - **`stepIndex` is in the key**, so a plan that publishes twice to the same
+ *   account is two dispatches, not one. Without it the second would be absorbed
+ *   as a duplicate of the first and the user would get one post where they
+ *   asked for two.
+ * - **`targetAccount` is in the key too**, so moving a step between accounts
+ *   can never collide with the step it replaced.
+ *
+ * A step with no account gets `"none"` rather than an empty string, so the key
+ * never has a segment that could be confused with one.
+ */
+export function stepIdempotencyKey(
+  runId: string,
+  stepIndex: number,
+  targetAccount: string | null | undefined,
+): string {
+  return `run:${runId}:${stepIndex}:${targetAccount ?? "none"}`;
+}
+
+export interface PersistPlanResult {
+  /** False when the run already had steps — a redelivery, or a resumed plan. */
+  created: boolean;
+  stepCount: number;
+}
+
+/**
+ * Write a validated plan to a run.
+ *
+ * Refuses to run twice rather than replacing what is there. The first write is
+ * the plan that will execute; a second call means the planning step was
+ * redelivered by the queue, and the right response to that is to leave the
+ * original alone and let execution continue. Overwriting would be a way for a
+ * redelivery to change the content a run is about to publish, which is the one
+ * thing the at-least-once queue must never be able to do (ADR-005).
+ *
+ * Both statements are in one transaction: a run with `plan` set and no steps, or
+ * steps and no plan, is a state no reader here is prepared for.
+ */
+export async function persistPlan(
+  runId: string,
+  plan: unknown,
+  steps: readonly {
+    stepIndex: number;
+    label: string;
+    capability: string;
+    targetAccount?: string | null;
+    input?: unknown;
+  }[],
+): Promise<PersistPlanResult> {
+  const [existing] = await db
+    .select({ id: runSteps.id })
+    .from(runSteps)
+    .where(eq(runSteps.runId, runId))
+    .limit(1);
+  if (existing) return { created: false, stepCount: steps.length };
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(runs)
+      .set({ plan: JSON.stringify(plan) })
+      .where(eq(runs.id, runId));
+
+    if (steps.length > 0) {
+      await tx.insert(runSteps).values(
+        steps.map((step) => ({
+          id: randomUUID(),
+          runId,
+          stepIndex: step.stepIndex,
+          label: step.label,
+          capability: step.capability,
+          targetAccount: step.targetAccount ?? null,
+          state: "pending",
+          input:
+            step.input === undefined ? null : JSON.stringify(step.input),
+          idempotencyKey: stepIdempotencyKey(
+            runId,
+            step.stepIndex,
+            step.targetAccount,
+          ),
+        })),
+      );
+    }
+  });
+
+  return { created: true, stepCount: steps.length };
+}
+
+/** How many steps a run has. Used to tell a planned run from a bare one. */
+export async function countRunSteps(runId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(runSteps)
+    .where(eq(runSteps.runId, runId));
+  return row?.count ?? 0;
+}
+
 /** Full history of a run, oldest first. This is the runtime log. */
 export async function listRunEvents(runId: string) {
   return db
@@ -238,6 +339,12 @@ export async function listRunEvents(runId: string) {
     .from(runEvents)
     .where(eq(runEvents.runId, runId))
     .orderBy(asc(runEvents.at));
+}
+
+/** The run itself. The planner needs its owner and goal before anything else. */
+export async function getRun(runId: string) {
+  const [row] = await db.select().from(runs).where(eq(runs.id, runId)).limit(1);
+  return row ?? null;
 }
 
 /**

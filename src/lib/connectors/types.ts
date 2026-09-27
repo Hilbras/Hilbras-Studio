@@ -65,6 +65,15 @@ export type ConnectorErrorCode =
   | "unsupported"
   /** The platform failed on its own terms. Usually transient. */
   | "platform_error"
+  /**
+   * A run spent its own AI allowance.
+   *
+   * Distinct from `rate_limited` because the two are opposites in one respect
+   * that matters: a rate limit clears with time, a spent per-run budget does
+   * not change at all inside the run that spent it. Retrying would burn another
+   * run to achieve exactly nothing, so this is never retryable.
+   */
+  | "budget_exhausted"
   /** Unclassified. */
   | "unknown";
 

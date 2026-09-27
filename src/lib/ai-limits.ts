@@ -9,7 +9,11 @@ export type AiBudgetKind =
   | "suggestion"
   | "provider_test"
   | "memory"
-  | "summary";
+  | "summary"
+  /** Turning a goal statement into a plan. Phase 5. */
+  | "planner"
+  /** Writing the text a plan publishes. Phase 5. */
+  | "compose";
 
 export const AI_BUDGET_DEFAULTS: Record<AiBudgetKind, number> = {
   assistant: 20,
@@ -18,6 +22,8 @@ export const AI_BUDGET_DEFAULTS: Record<AiBudgetKind, number> = {
   provider_test: 10,
   memory: 20,
   summary: 10,
+  planner: 10,
+  compose: 30,
 };
 
 const AI_BUDGET_ENV: Record<AiBudgetKind, string> = {
@@ -27,6 +33,8 @@ const AI_BUDGET_ENV: Record<AiBudgetKind, string> = {
   provider_test: "AI_PROVIDER_TEST_RATE_LIMIT",
   memory: "AI_MEMORY_RATE_LIMIT",
   summary: "AI_SUMMARY_RATE_LIMIT",
+  planner: "AI_PLANNER_RATE_LIMIT",
+  compose: "AI_COMPOSE_RATE_LIMIT",
 };
 
 export function countMessageChars(

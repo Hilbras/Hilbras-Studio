@@ -25,11 +25,11 @@
 
 import "server-only";
 
-import { and, asc, desc, eq, isNotNull, lte } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
-import { accounts, goals, runs } from "@/db/schema";
+import { accounts, goals, runSteps, runs } from "@/db/schema";
 import { capabilitiesForAccount } from "@/lib/accounts/store";
 
 import { isValidTimeZone, nextSlot, parseCron, slotKey } from "./cron";
@@ -451,6 +451,82 @@ export async function listRecentRuns(goalId: string, limit = 10) {
     .where(eq(runs.goalId, goalId))
     .orderBy(desc(runs.createdAt))
     .limit(limit);
+}
+
+/** One firing, as the planner is allowed to see it. */
+export interface FiringHistory {
+  /** The schedule slot, e.g. "2026-09-27T10:00Z". */
+  slot: string;
+  state: string;
+  /** How many steps that run's plan had. */
+  steps: number;
+  /** The first tool that failed, when the run failed at a step. */
+  failedTool?: string;
+}
+
+/**
+ * A goal's recent firings, reduced to whether they worked.
+ *
+ * Two things are deliberately not in here: the content of the steps, and the
+ * error text. The planner gets enough to notice "the last three firings all
+ * died at publish_post" and change its approach, and nothing that would let a
+ * previous post be fed back in as something to vary against.
+ *
+ * The failed step is reported as a *tool name* rather than as a message because
+ * a run's `error` column can contain a connector's own text, and a connector
+ * message can contain whatever the platform chose to echo. A name from a closed
+ * set cannot.
+ *
+ * `excludeRunId` drops the run being planned. Without it a goal's own in-flight
+ * firing appears in its context as "running, 0 steps", which is noise at best
+ * and a prompt for the model to second-guess a plan it is still producing.
+ */
+export async function listFiringHistory(
+  goalId: string,
+  options: { limit?: number; excludeRunId?: string } = {},
+): Promise<FiringHistory[]> {
+  const { limit = 5, excludeRunId } = options;
+
+  const recent = await db
+    .select({ id: runs.id, state: runs.state, scheduleSlot: runs.scheduleSlot })
+    .from(runs)
+    .where(eq(runs.goalId, goalId))
+    .orderBy(desc(runs.createdAt))
+    .limit(limit + 1);
+
+  const candidates = recent
+    .filter((run) => run.id !== excludeRunId)
+    .slice(0, limit);
+  if (candidates.length === 0) return [];
+
+  const steps = await db
+    .select({
+      runId: runSteps.runId,
+      stepIndex: runSteps.stepIndex,
+      capability: runSteps.capability,
+      state: runSteps.state,
+    })
+    .from(runSteps)
+    .where(inArray(runSteps.runId, candidates.map((run) => run.id)))
+    .orderBy(asc(runSteps.stepIndex));
+
+  const byRun = new Map<string, typeof steps>();
+  for (const step of steps) {
+    const list = byRun.get(step.runId);
+    if (list) list.push(step);
+    else byRun.set(step.runId, [step]);
+  }
+
+  return candidates.map((run) => {
+    const runSteps_ = byRun.get(run.id) ?? [];
+    const failed = runSteps_.find((step) => step.state === "failed");
+    return {
+      slot: run.scheduleSlot,
+      state: run.state,
+      steps: runSteps_.length,
+      ...(failed ? { failedTool: failed.capability } : {}),
+    };
+  });
 }
 
 /**

@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.6.0
+**Current version:** v0.7.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -125,17 +125,37 @@ style preference.
   entry point -- Assistant, Composer, inbox suggestions, provider pings,
   summaries, memory extraction -- is already budgeted. New entry points inherit
   this requirement.
-- **Location:** `src/lib/ai.ts`, `ai-sdk.ts`, `ai-budget.ts`, `chat.ts`.
+- **Location:** `src/lib/ai.ts`, `ai-sdk.ts`, `ai-budget.ts`, `chat.ts`, and
+  `src/lib/ai/**` (the planner, the `compose_post` tool, the per-run meter, and
+  the single model-call boundary).
 
-#### Tools *(Phase 5)*
+#### Tools *(Phase 5, v0.7.0)*
 
-- **Owns:** exposing AI-callable actions as typed tools with declared
-  preconditions, timeouts, and idempotency keys.
-- **Must not:** bypass the Connectors layer, or perform a side effect that the
-  approval policy has not cleared.
-- **Location:** `src/lib/tools/**`.
+- **Owns:** the set of things a *step* in a plan may invoke, as typed
+  declarations with named input fields.
+- **Must not:** name a platform, or bypass the Connectors layer.
+- **Location:** `src/lib/runtime/tools.ts`, `src/lib/runtime/local-tools.ts`.
 
-#### Runtime *(Phase 1, goal engine in Phase 4)*
+**A tool is not a capability.** A capability is what a *platform* can do, owned by
+`platforms.ts` and gated by the target account. A tool is what a *step* may
+invoke: either delegating to a capability (`publish_post`) or run by the Runtime
+itself with no platform involved (`compose_post`). The namespaces overlap and are
+not equal -- `get_account` is a capability with no step behind it, and the gate
+refuses it by name. `run_steps.capability` now holds a tool name; the column
+keeps its original name because the concept predates the tool layer.
+
+There is deliberately **no platform field on a tool**. A step's destination is an
+*account*, resolved through the connector registry at execution time, which is
+what lets one plan run against different platforms and lets an unsupported
+target be caught at plan validation rather than mid-publish. A test asserts the
+exact key set of every `ToolSpec` so the field cannot be added quietly.
+
+The registry is also the *offerable* set: the planner is shown these tools and
+the gate accepts these tools, so "which capabilities exist" is one answer in one
+file rather than a prompt instruction the model can be talked out of. See
+[`ai/tools.md`](./ai/tools.md).
+
+#### Runtime *(Phase 1, goal engine in Phase 4, planning in Phase 5)*
 
 - **Owns:** Goal -> Plan -> Run -> Step -> Result, execution state, retries,
   scheduling, and approval suspension.
@@ -148,12 +168,14 @@ The goal engine (`src/lib/goals/**`) sits under the Runtime rather than beside i
 it is the only producer of `GOAL_SCHEDULED` events and the only writer of
 `goals`. It depends on the Runtime's run store, never the reverse.
 
-Two gates validate the same properties at two different times, and **neither
-replaces the other**. `lib/goals/validation.ts` checks a goal when a user saves
-it, so a goal against a disconnected or incapable account is refused while
-someone is still looking at the form. `lib/runtime/plan.ts` checks a plan when it
-is produced, because a planner's output is untrusted by construction and a goal
-validated today can have its account disconnected tomorrow.
+Three gates validate overlapping properties at three different times, and
+**none replaces the others**. `lib/goals/validation.ts` checks a goal when a user
+saves it, so a goal against a disconnected or incapable account is refused while
+someone is still looking at the form. `lib/runtime/planning.ts` re-checks the
+same accounts at firing time, before spending a model call -- a goal validated
+today can have its account disconnected tomorrow. `lib/runtime/plan.ts` checks
+the plan itself, because a planner's output is untrusted by construction, and
+checks it against **the goal's targets**, not the user's account list.
 
 #### Infrastructure
 
@@ -293,17 +315,25 @@ remove a target from a plan.
 
 ```
 Goal fires
-  -> Runtime creates Run (idempotency key = goal + schedule slot)
-  -> AI Planner produces a Plan: ordered Steps with typed tool references
-  -> Plan validated against account capabilities + policy before execution
-  -> Steps execute through Tools -> Connectors
-  -> Side-effecting steps check the approval policy
+  -> Runtime creates Run (idempotency key = goal + schedule slot)     v0.6.0
+  -> Preflight: every target connected, enabled, deliverable          v0.7.0
+       -> refuse with no model call spent
+  -> AI Planner produces a Plan: ordered Steps with $ref inputs       v0.7.0
+  -> Plan gated against the goal's accounts + the tool registry       v0.7.0
+       -> one repair with the gate's own issue text, then stop
+  -> Steps execute through Tools -> Connectors                       v0.1.0
+  -> Side-effecting steps check the approval policy                  v0.8.0
        -> auto        : proceed
        -> approval    : suspend Run, emit ApprovalRequest
        -> disabled    : fail the Step with a policy error
-  -> Verify step confirms the real platform state
-  -> Report generated
+  -> Verify step confirms the real platform state                    v1.0
+  -> Report generated                                                v1.0
 ```
+
+**Copy is written at execution, not at planning time.** A plan says *what* each
+post should argue; a `compose_post` step writes the words when the step runs. A
+goal firing daily must not publish the same words daily, and a plan is a record
+of what was decided — it should not be the place where the content is frozen.
 
 **Server-authoritative state (ADR-003).** Every transition above is computed and
 persisted server-side. Clients render it. This is already the rule for publish

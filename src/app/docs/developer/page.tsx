@@ -60,8 +60,13 @@ export default function DeveloperDocsPage() {
 ├─ lib/                platforms.ts (registry), publish.ts (publishers),
 │                      ai.ts (model resolution), scheduled-posts.ts,
 │                      chat.ts, crypto
+│  ├─ ai/              planner.ts, compose.ts, complete.ts (the one
+│  │                   model-call boundary), limits.ts (per-run spend),
+│  │                   context.ts (what crosses into model output)
 │  ├─ runtime/         execution state, plan gate, run store,
-│  │                    inngest/ (queue functions)
+│  │                   tools.ts (the tool registry), references.ts ($ref
+│  │                   resolution), planning.ts, local-tools.ts,
+│  │                   inngest/ (queue functions)
 │  └─ goals/           cron.ts, validation.ts, parse.ts,
 │                      service.ts, scheduler.ts
 ├─ db/schema.ts        Drizzle schema
@@ -193,6 +198,16 @@ pnpm dev                        # http://localhost:3000`}</code>
           already the system that owns execution. It finds goals whose{" "}
           <code>next_firing_at</code> has passed and sends one{" "}
           <code>GOAL_SCHEDULED</code> event each.
+        </li>
+        <li>
+          <strong>Goal runs need a configured AI provider.</strong> A run plans
+          with the user&apos;s provider, so a goal with no provider fails with{" "}
+          <code>ai_unavailable</code> rather than publishing nothing quietly.
+          Every model call a run makes goes through one boundary —{" "}
+          <code>createCompleter</code> in <code>src/lib/ai/complete.ts</code> —
+          which charges the run&apos;s in-memory meter first, then the window
+          budget, then resolves the provider. New model call sites inside the
+          Runtime must go through it.
         </li>
       </ul>
 

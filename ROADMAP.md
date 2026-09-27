@@ -27,9 +27,9 @@ v0.5.0 — Unified Platform API: targets
    ▼
 v0.5.1 — Unified Platform API: connectors
    ▼
-v0.6.0  (current) — Goal Engine
+v0.6.0 — Goal Engine
    ▼
-v0.7.0 — AI Planning
+v0.7.0  (current) — AI Planning
    ▼
 v0.8.0 — Human-in-the-Loop
    ▼
@@ -282,14 +282,80 @@ Goal → AI Planner → Execution Plan → Runtime
 Example plan: research topics → generate ideas → generate posts → validate →
 publish → verify → report.
 
-- [ ] AI Planner and tool selection.
-- [ ] Generate and validate execution plans.
-- [ ] Execute plans through the Runtime.
-- [ ] Re-planning; context management; execution limits.
-- [ ] Handle AI failures; prevent unauthorized tool usage.
-- [ ] Per-run and per-step AI spend limits.
+- [x] AI Planner and tool selection.
+- [x] Generate and validate execution plans.
+- [x] Execute plans through the Runtime.
+- [x] Re-planning; context management; execution limits.
+- [x] Handle AI failures; prevent unauthorized tool usage.
+- [x] Per-run and per-step AI spend limits.
 
 **Docs:** `ai/planner.md`, `ai/tools.md`, `ai/context.md`, `runtime/planning.md`
+
+### v0.7.0 — shipped ✅
+
+A goal fired, and did nothing. The Runtime was fully built and had never once
+written a `run_steps` row, so every firing was a no-op reporting success. This
+phase is where a plan comes from — and it is the first release in which a model's
+output causes something to happen in the world.
+
+- **Tool registry** (`src/lib/runtime/tools.ts`) — the central new abstraction. A
+  tool is what a *step* may invoke, not what a platform can do. Two tools ship:
+  `compose_post` and `publish_post`. The registry is the offerable set, so which
+  capabilities exist is one answer in one file rather than a prompt instruction.
+- **Planner** (`src/lib/ai/planner.ts`, `context.ts`) — reads the statement,
+  proposes, parses, repairs once. Treated as untrusted from the first token.
+- **Gate, narrowed** (`plan.ts`) — checks the plan against **the goal's
+  targets**, and requires every one of them to receive a delivery. A goal
+  pointed at two accounts that posts to one now fails rather than looking like it
+  worked.
+- **Preflight** (`runtime/planning.ts`) — every target connected, enabled, and
+  deliverable, checked *before* the model. An unusable target costs zero calls.
+- **Step references** (`references.ts`) — explicit `{"$ref": {"step": 0,
+  "field": "text"}}`, stored unresolved so a plan is self-describing and a replay
+  reproduces its inputs.
+- **Execution** (`executor.ts`, `local-tools.ts`) — `getTool` dispatch,
+  dependency gating, `$ref` resolution, and a Runtime-owned tool runner.
+- **Spend** (`ai/limits.ts`, `ai/complete.ts`) — one model-call boundary, metering
+  the run first, then the window, then resolving the provider. A refused call
+  never eats the user's other AI budget.
+- **No migration** — `runs.plan`, `run_steps`, and the unique `idempotencyKey`
+  all already existed.
+
+**The decisions that shaped it:**
+
+- **Tools ≠ capabilities.** `CAPABILITY_NAMES` is what a *platform* can do; a
+  tool is what a *step* may invoke, either delegating to a capability
+  (`publish_post`) or run by the Runtime itself (`compose_post`). The namespaces
+  overlap and are not equal. `run_steps.capability` now holds a tool name; the
+  column kept its name because the concept predates the tool layer.
+- **A step never names a platform.** Its destination is an *account*, resolved
+  through the connector registry at execution. A test asserts the exact key set
+  of every `ToolSpec`, so the field cannot be added quietly.
+- **The gate is checked against the goal's targets, not the user's accounts.**
+  `requiredTargets` both narrows the gate's own lookup and requires every target
+  to receive a delivery. A convention nobody is forced to follow is not a gate.
+- **The planner is a repair loop, not a retry loop.** One repair, with the gate's
+  own issue text verbatim, before any step runs. No re-planning after a failure
+  — a planner shown a failure is being invited to remove the thing that failed.
+- **A malformed reply is a failed plan, not a shorter one.** Dropping a bad step
+  is how a two-account plan posts to one and reports success.
+- **Copy is written at execution, not planning time.** Hence `compose_post` as a
+  step: a goal firing daily must not publish the same words daily.
+- **Over-limit copy fails, never truncates.** One re-ask, then a non-retryable
+  `invalid_content`. Truncated ends mid-sentence and looks like a bad post.
+- **Per-run and per-step spend are in-process counters, not rate limits.** The
+  window budget is keyed by user; a per-run budget must not leak between a
+  user's concurrent goals. `perPlan 2, perStep 2, perRun 12`.
+- **The run's meter is a ceiling, not a ledger.** A redelivery rebuilds it, so the
+  true bound is `MAX_ATTEMPTS × perRun`. Documented as a known bound.
+- **Preflight before the model.** A planner cannot fix a disconnected account, so
+  an unreachable target costs zero model calls.
+- **Model calls are retryable; publishes are not** (ADR-005, both defaults
+  correct for opposite reasons).
+
+**Not here, on purpose:** human approval of a plan (Phase 6), the Goals UI
+(Phase 7), and re-planning after a mid-run failure — see the note above on why
+the retry path does not include it.
 
 ---
 

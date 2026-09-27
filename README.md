@@ -23,8 +23,8 @@ Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
 | v0.4.0 | Multi-Account Connections |
 | **v0.5.0** | Unified Platform API — targets |
 | v0.5.1 | Unified Platform API: connectors |
-| **v0.6.0** | **Current — Goal Engine** |
-| v0.7.0 | AI Planning |
+| v0.6.0 | Goal Engine |
+| **v0.7.0** | **Current — AI Planning** |
 | v0.8.0 | Human-in-the-Loop |
 | v0.9.0 | Studio 2.0 |
 | v0.9.5 | Release Candidate |
@@ -34,7 +34,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full plan and
 [`docs/architecture.md`](docs/architecture.md) for the layer contracts and
 architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
 
-## Today's capabilities (v0.6.0)
+## Today's capabilities (v0.7.0)
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
   provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.
@@ -45,8 +45,12 @@ architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
 - **Post Scheduler** — Queue posts for scheduled publishing.
 - **Goal Engine** — Goals with cron schedules in the user's own time zone,
   daylight-saving handling, validation against connected accounts, and
-  pause/resume. A scheduler fires them. Generating what they post is the next
-  phase.
+  pause/resume. A scheduler fires them.
+- **AI Planning** — A fired goal is turned into an execution plan by the model.
+  A tool registry decides what a step may invoke, the plan is gated against the
+  goal's own target accounts before anything runs, and each post is written at
+  execution time rather than frozen at planning time, so a daily goal does not
+  publish the same words daily. Human approval of that plan is the next phase.
 - **Inbox** — X mentions and Instagram conversations.
 - **Assistant** — Streaming chat with persistent sessions and long-term memory.
 - **Analytics** — Publishing outcomes and weekly activity.

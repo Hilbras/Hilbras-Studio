@@ -23,9 +23,9 @@ v0.3.0 — Runtime Foundation
    ▼
 v0.4.0 — Multi-Account Connections
    ▼
-v0.5.0  (current) — Unified Platform API: targets
+v0.5.0 — Unified Platform API: targets
    ▼
-v0.5.1 — Unified Platform API: connectors
+v0.5.1  (current) — Unified Platform API: connectors
    ▼
 v0.6.0 — Goal Engine
    ▼
@@ -164,8 +164,11 @@ covered by nine integration tests.
 
 The Runtime depends on standardized capabilities, never on platform APIs.
 
-Split across two releases. v0.5.0 lands the target model the capability work
-reads from; v0.5.1 finishes the connectors themselves.
+Split across two releases, both shipped. v0.5.0 landed the target model the
+capability work reads from; v0.5.1 finished the connectors themselves.
+
+Phase 3 continues into v1.0 hardening with the legacy string-bridge removal,
+which is a change to the publishing path rather than to the seam above it.
 
 ### v0.5.0 — shipped ✅
 
@@ -176,20 +179,36 @@ reads from; v0.5.1 finishes the connectors themselves.
 - [x] Post + targets written in one transaction — `src/lib/posts/service.ts`.
 - [x] `getPostTargets(ids)` — bulk read replacing four `split(",")` sites.
 
-### v0.5.1 — open
+### v0.5.1 — shipped ✅
 
-- [ ] Connector interface *(defined in Phase 1 — standardised here)*.
-- [ ] Capability interface: `create_post`, `publish_post`, `get_posts`,
-      `get_account`, `delete_post`.
-- [ ] Standardized responses and errors — retire `legacy.ts`'s string
-      classification.
-- [ ] Capability discovery; map accounts to available capabilities.
-- [ ] Platform adapters for the remaining registries.
-- [ ] Document connector development standards.
-- [ ] Wire `createAccountResolver()` so a run resolves through the accounts
-      table instead of the account key's prefix (deferred from v0.4.0).
+- [x] Capability interface: `create_post`, `publish_post`, `get_posts`,
+      `get_account`, `delete_post` — real sets replace
+      `status: "supported" | "connect_only"`.
+- [x] `src/lib/connectors/registry.ts` — `lookupCapability()` as the single
+      gate, returning a *reason* rather than a null.
+- [x] Adapters derive capabilities from the registry; drift is a test failure.
+- [x] Capability discovery: `capabilitiesForPlatform()`, `platformSupports()`,
+      `knownPlatforms()`, `publishingPlatforms()`.
+- [x] Wire `resolverForUser()` into the Inngest function — production execution
+      resolves through the accounts table (deferred from v0.4.0). **A disabled
+      account no longer publishes.**
+- [x] The capability gate reads the registry, not the adapter's self-declaration.
+- [x] Connector development standards: `docs/capabilities.md`,
+      `docs/platform-development.md`, `docs/connectors.md`.
 
-**Docs:** `connectors.md`, `capabilities.md`, `platform-development.md`
+### Still open
+
+- [ ] Retire `legacy.ts`'s string-based error classification. This means
+      rewriting the five publishers in `@/lib/publish` to report their own
+      taxonomy — a change to the publishing path, not the seam above it.
+      → v1.0 hardening.
+- [ ] Implement `get_posts` and `delete_post`. Declared, implemented by nobody.
+- [ ] Split `legacy.ts` into per-platform connector directories.
+- [ ] `PUBLISHING_CAPABILITIES` and `accounts.capabilities` are maintained by
+      hand; capability resolution per account type (a Facebook Page vs. a
+      profile) is not yet derived from the platform's account model.
+
+**Docs:** `connectors.md` ✅, `capabilities.md` ✅, `platform-development.md` ✅
 
 > **Open:** LinkedIn, TikTok, YouTube, Pinterest, and Reddit are `connect_only`
 > today. See `docs/architecture.md` §6.

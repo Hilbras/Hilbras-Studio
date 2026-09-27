@@ -5,8 +5,10 @@ import {
   PLATFORM_REGISTRY,
   PUBLISHING_CAPABILITIES,
   allPlatforms,
+  capabilitiesForPlatform,
   getPublishingCapability,
   isPublishablePlatform,
+  platformSupports,
 } from "./platforms";
 
 describe("platform registry invariants", () => {
@@ -40,7 +42,31 @@ describe("platform registry invariants", () => {
     expect(isPublishablePlatform("instagram")).toBe(true);
     expect(isPublishablePlatform("telegram")).toBe(true);
     expect(isPublishablePlatform("linkedin")).toBe(false);
-    expect(getPublishingCapability("linkedin")?.status).toBe("connect_only");
+    expect(capabilitiesForPlatform("linkedin")).toEqual([]);
     expect(getPublishingCapability("not-a-platform")).toBeNull();
+  });
+
+  it("reports capabilities per platform rather than a publish/not-publish flag", () => {
+    // The five working publishers share one set today.
+    for (const id of ["instagram", "facebook", "threads", "x", "telegram"] as const) {
+      expect(capabilitiesForPlatform(id)).toEqual([
+        "create_post",
+        "publish_post",
+        "get_account",
+      ]);
+    }
+
+    // A platform with no publisher is connectable and visibly incapable, which
+    // `status: "connect_only"` could not distinguish from a publisher that had
+    // simply not been written yet.
+    expect(capabilitiesForPlatform("linkedin")).toEqual([]);
+    expect(getPublishingCapability("linkedin")?.accountSelection).toBe("none");
+  });
+
+  it("answers capability questions for unknown platforms without throwing", () => {
+    expect(capabilitiesForPlatform("not-a-platform")).toEqual([]);
+    expect(platformSupports("not-a-platform", "publish_post")).toBe(false);
+    expect(platformSupports("x", "get_posts")).toBe(false);
+    expect(platformSupports("x", "publish_post")).toBe(true);
   });
 });

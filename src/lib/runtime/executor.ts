@@ -24,7 +24,7 @@
  *    retries, because only the queue knows its own backoff and budget.
  */
 
-import { getConnector } from "@/lib/connectors/legacy";
+import { getConnector, lookupCapability } from "@/lib/connectors/registry";
 import type {
   Connector,
   ConnectorError,
@@ -110,13 +110,13 @@ export async function executeStep(
     });
   }
 
-  const capability = connector.capabilities;
-  if (!capability.includes("publish_post")) {
-    return failed({
-      code: "unsupported",
-      message: `${connector.platform} cannot publish posts.`,
-      retryable: false,
-    });
+  // The capability gate, in one place. Checking `connector.capabilities` here
+  // was correct but incomplete: it could only say "no" without saying why, and
+  // it could not distinguish a platform with no publisher from a name this build
+  // does not recognise.
+  const gate = lookupCapability(connector.platform, "publish_post");
+  if (!gate.ok) {
+    return failed({ code: gate.code, message: gate.message, retryable: false });
   }
 
   let input: PublishPostInput;
@@ -200,6 +200,22 @@ export function createAccountResolver(
 
     return getConnector(account.platform);
   };
+}
+
+/**
+ * The resolver production execution uses.
+ *
+ * Same gate as `createAccountResolver`, but bound to the run's user up front so
+ * the Inngest function cannot forget it. v0.5.0 shipped `createAccountResolver`
+ * and left it unwired, which meant the queue resolved a connector from the
+ * account key's *prefix*: it never consulted `accounts`, so a disabled account
+ * still published and a user's second X account was indistinguishable from
+ * their first. The account model existed; execution did not use it.
+ */
+export function resolverForUser(
+  userId: string,
+): ExecutorDeps["resolveConnector"] {
+  return createAccountResolver(userId);
 }
 
 /**

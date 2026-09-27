@@ -16,24 +16,22 @@
  * to show, and must be able to do so without pulling the server graph in.
  */
 
-import type { PlatformId } from "@/lib/platforms";
+import type { CapabilityName, PlatformId } from "@/lib/platforms";
 
 /**
  * The standardized operations a connector may implement.
+ *
+ * Re-exported from the platform registry, which is the lowest layer of this
+ * vocabulary: the UI reads capability sets to decide what to show, and must be
+ * able to do so without pulling the server graph in. Keeping the names in one
+ * place is what stops a connector and the registry from disagreeing about what
+ * `publish_post` means.
  *
  * A platform implements a subset. The set is per-*account*, not per-platform:
  * a Facebook Page and a Facebook profile are not the same account type and do
  * not have the same capabilities. See `capabilitiesForAccount`.
  */
-export const CAPABILITY_NAMES = [
-  "create_post",
-  "publish_post",
-  "get_posts",
-  "get_account",
-  "delete_post",
-] as const;
-
-export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
+export { CAPABILITY_NAMES, type CapabilityName } from "@/lib/platforms";
 
 /**
  * Why a connector call failed, in terms the Runtime can act on.

@@ -74,55 +74,95 @@ export interface PlatformSpec {
   };
 }
 
-export type PublishingStatus = "supported" | "connect_only";
 export type PublishingAccountSelection = "account" | "page" | "chat" | "none";
 
+/**
+ * The standardized operations a platform may support.
+ *
+ * Declared here rather than in `connectors/types.ts` because this module is the
+ * lowest layer of the vocabulary — the UI reads it to decide what to offer, and
+ * the connector contract reads it to describe what it may implement. The
+ * connector module re-exports these names, so connector code has one import
+ * site either way.
+ *
+ * A capability is a promise about *behaviour*, not about an endpoint.
+ * `get_posts` means the Runtime can read a feed in the standard shape, whether
+ * the platform underneath is Graph, REST, or has no read API at all.
+ */
+export const CAPABILITY_NAMES = [
+  "create_post",
+  "publish_post",
+  "get_posts",
+  "get_account",
+  "delete_post",
+] as const;
+
+export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
+
 export interface PublishingCapability {
-  status: PublishingStatus;
+  /**
+   * What this platform can actually do, as standard capabilities.
+   *
+   * Replaces `status: "supported" | "connect_only"`, which was a boolean
+   * wearing a type: it could answer "can it publish?" and nothing else, so
+   * `get_posts` and `delete_post` had nowhere to live, and a connect-only
+   * platform was indistinguishable from one whose publisher merely had a bug.
+   *
+   * An empty array is the honest value for a platform that completes OAuth but
+   * has no publisher — connectable, and visibly incapable of acting.
+   */
+  capabilities: readonly CapabilityName[];
   accountSelection: PublishingAccountSelection;
   note?: string;
 }
 
+/** What every working publisher can do today. */
+const PUBLISH_AND_ACCOUNT: readonly CapabilityName[] = [
+  "create_post",
+  "publish_post",
+  "get_account",
+];
+
 /**
- * The source of truth for what the current product can actually publish.
- * Connection support and publishing support are intentionally separate: several
+ * The source of truth for what the current product can actually do.
+ * Connection support and action support are intentionally separate: several
  * platforms can complete OAuth today while their publisher remains unfinished.
  */
 export const PUBLISHING_CAPABILITIES: Record<PlatformId, PublishingCapability> = {
-  instagram: { status: "supported", accountSelection: "account" },
+  instagram: { capabilities: PUBLISH_AND_ACCOUNT, accountSelection: "account" },
   facebook: {
-    status: "supported",
+    capabilities: PUBLISH_AND_ACCOUNT,
     accountSelection: "page",
     note: "The current publisher selects the first Page returned by Meta.",
   },
-  threads: { status: "supported", accountSelection: "account" },
-  x: { status: "supported", accountSelection: "account" },
+  threads: { capabilities: PUBLISH_AND_ACCOUNT, accountSelection: "account" },
+  x: { capabilities: PUBLISH_AND_ACCOUNT, accountSelection: "account" },
   linkedin: {
-    status: "connect_only",
+    capabilities: [],
     accountSelection: "none",
     note: "Publishing is not implemented yet.",
   },
   tiktok: {
-    status: "connect_only",
+    capabilities: [],
     accountSelection: "none",
     note: "Publishing is not implemented yet.",
   },
   youtube: {
-    status: "connect_only",
+    capabilities: [],
     accountSelection: "none",
     note: "Publishing is not implemented yet.",
   },
   pinterest: {
-    status: "connect_only",
+    capabilities: [],
     accountSelection: "none",
     note: "Publishing is not implemented yet.",
   },
   reddit: {
-    status: "connect_only",
+    capabilities: [],
     accountSelection: "none",
     note: "Publishing is not implemented yet.",
   },
-  telegram: { status: "supported", accountSelection: "chat" },
+  telegram: { capabilities: PUBLISH_AND_ACCOUNT, accountSelection: "chat" },
 };
 
 export function isPlatformId(value: string): value is PlatformId {
@@ -133,8 +173,27 @@ export function getPublishingCapability(id: string): PublishingCapability | null
   return isPlatformId(id) ? PUBLISHING_CAPABILITIES[id] : null;
 }
 
+/** What a platform can do in general, or nothing for an id we do not know. */
+export function capabilitiesForPlatform(id: string): readonly CapabilityName[] {
+  return getPublishingCapability(id)?.capabilities ?? [];
+}
+
+/**
+ * Whether a platform can perform a capability.
+ *
+ * The check every caller should use instead of testing for a publish status: a
+ * platform with no publisher answers `false` here, and so does one this build
+ * has never heard of.
+ */
+export function platformSupports(
+  id: string,
+  capability: CapabilityName,
+): boolean {
+  return capabilitiesForPlatform(id).includes(capability);
+}
+
 export function isPublishablePlatform(id: string): id is PlatformId {
-  return getPublishingCapability(id)?.status === "supported";
+  return platformSupports(id, "publish_post");
 }
 
 export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {

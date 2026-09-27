@@ -97,6 +97,42 @@ describe("executeStep", () => {
     expect(calls).toHaveLength(0);
   });
 
+  it("takes the capability gate from the registry, not the adapter's claim", async () => {
+    // A connector that declares a capability the registry does not grant it has
+    // no business publishing. The registry is the authority precisely because it
+    // is the thing that cannot be edited from inside a platform adapter — if the
+    // adapter's own list were trusted, adding a publisher would be a one-line
+    // change in the module that performs the publishing.
+    const { connector, calls } = fakeConnector(
+      "linkedin",
+      ["create_post", "publish_post", "get_account"],
+      ok(),
+    );
+    const result = await executeStep(
+      step({ targetAccount: "linkedin:hilbras" }),
+      "user-1",
+      depsFor(connector),
+    );
+
+    expect(result.error?.code).toBe("unsupported");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("reports an unknown platform as not_connected, not unsupported", async () => {
+    // These send the user to different places: "reconnect this account" versus
+    // "this platform cannot post". Collapsing them would make a config bug look
+    // like a user's problem.
+    const { connector, calls } = fakeConnector("myspace", ["publish_post"], ok());
+    const result = await executeStep(
+      step({ targetAccount: "myspace:hassan" }),
+      "user-1",
+      depsFor(connector),
+    );
+
+    expect(result.error?.code).toBe("not_connected");
+    expect(calls).toHaveLength(0);
+  });
+
   it("rejects a publish step with no target", async () => {
     const { connector, calls } = fakeConnector("x", ["publish_post"], ok());
     const result = await executeStep(

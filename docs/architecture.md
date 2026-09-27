@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.5.0
+**Current version:** v0.5.1
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -94,13 +94,19 @@ style preference.
 - **Must not:** be imported by client components.
 - **Location:** `src/lib/**` (becomes sub-packages in v1.0).
 
-#### Connectors *(new — Phase 3, interface defined in Phase 1)*
+#### Connectors *(interface in Phase 1, standardised in Phase 3)*
 
 - **Owns:** translating a **capability** call into a platform API call, and
   translating the platform's response/error back into the standard shape.
 - **Must not:** leak platform-specific types, error strings, or auth flows above
   this layer. The Runtime must never see a Facebook Graph error code.
-- **Location:** `src/lib/connectors/<platform>/`.
+- **Must not:** grant itself a capability. `PUBLISHING_CAPABILITIES` in
+  `platforms.ts` is the authority, and `lookupCapability()` reads the registry
+  rather than an adapter's own list — an adapter is the module that performs the
+  publishing, so it must not also decide whether it is allowed to.
+- **Location:** `src/lib/connectors/`. `registry.ts` is the seam; the per-platform
+  split into `src/lib/connectors/<platform>/` is still to come, and is tracked in
+  [`../ROADMAP.md`](../ROADMAP.md).
 
 #### Accounts & Connections *(Phase 2)*
 
@@ -217,7 +223,7 @@ These are finished, tested, and load the layers above them. Do not rewrite.
 | `social_accounts` table | Conflates Connection and Account. No unique constraint on `(user_id, platform, platform_account_id)`, so reconnects append duplicate rows. `posts.platforms` is a comma-separated string, which cannot express per-account targeting. | **Done** — split in v0.4.0, both legacy tables dropped in v0.5.0 |
 | `getConnectedAccount()` (`publish.ts:138`) | `.orderBy(connectedAt desc).limit(1)` -- publishing always targets the **most recently connected** account. Multi-account is structurally possible but not implemented. | Phase 2 |
 | `publish.ts` (926 lines) | Five unconnected `publishToX()` functions, no shared interface, inconsistent error shapes. The single highest-value refactor in the roadmap. | Phase 1 (wrap) -> Phase 3 (standardize) |
-| `PUBLISHING_CAPABILITIES` | `status: "supported" \| "connect_only"` is a boolean wearing a type. Cannot express `get_posts`, `delete_post`, or per-account capability sets. | Phase 3 |
+| `PUBLISHING_CAPABILITIES` | `status: "supported" \| "connect_only"` is a boolean wearing a type. Cannot express `get_posts`, `delete_post`, or per-account capability sets. | **Done** in v0.5.1 — real capability sets, registry as authority |
 | `scheduled-posts.ts` | Claim/lease logic is correct and proven, but is bound to the `posts` table and a daily Vercel cron. Generalize into the Runtime. | Phase 1 |
 | `actions/*.ts` (13 files) | Some still mix validation with orchestration. Thin them per section 2.1. | Phases 1-4 |
 | `src/app/docs/*` (7 pages) | Public in-app user guide. Distinct from `docs/*.md`, which are developer docs. Reconcile explicitly. | Phase 0 (this doc) |

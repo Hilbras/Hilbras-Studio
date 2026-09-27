@@ -21,8 +21,8 @@ Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
 | v0.2.0 | Architecture Foundation |
 | v0.3.0 | Runtime Foundation |
 | v0.4.0 | Multi-Account Connections |
-| **v0.5.0** | **Current — Unified Platform API: targets** |
-| v0.5.1 | Unified Platform API: connectors |
+| **v0.5.0** | Unified Platform API — targets |
+| **v0.5.1** | **Current — Unified Platform API: connectors** |
 | v0.6.0 | Goal Engine |
 | v0.7.0 | AI Planning |
 | v0.8.0 | Human-in-the-Loop |
@@ -34,7 +34,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full plan and
 [`docs/architecture.md`](docs/architecture.md) for the layer contracts and
 architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
 
-## Today's capabilities (v0.5.0)
+## Today's capabilities (v0.5.1)
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
   provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.

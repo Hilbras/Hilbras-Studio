@@ -14,7 +14,12 @@ import "server-only";
  * @see ../connectors/types.ts for the contract and its rules.
  */
 
-import { getPublishingCapability, isPlatformId, PLATFORM_IDS } from "@/lib/platforms";
+import {
+  capabilitiesForPlatform,
+  isPlatformId,
+  PLATFORM_IDS,
+  platformSupports,
+} from "@/lib/platforms";
 import { publishForUser, type PublishResult } from "@/lib/publish";
 import { findReceipt, recordReceipt } from "@/lib/accounts/receipts";
 
@@ -109,22 +114,22 @@ async function publishPost(
   return dispatched;
 }
 
-/** The five platforms that dispatch today, in registry order. */
-const PUBLISHING_PLATFORMS = PLATFORM_IDS.filter(
-  (id) => getPublishingCapability(id)?.status === "supported",
+/** The platforms that dispatch today, in registry order. */
+const PUBLISHING_PLATFORMS = PLATFORM_IDS.filter((id) =>
+  platformSupports(id, "publish_post"),
 );
 
 /**
  * Capabilities derived from the platform registry rather than restated here.
  *
- * `PUBLISHING_CAPABILITIES` is already the single source of truth for "can this
- * platform publish at all" — that is what the v0.1.0 remediation built it for.
- * Re-deriving it would create a second registry that can drift from the first.
+ * `PUBLISHING_CAPABILITIES` is already the single source of truth for "what can
+ * this platform do" — that is what the v0.1.0 remediation built it for, and
+ * v0.5.0 widened it from a publish/not-publish boolean to real capability sets.
+ * Re-deriving it here would create a second registry that can drift from the
+ * first, which is precisely the bug this replaced.
  */
 function capabilitiesFor(platform: string): readonly CapabilityName[] {
-  const spec = getPublishingCapability(platform);
-  if (spec?.status !== "supported") return [];
-  return ["create_post", "publish_post", "get_account"];
+  return capabilitiesForPlatform(platform);
 }
 
 function legacyConnector(platform: string): Connector {

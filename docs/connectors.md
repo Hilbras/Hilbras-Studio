@@ -32,11 +32,15 @@ ids. A connector translates the platform's vocabulary into `CapabilityName` and
 This is the rule that makes the boundary real. The moment a `graph.instagram.com`
 field appears in a `PublishPostResult`, the Runtime depends on Instagram.
 
-### 2. Capabilities are per-account, not per-platform
+### 2. Capabilities are declared in the registry, resolved per account
 
-`Connector.capabilities` says what a platform can do *in general*. The effective
-set for a particular account is narrower — a Facebook Page and a Facebook
-profile are different account types. Goals target **accounts** (Phase 2), and
+`PUBLISHING_CAPABILITIES` in
+[`src/lib/platforms.ts`](../src/lib/platforms.ts) declares what a platform can do.
+Adapters derive from it; they do not restate it. See
+[capabilities.md](capabilities.md) for the full model.
+
+The effective set for a particular **account** is narrower — a Facebook Page and
+a Facebook profile are different account types. Goals target accounts, and
 capabilities are resolved per account so a disabled account cannot silently
 vanish from a plan.
 
@@ -94,19 +98,37 @@ stale receipt is harmless, and a deleted one is a double post.
 
 ## Current connectors
 
-| Platform | `publish_post` | Status |
+| Platform | Capabilities | Adapter |
 |---|---|---|
-| Instagram | ✅ | legacy adapter |
-| Facebook | ✅ | legacy adapter |
-| Threads | ✅ | legacy adapter |
-| X | ✅ | legacy adapter |
-| Telegram | ✅ | legacy adapter |
-| LinkedIn, TikTok, YouTube, Pinterest, Reddit | — | connect-only, empty capability set |
+| Instagram | `create_post`, `publish_post`, `get_account` | legacy adapter |
+| Facebook | `create_post`, `publish_post`, `get_account` | legacy adapter |
+| Threads | `create_post`, `publish_post`, `get_account` | legacy adapter |
+| X | `create_post`, `publish_post`, `get_account` | legacy adapter |
+| Telegram | `create_post`, `publish_post`, `get_account` | legacy adapter |
+| LinkedIn, TikTok, YouTube, Pinterest, Reddit | *(none)* | connect-only, empty capability set |
 
-All five are currently served by **one adapter**
+`get_posts` and `delete_post` are in the vocabulary and implemented by nobody.
+They are listed in the contract and absent from every platform, so a plan naming
+one is refused at the gate rather than failing mid-execution.
+
+All five working platforms are served by **one adapter**
 ([`src/lib/connectors/legacy.ts`](../src/lib/connectors/legacy.ts)) that wraps
 the existing publishers in `@/lib/publish`. No publishing behaviour changed when
 it was introduced.
+
+### The registry is the authority
+
+Two places declare what a platform can do: `PUBLISHING_CAPABILITIES` in
+[`src/lib/platforms.ts`](../src/lib/platforms.ts), and `Connector.capabilities`.
+They are not independent — since v0.5.1 the adapter **derives** its set from the
+registry, and `lookupCapability()` reads the registry rather than the adapter's
+own list.
+
+That direction is deliberate. An adapter is the module that performs the
+publishing; if it could also grant itself the capability to publish, adding a
+publisher would be a one-line edit to the thing doing the publishing, with
+nothing to review it against. `src/lib/connectors/registry.test.ts` holds the two
+in agreement.
 
 ### The legacy bridge is temporary
 
@@ -116,22 +138,30 @@ publishers' free-text errors onto `ConnectorErrorCode`, because those publishers
 predate typed errors. It is the only place in the codebase that interprets those
 strings.
 
-**Phase 3 deletes it.** Each real connector reports its platform's own taxonomy
-— HTTP status, Graph `code`, Telegram `error_code` — directly. New connectors
-must not grow the string table; they construct `ConnectorError` themselves.
+**This did not land in v0.5.1.** Deleting it means rewriting the five publishers
+in `@/lib/publish` to report their platform's own taxonomy — HTTP status, Graph
+`code`, Telegram `error_code` — which is a change to the publishing path itself,
+not to the seam above it. It is tracked in
+[`ROADMAP.md`](../ROADMAP.md) under v1.0 hardening.
+
+Until then the rule stands: new connectors must not grow the string table. They
+construct `ConnectorError` themselves.
 
 ---
 
 ## Writing a connector
 
 1. Implement `Connector` for one `PlatformId`.
-2. Declare `capabilities` honestly. An unimplemented capability is absent, not
-   stubbed.
-3. Return typed errors. Map the platform's codes in the connector, where the
+2. Register it in [`src/lib/connectors/registry.ts`](../src/lib/connectors/registry.ts).
+3. Declare capabilities in `PUBLISHING_CAPABILITIES`, not in the adapter. An
+   unimplemented capability is absent, not stubbed.
+4. Return typed errors. Map the platform's codes in the connector, where the
    platform's vocabulary is allowed to exist.
-4. Accept and honour `idempotencyKey` for every side-effecting capability.
-5. Use `pinned-provider-fetch` for outbound calls — it carries the SSRF
+5. Accept and honour `idempotencyKey` for every side-effecting capability.
+6. Use `pinned-provider-fetch` for outbound calls — it carries the SSRF
    protections (`net-guard`) that every external request in this codebase
    requires.
-6. Do not import from `@/lib/runtime`, `@/lib/tools`, or any UI module. The
+7. Do not import from `@/lib/runtime`, `@/lib/tools`, or any UI module. The
    dependency arrow points one way.
+
+Full walkthrough: [`platform-development.md`](platform-development.md).

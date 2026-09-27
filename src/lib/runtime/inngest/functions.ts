@@ -22,7 +22,7 @@
 
 import { NonRetriableError } from "inngest";
 
-import { executeStep, defaultDeps } from "../executor";
+import { executeStep, resolverForUser, type ExecutorDeps } from "../executor";
 import {
   createRun,
   listRunSteps,
@@ -71,6 +71,12 @@ export const executeGoalRun = inngest.createFunction(
 
     const runId = claim.runId;
 
+    // Resolve connectors through the accounts table, not the account key's
+    // prefix. The queue owns the user for this run, so the resolver is built
+    // once here rather than per step — and, unlike the registry-only default,
+    // it refuses a disabled or unknown account instead of publishing anyway.
+    const deps: ExecutorDeps = { resolveConnector: resolverForUser(event.data.userId) };
+
     // --- 2. start ---------------------------------------------------------
     const started = await step.run("start-run", () =>
       transitionRun(runId, { type: "start" }),
@@ -98,7 +104,7 @@ export const executeGoalRun = inngest.createFunction(
             idempotencyKey: stepRow.idempotencyKey,
           },
           event.data.userId,
-          defaultDeps,
+          deps,
         );
 
         await settleStep(runId, stepRow.id, {

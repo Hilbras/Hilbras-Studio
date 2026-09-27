@@ -33,7 +33,7 @@ import { accounts, connections, type Account } from "@/db/schema";
 
 import { getConnector } from "@/lib/connectors/legacy";
 import type { CapabilityName } from "@/lib/connectors/types";
-import { getPublishingCapability } from "@/lib/platforms";
+import { capabilitiesForPlatform } from "@/lib/platforms";
 
 /** The stable reference a goal and a plan use to name an account. */
 export function accountKeyFor(
@@ -187,9 +187,7 @@ export function capabilitiesForAccount(
   const connector = getConnector(account.platform);
   if (connector) return connector.capabilities;
 
-  return getPublishingCapability(account.platform)?.status === "supported"
-    ? ["create_post", "publish_post", "get_account"]
-    : [];
+  return capabilitiesForPlatform(account.platform);
 }
 
 

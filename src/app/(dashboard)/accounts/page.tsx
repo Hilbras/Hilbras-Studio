@@ -649,7 +649,7 @@ export default function AccountsPage() {
               ) : selConnected ? (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    {selectedPublishing?.status === "supported"
+                    {isPublishablePlatform(selectedPlatform)
                       ? "This platform is linked through official OAuth. You can publish to it from the Composer."
                       : `This platform is connected, but publishing is not available yet.${selectedPublishing?.note ? ` ${selectedPublishing.note}` : ""}`}
                   </p>
@@ -687,7 +687,7 @@ export default function AccountsPage() {
                 <>
                   <p className="text-sm text-muted-foreground">
                     {selConfigured
-                      ? selectedPublishing?.status === "supported"
+                      ? isPublishablePlatform(selectedPlatform)
                         ? "Credentials saved. Connect your account via OAuth to enable publishing."
                         : "Credentials saved. Connect your account via OAuth; publishing is not available yet."
                       : "Save your developer app credentials below first — then connect via OAuth."}

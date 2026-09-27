@@ -13,6 +13,78 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.5.1] — 2026-09-27
+
+Unified Platform API, part 2 of 2. Capability sets replace the publish
+boolean, the connector registry becomes the single gate, and production
+execution finally resolves accounts through the accounts table.
+
+### Bug Fixes
+
+- **The Runtime resolved a connector from the account key's *prefix*.** The
+  Inngest function passed `defaultDeps`, whose resolver reads the platform off
+  `"x:hilbras"` and cannot consult the database. So a **disabled account still
+  published**, an unknown key still dispatched, and a user's second X account
+  was indistinguishable from their first — the publisher then fell back to
+  whichever connection was newest. `createAccountResolver` existed and was
+  unwired: the account model shipped in v0.4.0 and execution never used it.
+  Production now uses `resolverForUser(userId)`, which refuses a disabled or
+  unresolvable account instead of publishing anyway.
+- **The capability gate trusted the adapter's self-declaration.** The executor
+  checked `connector.capabilities.includes("publish_post")`, so an adapter
+  asserting a capability the product does not grant could publish. An adapter is
+  the module that performs the publishing; letting it also grant itself the
+  permission to publish made "add a publisher" a one-line edit inside the thing
+  doing the publishing. The gate now reads the registry, which cannot be edited
+  from inside an adapter.
+
+### Improvements
+
+- **`status: "supported" | "connect_only"` is gone.** It was a boolean wearing a
+  type: it could answer "can it publish?" and nothing else, so `get_posts` and
+  `delete_post` had nowhere to live, and a connect-only platform was
+  indistinguishable from one whose publisher merely had a bug.
+  `PUBLISHING_CAPABILITIES` now carries real capability sets, and
+  `capabilitiesForPlatform()` / `platformSupports()` replace the status tests.
+  `isPublishablePlatform()` is now derived from `publish_post` rather than
+  declared.
+- **New `src/lib/connectors/registry.ts`** — the seam. `lookupCapability()` is
+  the one gate every capability call passes through, and it returns a *reason*,
+  not a null: `unsupported` ("this platform cannot post") and `not_connected`
+  ("reconnect this account") send the user to different places, and collapsing
+  them makes a product limit look like the user's mistake.
+- **Adapters derive their capability set from the registry** instead of
+  restating it, so the two declarations cannot drift.
+  `src/lib/connectors/registry.test.ts` fails if they do.
+- `CAPABILITY_NAMES` moved to `src/lib/platforms.ts`, the lowest layer of the
+  vocabulary, so the UI and the connector contract read one list.
+  `connectors/types.ts` re-exports it, so connector code has one import site.
+
+### Documentation
+
+- `docs/capabilities.md` — **new.** The vocabulary, the three levels (platform /
+  account / connector) and why they differ, and why the registry is the
+  authority.
+- `docs/platform-development.md` — **new.** Adding a publishing platform end to
+  end, in dependency order, with a definition of done.
+- `docs/connectors.md` — capability table, the registry's authority, and an
+  honest note that the legacy string bridge did *not* land here.
+- `docs/accounts.md`, `docs/architecture.md`, `README.md`, `ROADMAP.md` updated.
+
+### Breaking Changes
+
+- **`PublishingCapability.status` is removed.** Use
+  `capabilitiesForPlatform(id)` or `platformSupports(id, capability)`. For
+  internal callers `isPublishablePlatform(id)` is unchanged.
+- **`PublishingStatus` is no longer exported.**
+
+### Migration Notes
+
+No database migration. `accounts.capabilities` already stores capability names
+and `capabilitiesForAccount()` already preferred the account's stored set, so
+per-account capability narrowing works today; only the platform-level
+declaration changed shape.
+
 ## [0.5.0] — 2026-09-27
 
 Unified Platform API, part 1 of 2. The last of the legacy data model is gone:

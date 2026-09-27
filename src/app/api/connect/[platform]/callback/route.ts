@@ -247,8 +247,13 @@ export async function GET(
 
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
 
-  // Reconnecting replaces the connection. Appending instead would leave the
-  // previous row in place and let the publish path pick up a stale token.
+  // NOTE: the v1.0 account model (ADR-006) has `registerConnection` ready, but
+  // this callback still writes to `social_accounts` because the publish path,
+  // token maintenance, and connection health all still read that table.
+  // Switching the writer before the readers would mean a reconnect lands in
+  // `connections` while `publish.ts` looks in `social_accounts` — the user's
+  // connection would appear missing with no error anywhere. Both sides switch
+  // together, in the release that drops the table.
   await db
     .delete(socialAccounts)
     .where(
@@ -265,7 +270,9 @@ export async function GET(
     platformAccountId: platformAccountId ?? tokenData.user_id ?? "unknown",
     username: profileUsername ?? tokenData.username ?? null,
     accessTokenEnc: encryptSecret(accessToken),
-    refreshTokenEnc: tokenData.refresh_token ? encryptSecret(tokenData.refresh_token) : null,
+    refreshTokenEnc: tokenData.refresh_token
+      ? encryptSecret(tokenData.refresh_token)
+      : null,
     tokenExpiresAt: expiresAt,
   });
 

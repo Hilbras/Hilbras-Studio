@@ -125,6 +125,9 @@ export async function connectTelegramAction(
 
   // Reconnecting replaces the connection — same rule as the OAuth callback,
   // so the publish path can never pick up a stale bot token.
+  // Still writes to `social_accounts` — see the note in the OAuth callback.
+  // Switching writers before the publish path's reads would silently break every
+  // reconnect, so both switch together when the table is dropped.
   await db
     .delete(socialAccounts)
     .where(

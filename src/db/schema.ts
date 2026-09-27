@@ -520,8 +520,9 @@ export type NewAccount = typeof accounts.$inferInsert;
  * post_targets — which platforms a post went to.
  *
  * Replaces `posts.platforms`, a comma-separated string that cannot express
- * per-account targeting. Backfilled by splitting that column; the old column
- * is still written and still read during v0.4.x, and is dropped in v0.5.0.
+ * per-account targeting. Backfilled by splitting that column in migration 0008;
+ * the old column is still written and still read during v0.4.x, and is dropped
+ * in v0.5.0.
  */
 export const postTargets = pgTable(
   "post_targets",
@@ -542,4 +543,48 @@ export const postTargets = pgTable(
 export type PostTarget = typeof postTargets.$inferSelect;
 export type NewPostTarget = typeof postTargets.$inferInsert;
 
+
+
+/**
+ * publish_receipts — proof that a specific post was already dispatched.
+ *
+ * ADR-005. The queue retries automatically, so a step can run twice. Until this
+ * table existed, a re-run would re-publish: the run-level guard only protects
+ * *within* one run, and a retry is a **new** run with a new id, so its step keys
+ * differ and nothing stopped a second dispatch.
+ *
+ * The key is the step's derived idempotency key. A connector consults it before
+ * dispatching and records the platform's own ids on the way out. A retry with a
+ * known key returns the recorded result instead of calling the platform.
+ *
+ * `platform_post_id` and `permalink` are stored so a redelivery can report the
+ * real, already-published post — the user sees where it went, not a bare
+ * "already done".
+ *
+ * Nothing expires automatically. Retaining receipts forever is deliberate: the
+ * table only grows with distinct step keys, a receipt that outlives its
+ * usefulness is harmless, and a deleted one is a double post.
+ */
+export const publishReceipts = pgTable(
+  "publish_receipts",
+  {
+    /** The step's derived idempotency key. */
+    idempotencyKey: text("idempotency_key").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    accountKey: text("account_key").notNull(),
+    platform: text("platform").notNull(),
+    /** What the platform returned, so a redelivery can report it faithfully. */
+    platformPostId: text("platform_post_id"),
+    permalink: text("permalink"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => [
+    index("publish_receipts_account_idx").on(t.userId, t.accountKey),
+    index("publish_receipts_created_idx").on(t.createdAt),
+  ]
+);
+
+export type PublishReceipt = typeof publishReceipts.$inferSelect;
 

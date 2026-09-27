@@ -14,12 +14,9 @@ import "server-only";
  * @see ../connectors/types.ts for the contract and its rules.
  */
 
-import {
-  getPublishingCapability,
-  isPlatformId,
-  PLATFORM_IDS,
-} from "@/lib/platforms";
+import { getPublishingCapability, isPlatformId, PLATFORM_IDS } from "@/lib/platforms";
 import { publishForUser, type PublishResult } from "@/lib/publish";
+import { findReceipt, recordReceipt } from "@/lib/accounts/receipts";
 
 import { classifyLegacyError, unknownError } from "./errors";
 import type {
@@ -49,18 +46,43 @@ function toPublishResult(
   };
 }
 
-function publishPost(
+/**
+ * Dispatch through the legacy publisher, guarded by a publish receipt.
+ *
+ * This is where ADR-005 stops being a comment. The run-level guard only
+ * protects *within* one run, and a retry is a new run with a new id — so its
+ * step keys differ and nothing stopped a second dispatch to the platform.
+ *
+ * The receipt is keyed on the step's idempotency key, which is derived from
+ * `(runId, stepIndex, targetAccount)`. A retry of the *same* step produces the
+ * same key, so the second attempt returns the recorded result instead of
+ * publishing again.
+ *
+ * The order is check → dispatch → record. A crash after dispatch and before
+ * recording leaves no receipt, and the next attempt dispatches again — which is
+ * the uncertain-outcome case, handled as a failure rather than a silent success.
+ * The opposite asymmetry is deliberate: the dangerous direction is *claiming* a
+ * receipt for something that never shipped.
+ */
+async function publishPost(
   platform: string,
   context: ConnectorContext,
   input: PublishPostInput,
 ): Promise<PublishPostResult> {
-  // `idempotencyKey` is accepted and ignored: the legacy publishers predate
-  // ADR-005 and have no result cache to consult. Swallowing it here — rather
-  // than rejecting it — is what lets the interface ship the field now and have
-  // connectors honour it individually as they are upgraded.
-  void input.idempotencyKey;
+  const idempotencyKey = input.idempotencyKey;
 
-  return publishForUser(
+  if (idempotencyKey) {
+    const existing = await findReceipt(context.userId, idempotencyKey);
+    if (existing) {
+      return {
+        ok: true,
+        platformPostId: existing.platformPostId,
+        permalink: existing.permalink,
+      };
+    }
+  }
+
+  const dispatched: PublishPostResult = await publishForUser(
     context.userId,
     platform,
     input.text,
@@ -69,6 +91,19 @@ function publishPost(
     (result) => toPublishResult(platform, result),
     (cause: unknown) => ({ ok: false, error: unknownError(platform, cause) }),
   );
+
+  if (idempotencyKey && dispatched.ok) {
+    await recordReceipt({
+      userId: context.userId,
+      idempotencyKey,
+      accountKey: context.accountId ?? platform,
+      platform,
+      platformPostId: dispatched.platformPostId,
+      permalink: dispatched.permalink,
+    });
+  }
+
+  return dispatched;
 }
 
 /** The five platforms that dispatch today, in registry order. */

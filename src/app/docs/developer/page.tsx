@@ -60,7 +60,11 @@ export default function DeveloperDocsPage() {
 ├─ lib/                platforms.ts (registry), publish.ts (publishers),
 │                      ai.ts (model resolution), scheduled-posts.ts,
 │                      chat.ts, crypto
-└─ db/schema.ts        Drizzle schema
+│  ├─ runtime/         execution state, plan gate, run store,
+│  │                    inngest/ (queue functions)
+│  └─ goals/           cron.ts, validation.ts, parse.ts,
+│                      service.ts, scheduler.ts
+├─ db/schema.ts        Drizzle schema
 drizzle/               generated SQL migrations
 vercel.json            cron schedule`}</code>
       </pre>
@@ -180,6 +184,15 @@ pnpm dev                        # http://localhost:3000`}</code>
           The Scheduler page&apos;s <strong>Publish due now</strong> button
           invokes the same logic manually — required on Vercel&apos;s Hobby
           plan, where cron runs at most daily.
+        </li>
+        <li>
+          <strong>Goals are scheduled separately.</strong> The post scheduler
+          above runs on Vercel cron; the goal scheduler is an Inngest cron
+          function (<code>*/5 * * * *</code>) in{" "}
+          <code>src/lib/runtime/inngest/functions.ts</code>, because the queue is
+          already the system that owns execution. It finds goals whose{" "}
+          <code>next_firing_at</code> has passed and sends one{" "}
+          <code>GOAL_SCHEDULED</code> event each.
         </li>
       </ul>
 

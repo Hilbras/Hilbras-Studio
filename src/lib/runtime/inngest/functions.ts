@@ -22,6 +22,8 @@
 
 import { NonRetriableError } from "inngest";
 
+import { dispatchDueGoals as dispatchDueGoalsImpl } from "@/lib/goals/scheduler";
+
 import { executeStep, resolverForUser, type ExecutorDeps } from "../executor";
 import {
   createRun,
@@ -36,6 +38,21 @@ import { GOAL_SCHEDULED, inngest } from "./client";
 
 /** Give up after this many attempts; the run stays failed and visible. */
 const MAX_ATTEMPTS = 3;
+
+/**
+ * How often the scheduler looks for due goals.
+ *
+ * Every five minutes, so the worst a user sees is a firing up to five minutes
+ * late. Inngest runs this rather than a Vercel cron because the queue is already
+ * the system that owns execution (ADR-001) — a second scheduler with its own
+ * secret, its own timeout budget, and its own idea of what is running would be
+ * a second source of truth about work in flight.
+ *
+ * This is a poll, not a queue. Inngest's own cron support would deliver a timer
+ * per goal, which needs a durable job store per goal and gives up the single
+ * query that makes "which goals are due" one index scan.
+ */
+const SCHEDULER_TICK = "*/5 * * * *";
 
 export const executeGoalRun = inngest.createFunction(
   {
@@ -87,6 +104,29 @@ export const executeGoalRun = inngest.createFunction(
 
     // --- 3. execute the steps --------------------------------------------
     const steps = await step.run("load-steps", () => listRunSteps(runId));
+
+    // A run with no steps is not a successful no-op.
+    //
+    // Nothing writes `run_steps` yet — that is Phase 5's planner, which turns a
+    // goal's statement into a plan. Until then a goal would fire, execute
+    // nothing, and report `completed`, which is the single worst outcome
+    // available here: the user sees a green run and no post. Refusing means the
+    // gap is loud, in the run's own history, instead of silent.
+    if (steps.length === 0) {
+      await step.run("finish-empty-run", async () => {
+        await recordEvent(runId, {
+          level: "error",
+          event: "run.no_steps",
+          detail: {
+            explanation:
+              "No plan has been generated for this goal yet. This is expected until AI planning ships (Phase 5).",
+          },
+        });
+        await transitionRun(runId, { type: "fail" });
+      });
+
+      return { runId, outcome: "no_plan" as const };
+    }
 
     let anyFailed = false;
     let retryableFailure = false;
@@ -158,7 +198,46 @@ export const executeGoalRun = inngest.createFunction(
   },
 );
 
-export const inngestFunctions = [executeGoalRun];
+/**
+ * The scheduler tick.
+ *
+ * Finds every goal whose firing time has arrived and sends one event per goal.
+ * `dispatchDueGoals` decides the policy — which slots are due, how missed
+ * firings collapse, what happens when a schedule stops parsing — and this
+ * function is only the thing that owns a queue connection.
+ */
+export const dispatchDueGoals = inngest.createFunction(
+  {
+    id: "dispatch-due-goals",
+    // A tick that throws is retried by Inngest, which is what we want: the
+    // advance-then-dispatch order means a retry re-sends nothing, because the
+    // goals that succeeded are no longer due.
+    retries: 2,
+    triggers: [{ cron: SCHEDULER_TICK }],
+  },
+  async () => {
+    const summary = await dispatchDueGoalsImpl(async (event) => {
+      // `inngest.send` resolves to the queue's ids, which the scheduler has no
+      // use for — the dispatch result is what gets reported.
+      await inngest.send({ name: GOAL_SCHEDULED, data: event });
+    });
+
+    return {
+      due: summary.due,
+      dispatched: summary.dispatched,
+      skipped: summary.skipped,
+      skippedGoals: summary.results
+        .filter((result) => !result.dispatched)
+        .map((result) => ({
+          goalId: result.goalId,
+          scheduleSlot: result.scheduleSlot,
+          reason: result.reason,
+        })),
+    };
+  },
+);
+
+export const inngestFunctions = [executeGoalRun, dispatchDueGoals];
 
 // Re-exported so callers get the right error class from one module.
 export { NonRetriableError };

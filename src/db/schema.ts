@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { customType, pgTable, text, timestamp, boolean, integer, unique, index } from "drizzle-orm/pg-core";
 
 /**
@@ -255,12 +256,35 @@ export const goals = pgTable(
     /** The goal as the user stated it. Kept verbatim for the AI planner. */
     statement: text("statement").notNull(),
     /**
-     * Cron expression, UTC. Phase 4 owns parsing; this column only records the
-     * already-validated value so the scheduler never re-parses user input.
+     * Cron expression in the user's zone. Phase 4 owns parsing; this column
+     * only records the already-validated value so the scheduler never re-parses
+     * user input.
      */
     scheduleCron: text("schedule_cron").notNull(),
     /** IANA zone the schedule is expressed in, e.g. "Europe/Berlin". */
     scheduleTimezone: text("schedule_timezone").notNull().default("UTC"),
+    /**
+     * When this goal is next due, as an absolute instant.
+     *
+     * Derived from `scheduleCron` and `scheduleTimezone`, and maintained by the
+     * goal service. Never a source of truth: the two columns above are, and
+     * this one is recomputed whenever either changes.
+     *
+     * It exists so the scheduler's query is an index scan — `next_firing_at <=
+     * now()` — rather than a cron evaluation per active goal on every tick.
+     * Computing it in SQL would mean reimplementing cron *and* DST there, which
+     * is the same arithmetic `lib/goals/cron` already does correctly.
+     *
+     * `timestamptz`, unlike every other timestamp in this schema, on purpose.
+     * This column is compared against `now()` and denotes the same moment
+     * whatever TimeZone the connection happens to be in; a bare `timestamp`
+     * would silently reinterpret it per session, which is a bug that only
+     * appears once a connection pool is configured differently.
+     *
+     * NULL whenever the goal is not active — a paused goal has no next firing,
+     * and the partial index is built on the active rows alone.
+     */
+    nextFiringAt: timestamp("next_firing_at", { withTimezone: true }),
     /**
      * Account identifiers this goal targets, as a JSON array of
      * `platform:handle` strings. Phase 2 replaces this with a real join to the
@@ -273,7 +297,23 @@ export const goals = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
-  (t) => [index("goals_user_status_idx").on(t.userId, t.status)]
+  (t) => [
+    index("goals_user_status_idx").on(t.userId, t.status),
+    /**
+     * The scheduler's only query, in one index.
+     *
+     * Partial on `status = 'active'` because a paused or archived goal is never
+     * due: its `next_firing_at` is NULL, so including it here would only make
+     * the index larger for the majority of rows on a table where most goals are
+     * paused most of the time. The predicate is repeated in the WHERE clause of
+     * every query that uses it — a partial index does not imply the filter, and
+     * a query that relied on that would be correct today and wrong after
+     * someone widened the index.
+     */
+    index("goals_due_idx")
+      .on(t.nextFiringAt)
+      .where(sql`${t.status} = 'active'`),
+  ],
 );
 
 export type Goal = typeof goals.$inferSelect;

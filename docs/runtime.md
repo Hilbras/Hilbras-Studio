@@ -164,12 +164,14 @@ run that already finished on its own.
 
 ## Not yet implemented
 
-Phase 1 deliberately stops short of:
-
-- the **scheduler** that converts a goal's cron into events (Phase 4)
 - the **planner** that turns a goal into a plan (Phase 5)
 - **approvals**, which is what the queue was chosen for (Phase 6)
 
-A goal's steps are written by the planner when it lands; until then a run
-executes whatever steps are persisted for it.
+The **scheduler** that converts a goal's cron into events shipped in Phase 4
+(v0.6.0) — see [`scheduling.md`](./scheduling.md).
+
+A goal's steps are written by the planner when it lands. Until then a fired goal
+has none, and `executeGoalRun` now **fails** the run with a `run.no_steps` event
+rather than settling it as `completed`. A no-op that reports success is the worst
+outcome available here: the user sees a green run and no post.
 

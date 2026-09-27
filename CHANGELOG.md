@@ -13,6 +13,109 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.6.0] — 2026-09-27
+
+The Goal Engine. Until this release the Runtime was complete and dark:
+`executeGoalRun` waited for a `GOAL_SCHEDULED` event that nothing sent, and there
+was no way to create, edit, or stop a goal. A goal is now a thing that fires.
+
+### Bug Fixes
+
+- **A run with no steps reported `completed`.** Nothing in the codebase has ever
+  written a `run_steps` row — that is Phase 5's planner — so a goal fired, loaded
+  zero steps, executed nothing, and settled as a successful run. The user saw a
+  green run and no post. A no-op that reports success is the worst outcome
+  available to this system, so `executeGoalRun` now records a `run.no_steps` event
+  and fails the run with outcome `no_plan`. The gap is loud, in the run's own
+  history, instead of silent.
+
+### Added
+
+- **Cron engine** (`src/lib/goals/cron.ts`) — five-field parsing with macros,
+  names, ranges, steps, and lists; Vixie's rule that two restricted day fields are
+  OR'd, not AND'd; and next-firing arithmetic that is correct across daylight
+  saving. A schedule is a **local wall-clock** promise, so a skipped hour is
+  skipped and a repeated hour fires **once** — the alternative would be a
+  duplicate publish, the one failure mode the rest of the Runtime spends so much
+  machinery preventing. No new dependency.
+- **Validation gate** (`src/lib/goals/validation.ts`) — pure, so it is testable
+  without Postgres. A goal is configured once and then forgotten, so an account
+  that is disconnected, switched off, or incapable has to be refused **while
+  someone is looking at the form**. It returns every issue rather than the first,
+  and distinguishes `unknown_account`, `account_disabled`, and
+  `capability_unavailable` — three problems that send the user to three different
+  places. It refuses this phase's own roadmap example, because LinkedIn completes
+  OAuth and has no publisher: a goal saved there would look configured and never
+  publish.
+- **Interval floor** — two firings of one goal may be no closer than 15 minutes
+  (`MIN_GOAL_INTERVAL_MS`). A goal publishes on every firing, so this is the floor
+  on how often the product can post to one account on a user's behalf; well inside
+  every platform's rate limit, and below the frequency at which repeated posts get
+  a grant revoked. Enforced by probing real consecutive slots, because
+  `0,5,10 * * * *` and `*/5 * * * *` are the same schedule and only the gap is the
+  property that matters.
+- **Prefill** (`src/lib/goals/parse.ts`) — reads the platforms, cadence, and time
+  out of the sentence the user is going to write anyway. It is a prefill, not an
+  interpreter: it never invents an account key (a sentence names a *platform*,
+  only the user knows which of their three accounts), never proposes a schedule
+  its own validator would reject, and lists what it did **not** read. A
+  prefill's first job is to say *"linkedin is connected but cannot publish yet"*
+  at typing time rather than at the first firing.
+- **Goal service** (`src/lib/goals/service.ts`) — the only module that writes
+  `goals`, and there is no exported function that writes a schedule which has not
+  been through the gate. Edits re-validate the **whole** goal, a refused edit
+  changes nothing, pausing clears the firing time, and resuming recomputes it from
+  now rather than replaying the slot that was missed. Health is derived from the
+  last run, never denormalised onto the goal.
+- **Scheduler** (`src/lib/goals/scheduler.ts` and an Inngest cron function) — finds
+  due goals every five minutes and advances each **before** dispatching it. The
+  reverse order is survivable but wedges a goal on a loop that can never get past
+  the slot that killed it; advancing first cannot double-publish. The next slot is
+  computed from *now*, so firings missed during an outage **collapse into one
+  run** rather than arriving as a burst.
+- **Migration 0012** — `goals.next_firing_at timestamptz` and a partial index
+  (`status = 'active'`), so finding what is due is one index scan instead of a
+  cron evaluation per active goal per tick. The column is timezone-aware on
+  purpose: every other timestamp in this schema is a bare `timestamp` read in the
+  session's `TimeZone`, which would make the same row read differently depending
+  on which pooled connection served the query. Active goals that predate the
+  column are backfilled to `now()` — a schedule that has already passed *is* due,
+  and nothing recorded whether it was ever served.
+
+### Changed
+
+- `docs/goals.md` rewritten for the shipped behaviour. It previously said "Phase 4
+  parses [the statement]" and listed goal creation, scheduling, and pause/resume
+  as unbuilt; it now describes what exists and states plainly that *interpreting*
+  the statement is Phase 5's planner, which reads it verbatim.
+- `docs/runtime.md` no longer says a run "executes whatever steps are persisted"
+  now that zero steps is a failure rather than a success.
+
+### Testing
+
+- 180 unit tests (was 98) and 70 integration (was 44). The DST cases are named
+  after the situations they cover — gap, fold, no-DST zone, half-hour offset,
+  midnight rendering.
+- `tests/integration/goal-migration.test.ts` exists as its own file because **a
+  backfill cannot be tested from a database that has already migrated**: rows
+  inserted after a full `migrate()` supply the column themselves, so the test
+  would pass with the `UPDATE` deleted. That file stages the migrations up to
+  0011, inserts, then applies 0012.
+- The three load-bearing new tests were mutation-checked — deleting the migration's
+  `UPDATE`, flipping the DST fold from earliest to latest instant, and making pause
+  leave a stale firing time in place. Each one fails, and each was restored.
+
+### Not included, deliberately
+
+- **The Goals UI.** Phase 7 (v0.9.0). This release ships the engine and the
+  service those screens will call.
+- **Natural-language planning.** Phase 5 (v0.7.0). The statement is stored and
+  served verbatim; the prefill above is the honest limit of what a rule can read.
+- **A per-goal catch-up queue.** Missed firings collapse to one run, and a failed
+  dispatch loses one firing rather than retrying it, because a retry would need
+  somewhere to record what the firing still owes. That is the delivery guarantee
+  Phase 8 hardening is for.
+
 ## [0.5.1] — 2026-09-27
 
 Unified Platform API, part 2 of 2. Capability sets replace the publish

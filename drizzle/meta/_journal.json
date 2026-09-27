@@ -85,6 +85,13 @@
       "when": 1790528811226,
       "tag": "0011_post_targets_contract",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790532210220,
+      "tag": "0012_goal_next_firing",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.5.1
+**Current version:** v0.6.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -135,13 +135,25 @@ style preference.
   approval policy has not cleared.
 - **Location:** `src/lib/tools/**`.
 
-#### Runtime *(Phase 1)*
+#### Runtime *(Phase 1, goal engine in Phase 4)*
 
 - **Owns:** Goal -> Plan -> Run -> Step -> Result, execution state, retries,
   scheduling, and approval suspension.
 - **Must not:** contain platform-specific logic, and must never talk to a
   platform API directly -- only through Connectors.
-- **Location:** `src/lib/runtime/**`, `src/lib/runtime/functions/**` (Inngest).
+- **Location:** `src/lib/runtime/**`, `src/lib/runtime/inngest/**` (Inngest),
+  `src/lib/goals/**`.
+
+The goal engine (`src/lib/goals/**`) sits under the Runtime rather than beside it:
+it is the only producer of `GOAL_SCHEDULED` events and the only writer of
+`goals`. It depends on the Runtime's run store, never the reverse.
+
+Two gates validate the same properties at two different times, and **neither
+replaces the other**. `lib/goals/validation.ts` checks a goal when a user saves
+it, so a goal against a disconnected or incapable account is refused while
+someone is still looking at the form. `lib/runtime/plan.ts` checks a plan when it
+is produced, because a planner's output is untrusted by construction and a goal
+validated today can have its account disconnected tomorrow.
 
 #### Infrastructure
 
@@ -253,6 +265,13 @@ Goal ──1:N──> Run ──1:N──> Step ──N:1──> Account
 Execution states: `pending -> running -> (completed | failed | cancelled)`,
 plus `awaiting_approval` as a **suspension**, not a terminal state. A suspended
 run holds no lease and consumes no budget.
+
+A goal additionally carries `next_firing_at`: a **derived** instant the scheduler
+selects on, so finding what is due is one index scan rather than a cron evaluation
+per active goal. `schedule_cron` and `schedule_timezone` remain the source of
+truth, and every mutation that changes either recomputes it. It is `timestamptz`
+because it denotes an absolute moment; every other timestamp in this schema is a
+bare `timestamp` and is read in the session's `TimeZone`.
 
 ### 4.2 Connection vs. Account
 

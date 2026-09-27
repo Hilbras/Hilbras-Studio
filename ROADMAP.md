@@ -25,9 +25,9 @@ v0.4.0 — Multi-Account Connections
    ▼
 v0.5.0 — Unified Platform API: targets
    ▼
-v0.5.1  (current) — Unified Platform API: connectors
+v0.5.1 — Unified Platform API: connectors
    ▼
-v0.6.0 — Goal Engine
+v0.6.0  (current) — Goal Engine
    ▼
 v0.7.0 — AI Planning
    ▼
@@ -229,12 +229,47 @@ Users describe what they want instead of building workflows by hand.
 }
 ```
 
-- [ ] Goal creation, parsing, validation, configuration.
-- [ ] Scheduling and constraints.
-- [ ] Target accounts.
-- [ ] Goal status, history, editing, pause/resume.
+- [x] Goal creation, parsing, validation, configuration.
+- [x] Scheduling and constraints.
+- [x] Target accounts.
+- [x] Goal status, history, editing, pause/resume.
 
 **Docs:** `goals.md`, `scheduling.md`, `goal-engine.md`
+
+### v0.6.0 — shipped ✅
+
+The Runtime was complete and dark: `executeGoalRun` waited for a `GOAL_SCHEDULED`
+event that nothing sent, and no way existed to create, edit, or stop a goal. This
+phase made a schedule mean something.
+
+- **Cron engine** (`src/lib/goals/cron.ts`) — five fields, macros, Vixie's
+  OR-the-two-day-fields rule, and DST-correct next-firing arithmetic. A schedule is
+  a local wall-clock promise: a skipped hour is skipped, a repeated hour fires
+  **once**. No new dependency.
+- **Validation gate** (`validation.ts`) — pure, so the whole gate is testable
+  without Postgres. Refuses the roadmap's own example, because LinkedIn has no
+  publisher: a goal saved there would look configured and never publish. Collects
+  every issue, not the first.
+- **Interval floor** — two firings no closer than 15 minutes, enforced by probing
+  real consecutive slots. A goal publishes on every firing, so this is the floor
+  on how often the product can post for a user.
+- **Prefill** (`parse.ts`) — reads platforms, cadence, and time out of the
+  sentence the user is writing anyway. Never invents an account key, never
+  proposes a schedule its own validator would reject, and says what it did *not*
+  read.
+- **Service** (`service.ts`) — the only writer of `goals`. Edits re-validate the
+  whole goal; a refused edit changes nothing; pausing clears the firing time.
+- **Scheduler** (`scheduler.ts` + an Inngest cron function) — **advance, then
+  dispatch**, and compute the next slot from *now* so missed firings collapse into
+  one run rather than arriving as a burst.
+- **Migration 0012** — `next_firing_at timestamptz` + a partial index, with a
+  backfill for goals that predate the column.
+- **Defect fixed** — a run with no steps reported `completed`. Nothing has ever
+  written `run_steps`, so a fired goal did nothing and claimed success. It now
+  fails with `run.no_steps`.
+
+**Not here, on purpose:** the Goals UI (Phase 7), natural-language planning
+(Phase 5), and a per-goal catch-up queue.
 
 ---
 

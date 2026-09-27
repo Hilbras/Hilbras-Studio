@@ -68,18 +68,27 @@ The Runtime executes tasks instead of Studio simply connecting platforms togethe
 Goal → Runtime → Plan → Tasks → Execution → Result
 ```
 
+- [x] Define execution state: pending, running, completed, failed, cancelled
+      (plus `awaiting_approval` as a suspension) — `src/lib/runtime/state.ts`,
+      with an exhaustive state × event test.
+- [x] **Define the `Connector` / `Capability` interface and wrap the five
+      existing publishers in it** (ADR-002 — pulled forward from Phase 3) —
+      `src/lib/connectors/`, documented in `docs/connectors.md`.
 - [ ] Runtime Engine on the durable queue (ADR-001).
-- [ ] Define `Goal`, `Task`, `Run`.
-- [ ] Define execution state: pending, running, completed, failed, cancelled
-      (plus `awaiting_approval` as a suspension).
+- [ ] Define `Goal`, `Task`, `Run` — the state machine and connector interface
+      are done; the persistence model is not.
 - [ ] Execution history.
 - [ ] Runtime logging.
-- [ ] Error handling and a basic retry mechanism.
+- [ ] Error handling and a basic retry mechanism — `shouldRetry` and
+      `ConnectorError.retryable` are in place; the executor loop is not.
 - [ ] Persist execution state.
-- [ ] **Define the `Connector` / `Capability` interface and wrap the five
-      existing publishers in it** (ADR-002 — pulled forward from Phase 3).
 
-**Docs:** `architecture.md`, `runtime.md`, `goals.md`, `execution.md`
+**Docs:** `architecture.md` ✅, `connectors.md` ✅, `runtime.md`, `goals.md`,
+`execution.md`
+
+**Progress:** first increment landed. The two pure cores — the connector
+contract and the execution state machine — are complete and tested, which is the
+part that everything else depends on and the part ADR-002 existed to protect.
 
 ---
 

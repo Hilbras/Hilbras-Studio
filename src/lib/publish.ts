@@ -832,8 +832,11 @@ const DEFAULT_TARGET_PLATFORMS = ["instagram", "facebook", "x", "threads"];
  * The user id is passed in rather than taken from the session because the
  * scheduled-post runner publishes for users who are not making a request —
  * a cron invocation has no session cookie.
+ *
+ * Exported for the legacy connector adapter in `@/lib/connectors`, which is the
+ * only other caller. New code should go through the connector registry instead.
  */
-async function publishForUser(
+export async function publishForUser(
   userId: string,
   platform: string,
   text: string,

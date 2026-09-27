@@ -35,6 +35,13 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Next 16 generates route/layout types (LayoutProps, PageProps, …) into
+      # .next/types, and next-env.d.ts is gitignored. Without this step the
+      # typecheck below cannot resolve them and fails on a clean checkout even
+      # though the code is correct.
+      - name: Generate Next.js types
+        run: pnpm exec next typegen
+
       - name: Typecheck
         run: pnpm typecheck
 

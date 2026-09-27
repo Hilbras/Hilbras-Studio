@@ -11,6 +11,8 @@ import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
 import { BUILTIN_PROVIDER_ID, getBuiltinProviderConfig } from "@/lib/ai";
 import { formatProviderHttpError } from "@/lib/ai-sdk";
 import { assertPublicProviderUrl } from "@/lib/net-guard";
+import { fetchPinnedProvider } from "@/lib/pinned-provider-fetch";
+import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
 
 export interface AiProviderItem {
   id: string;
@@ -259,9 +261,8 @@ async function pingEndpoint(target: PingTarget, start: number) {
   const baseUrl = target.baseUrl.replace(/\/+$/, "");
 
   try {
-    await assertPublicProviderUrl(baseUrl);
     if (target.apiFormat === "anthropic") {
-      const res = await fetch(`${baseUrl}/messages`, {
+      const res = await fetchPinnedProvider(`${baseUrl}/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -282,7 +283,7 @@ async function pingEndpoint(target: PingTarget, start: number) {
     }
 
     // OpenAI format
-    const res = await fetch(`${baseUrl}/chat/completions`, {
+    const res = await fetchPinnedProvider(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -311,6 +312,13 @@ export async function testPingProviderAction(
 ): Promise<{ ok: boolean; latencyMs?: number; error?: string }> {
   const session = await getSessionUser();
   if (!session) return { ok: false, error: "Not signed in" };
+
+  try {
+    const budget = await consumeAiBudget(session.id, "provider_test");
+    if (!budget.allowed) return { ok: false, error: aiBudgetMessage(budget) };
+  } catch {
+    return { ok: false, error: "AI usage controls are temporarily unavailable." };
+  }
 
   if (id === BUILTIN_PROVIDER_ID) {
     const builtin = getBuiltinProviderConfig();

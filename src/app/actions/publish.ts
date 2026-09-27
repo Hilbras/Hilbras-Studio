@@ -3,6 +3,10 @@
 import { z } from "zod";
 
 import { publishPost, publishToAll, type PublishResult } from "@/lib/publish";
+import { getSessionUser } from "@/lib/session";
+import { db } from "@/db";
+import { posts } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
 
 export interface PublishActionState {
   error?: string;
@@ -132,15 +136,28 @@ export async function publishPostNowAction(
   ];
 }
 
-/** Publish one draft to several platforms now — the Composer's main path. */
-export async function publishToAllNowAction(
+/**
+ * Publish the current Composer draft and persist the server-produced result in
+ * one server action.
+ *
+ * The browser must not submit the success flag or provider URL that decides a
+ * post's terminal state. Those values come from the connector response here,
+ * scoped to the post and authenticated user.
+ */
+export async function publishComposerDraftAction(
+  postId: string,
   text: string,
   imageUrl?: string,
-  platforms?: string[]
+  platforms?: string[],
 ): Promise<PublishResult[]> {
   const parsed = z
-    .object({ text: textSchema, platforms: platformsSchema, imageUrl: imageUrlSchema })
-    .safeParse({ text, platforms: platforms ?? [], imageUrl });
+    .object({
+      postId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Invalid post id"),
+      text: textSchema,
+      imageUrl: imageUrlSchema,
+      platforms: platformsSchema,
+    })
+    .safeParse({ postId, text, imageUrl, platforms: platforms ?? [] });
   if (!parsed.success) {
     return [
       {
@@ -151,9 +168,63 @@ export async function publishToAllNowAction(
     ];
   }
 
-  return publishToAll(
-    parsed.data.text,
-    parsed.data.imageUrl || undefined,
-    parsed.data.platforms
-  );
+  const session = await getSessionUser();
+  if (!session) {
+    return [{ platform: "all", success: false, error: "Not signed in" }];
+  }
+
+  const [post] = await db
+    .select({ id: posts.id, status: posts.status })
+    .from(posts)
+    .where(
+      and(
+        eq(posts.id, parsed.data.postId),
+        eq(posts.userId, session.id),
+        eq(posts.status, "draft"),
+      ),
+    )
+    .limit(1);
+  if (!post) {
+    return [{ platform: "all", success: false, error: "Post is not available" }];
+  }
+
+  try {
+    // The client may retry after a network error. Only a still-unsuccessful
+    // draft is eligible; a post already finalized by an earlier attempt must
+    // not receive a second platform call.
+    const results = await publishToAll(
+      parsed.data.text,
+      parsed.data.imageUrl || undefined,
+      parsed.data.platforms,
+    );
+    const ok = results.some((result) => result.success);
+
+    await db
+      .update(posts)
+      .set({
+        status: ok ? "published" : "failed",
+        results: JSON.stringify(results),
+        publishedAt: ok ? new Date() : null,
+      })
+      .where(
+        and(
+          eq(posts.id, post.id),
+          eq(posts.userId, session.id),
+          eq(posts.status, "draft"),
+        ),
+      );
+
+    return results;
+  } catch (error) {
+    return [
+      {
+        platform: "all",
+        success: false,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "Publish failed",
+      },
+    ];
+  }
 }

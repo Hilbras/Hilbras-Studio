@@ -7,6 +7,9 @@
  *  - the platform's account model (Pages vs Profiles vs Channels…)
  *  - content capabilities and limits (consumed later by the AI adaptation layer)
  *
+ * Publishing availability is tracked separately in PUBLISHING_CAPABILITIES so
+ * connectable OAuth integrations are not mistaken for implemented publishers.
+ *
  * This file is pure data: safe to import from client and server code.
  * Credentials themselves are only ever read server-side via the env names.
  */
@@ -69,6 +72,69 @@ export interface PlatformSpec {
     /** Hard platform rules the AI must respect. */
     rules: string[];
   };
+}
+
+export type PublishingStatus = "supported" | "connect_only";
+export type PublishingAccountSelection = "account" | "page" | "chat" | "none";
+
+export interface PublishingCapability {
+  status: PublishingStatus;
+  accountSelection: PublishingAccountSelection;
+  note?: string;
+}
+
+/**
+ * The source of truth for what the current product can actually publish.
+ * Connection support and publishing support are intentionally separate: several
+ * platforms can complete OAuth today while their publisher remains unfinished.
+ */
+export const PUBLISHING_CAPABILITIES: Record<PlatformId, PublishingCapability> = {
+  instagram: { status: "supported", accountSelection: "account" },
+  facebook: {
+    status: "supported",
+    accountSelection: "page",
+    note: "The current publisher selects the first Page returned by Meta.",
+  },
+  threads: { status: "supported", accountSelection: "account" },
+  x: { status: "supported", accountSelection: "account" },
+  linkedin: {
+    status: "connect_only",
+    accountSelection: "none",
+    note: "Publishing is not implemented yet.",
+  },
+  tiktok: {
+    status: "connect_only",
+    accountSelection: "none",
+    note: "Publishing is not implemented yet.",
+  },
+  youtube: {
+    status: "connect_only",
+    accountSelection: "none",
+    note: "Publishing is not implemented yet.",
+  },
+  pinterest: {
+    status: "connect_only",
+    accountSelection: "none",
+    note: "Publishing is not implemented yet.",
+  },
+  reddit: {
+    status: "connect_only",
+    accountSelection: "none",
+    note: "Publishing is not implemented yet.",
+  },
+  telegram: { status: "supported", accountSelection: "chat" },
+};
+
+export function isPlatformId(value: string): value is PlatformId {
+  return (PLATFORM_IDS as readonly string[]).includes(value);
+}
+
+export function getPublishingCapability(id: string): PublishingCapability | null {
+  return isPlatformId(id) ? PUBLISHING_CAPABILITIES[id] : null;
+}
+
+export function isPublishablePlatform(id: string): id is PlatformId {
+  return getPublishingCapability(id)?.status === "supported";
 }
 
 export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {

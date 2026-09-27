@@ -59,14 +59,14 @@ export function InboxClient({
     }
   };
 
-  React.useEffect(() => {
-    if (selected) {
-      setReply("");
-      setSendResult(null);
-      setSuggestions([]);
-      generateSuggestions(selected.text);
-    }
-  }, [selectedId]);
+  const selectMessage = (id: string) => {
+    const next = messages.find((message) => message.id === id);
+    setSelectedId(id);
+    setReply("");
+    setSendResult(null);
+    setSuggestions([]);
+    if (next) void generateSuggestions(next.text);
+  };
 
   const handleSend = async () => {
     if (!reply.trim() || !selected) return;
@@ -78,8 +78,8 @@ export function InboxClient({
       if (result.success) {
         setReply("");
       }
-    } catch (e: any) {
-      setSendResult({ success: false, error: e.message });
+    } catch (error: unknown) {
+      setSendResult({ success: false, error: error instanceof Error ? error.message : "Failed to send reply" });
     } finally {
       setSending(false);
     }
@@ -115,7 +115,7 @@ export function InboxClient({
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.15 + i * 0.06 }}
                   whileHover={{ x: 3 }}
-                  onClick={() => setSelectedId(m.id)}
+                  onClick={() => selectMessage(m.id)}
                   className={`w-full flex gap-3 rounded-xl p-3 text-left transition-colors ${
                     selectedId === m.id
                       ? "bg-gold-500/10 border border-gold-500/20"

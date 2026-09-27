@@ -9,7 +9,7 @@ import {
   summarizeSegment,
 } from "@/lib/ai";
 import { streamChat as sdkStream, type ChatMessage } from "@/lib/ai-sdk";
-import { consumeRateLimit } from "@/lib/rate-limit";
+import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
 import {
   RECENT_CONTEXT,
   ensureSession,
@@ -74,25 +74,15 @@ export async function POST(req: NextRequest) {
   }
   const { sessionId, message } = parsed.data;
 
-  // Cost guard: a signed-in account must not be able to burn unlimited
-  // provider spend. Counted before any model call; if the limiter itself
-  // fails, fail open — a broken counter should never lock users out.
-  const rateLimit = Math.max(
-    1,
-    Number.parseInt(process.env.ASSISTANT_RATE_LIMIT ?? "20", 10) || 20
-  );
+  // Cost guard: count the primary request before any provider call. A broken
+  // shared limiter fails closed so a database outage cannot create unmetered
+  // spend.
   try {
-    const verdict = await consumeRateLimit(
-      `assistant:${session.id}`,
-      rateLimit,
-      5 * 60
-    );
+    const verdict = await consumeAiBudget(session.id, "assistant");
     if (!verdict.allowed) {
       return new NextResponse(
         JSON.stringify({
-          error: `You're sending messages too quickly — try again in ${
-            verdict.retryAfterSec
-          } second${verdict.retryAfterSec === 1 ? "" : "s"}.`,
+          error: aiBudgetMessage(verdict),
           code: "RATE_LIMITED",
         }),
         {
@@ -105,8 +95,12 @@ export async function POST(req: NextRequest) {
       );
     }
   } catch (err) {
-    // fail open (see above) — but never silently
-    console.error("assistant rate limit check failed:", err);
+    console.error("assistant AI budget check failed:", err);
+    return errorJson(
+      "AI usage controls are temporarily unavailable.",
+      "AI_BUDGET_UNAVAILABLE",
+      503,
+    );
   }
 
   // Resolve the model first: a missing provider must not persist a message
@@ -135,7 +129,8 @@ export async function POST(req: NextRequest) {
     const segment = all.slice(summaryUpTo, olderCount);
     try {
       const add = await summarizeSegment(
-        segment.map((m) => `${m.role}: ${m.content.slice(0, 500)}`).join("\n")
+        segment.map((m) => `${m.role}: ${m.content.slice(0, 500)}`).join("\n"),
+        session.id,
       );
       if (add) {
         // Oldest text falls off the front so the block stays bounded.
@@ -157,7 +152,7 @@ export async function POST(req: NextRequest) {
   // Extraction runs alongside the reply and is awaited before the stream
   // closes — work started after close can be killed serverless.
   const memoryTask = worthExtracting(message)
-    ? extractMemories(message)
+    ? extractMemories(message, session.id)
         .then((facts) => recordMemories(session.id, facts))
         .catch(() => undefined)
     : Promise.resolve();

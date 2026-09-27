@@ -9,4 +9,10 @@ const pool = new Pool({
 });
 
 export const db = drizzle(pool, { schema });
+
+/** Close the process-wide pool during graceful shutdown or integration teardown. */
+export async function closeDb(): Promise<void> {
+  await pool.end();
+}
+
 export { schema };

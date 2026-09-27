@@ -83,17 +83,27 @@ until the next daily run. Hobby cron timing is also imprecise — a job set for
 09:00 may start anywhere up to 09:59.
 
 Each run claims posts with a conditional update before publishing, so an
-overlapping cron run and button click cannot post the same content twice. A post
-stuck in `publishing` (for example a timed-out invocation) is automatically
-re-queued after 10 minutes.
+overlapping cron run and button click cannot post the same content twice. The
+claim carries an owner ID and a 5-minute lease: while the lease is valid no
+other run may touch the post, and finalization only applies if the run still
+owns the claim, so a stale invocation can never overwrite a newer result. A
+post whose run died **before** any platform call was sent is re-queued once the
+lease expires; a post whose run died **after** dispatch began is marked
+`failed` with an explicit "outcome unknown — verify on the platform before
+retrying" result instead of being retried automatically, because the post may
+already be live. Each run also stops claiming new posts once its 100-second
+time budget is spent (the endpoint's `maxDuration` is 120s), so it returns
+cleanly before Vercel terminates it.
 
 ### Terminal statuses
 
 A post ends up `published` when **at least one** target platform accepted it, and
 `failed` when every one of them refused; `results` holds the per-platform detail
-either way. Both the Composer (`recordPublishOutcome` in `src/app/actions/posts.ts`)
-and the runner (`finalize` in `src/lib/scheduled-posts.ts`) apply that same rule —
-so a publish that a platform rejected is never reported as live in the queue.
+either way. Both the Composer (`publishComposerDraftAction` in
+`src/app/actions/publish.ts`) and the runner (`finalize` in
+`src/lib/scheduled-posts.ts`) apply that same rule server-side from real
+connector results — clients cannot submit a terminal state — so a publish that a
+platform rejected is never reported as live in the queue.
 
 ## 4. Platform OAuth redirect URIs
 

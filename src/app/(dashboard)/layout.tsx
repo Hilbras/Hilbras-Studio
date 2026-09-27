@@ -1,4 +1,5 @@
 import { AppShell } from "@/components/app-shell";
+import { PLATFORMS, type Platform } from "@/components/platform-icon";
 import { requireSessionUser } from "@/lib/session";
 import { getConnectedPlatforms } from "@/app/actions/posts";
 
@@ -9,6 +10,9 @@ export default async function DashboardLayout({
 }) {
   const user = await requireSessionUser();
   const platforms = await getConnectedPlatforms();
+  const connectedPlatforms = platforms.filter((platform): platform is Platform =>
+    PLATFORMS.includes(platform as Platform),
+  );
 
   return (
     <AppShell
@@ -17,7 +21,7 @@ export default async function DashboardLayout({
         email: user.email,
         username: user.username,
       }}
-      connectedPlatforms={platforms as any}
+      connectedPlatforms={connectedPlatforms}
     >
       {children}
     </AppShell>

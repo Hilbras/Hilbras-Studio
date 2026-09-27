@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Loader2, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { publishDuePostsAction } from "@/app/actions/posts";
 
 /**
  * Publish everything that is due right now.
@@ -24,11 +23,19 @@ export function PublishDueButton() {
     setRunning(true);
     setMessage(null);
     try {
-      const result = await publishDuePostsAction();
+      const response = await fetch("/api/cron/publish-scheduled", {
+        method: "POST",
+      });
+      const result = (await response.json()) as {
+        error?: string;
+        processed?: number;
+        published?: number;
+        failed?: number;
+      };
 
-      if (result.error) {
+      if (!response.ok || result.error) {
         setIsError(true);
-        setMessage(result.error);
+        setMessage(result.error ?? "Publish failed");
       } else if (!result.processed) {
         setIsError(false);
         setMessage("Nothing due right now");

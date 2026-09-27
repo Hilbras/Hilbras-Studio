@@ -1,13 +1,16 @@
-"use server";
+import "server-only";
 
-import { randomUUID } from "node:crypto";
-import { eq, and } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
 import { storedCredentials } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
-import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
+import { decryptSecret, maskSecret } from "@/lib/crypto";
+import {
+  getUserCredentialValue,
+  upsertUserCredential,
+} from "@/lib/credential-store";
 
 export interface CredentialItem {
   keyName: string;
@@ -46,22 +49,7 @@ export async function saveCredentialAction(
   }
 
   const { keyName, value, label } = parsed.data;
-  const sanitizedKey = keyName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-  const encrypted = encryptSecret(value);
-
-  await db
-    .insert(storedCredentials)
-    .values({
-      id: randomUUID(),
-      userId: session.id,
-      keyName: sanitizedKey,
-      encryptedValue: encrypted,
-      label: label || null,
-    })
-    .onConflictDoUpdate({
-      target: [storedCredentials.userId, storedCredentials.keyName],
-      set: { encryptedValue: encrypted, label: label || null, updatedAt: new Date() },
-    });
+  await upsertUserCredential(session.id, keyName, value, label || "");
 
   return { success: "Credential saved" };
 }
@@ -112,22 +100,15 @@ export async function getCredentialsAction(): Promise<{ credentials: CredentialI
   return { credentials };
 }
 
-/** Get decrypted credential value (for internal use only). */
+/**
+ * Get a decrypted credential value for the current session.
+ *
+ * Keep user-scoped access in the server-only credential store. This function
+ * exists only for trusted server callers and never returns a value to a client
+ * DTO or action result.
+ */
 export async function getCredentialValue(keyName: string): Promise<string | null> {
   const session = await getSessionUser();
   if (!session) return null;
-
-  const sanitizedKey = keyName.toLowerCase().replace(/[^a-z0-9_]/g, "_");
-  const [row] = await db
-    .select({ encryptedValue: storedCredentials.encryptedValue })
-    .from(storedCredentials)
-    .where(and(eq(storedCredentials.userId, session.id), eq(storedCredentials.keyName, sanitizedKey)))
-    .limit(1);
-
-  if (!row?.encryptedValue) return null;
-  try {
-    return decryptSecret(row.encryptedValue);
-  } catch {
-    return null;
-  }
+  return getUserCredentialValue(session.id, keyName);
 }

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { createSession, destroySession } from "@/lib/session";
+import { getSignupPolicy, isValidInviteCode } from "@/lib/signup-policy";
 
 export interface AuthFormState {
   error?: string;
@@ -27,6 +28,7 @@ const signUpSchema = z.object({
     .regex(USERNAME_PATTERN, USERNAME_MESSAGE),
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
   password: z.string().min(8, "Password must be at least 8 characters").max(128),
+  inviteCode: z.string().max(200).optional(),
 });
 
 const signInSchema = z.object({
@@ -48,6 +50,21 @@ export async function signUpAction(
   _prev: AuthFormState,
   formData: FormData
 ): Promise<AuthFormState> {
+  const signupPolicy = getSignupPolicy();
+  if (!signupPolicy.publicSignupEnabled) {
+    return { error: "Public signup is currently disabled." };
+  }
+  if (
+    signupPolicy.inviteRequired &&
+    !isValidInviteCode(
+      typeof formData.get("inviteCode") === "string"
+        ? String(formData.get("inviteCode"))
+        : undefined,
+    )
+  ) {
+    return { error: "A valid invite code is required." };
+  }
+
   const parsed = signUpSchema.safeParse({
     name: formData.get("name"),
     username: formData.get("username"),

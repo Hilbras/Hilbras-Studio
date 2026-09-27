@@ -21,14 +21,18 @@ export default function GettingStartedPage() {
         per platform, talk to an Assistant that knows your account, and keep
         every credential encrypted on your own account.
       </p>
-      <p>Supported publishing platforms:</p>
+      <p>Current publishing targets:</p>
       <ul>
         <li>
-          <strong>OAuth-connected:</strong> Instagram, Facebook, Threads, X,
-          LinkedIn, TikTok, YouTube, Pinterest, Reddit
+          <strong>OAuth-connected and publishable:</strong> Instagram, Facebook,
+          Threads, and X
         </li>
         <li>
-          <strong>Bot-connected:</strong> Telegram
+          <strong>Bot-connected and publishable:</strong> Telegram
+        </li>
+        <li>
+          <strong>Connect-only for now:</strong> LinkedIn, TikTok, YouTube,
+          Pinterest, and Reddit
         </li>
       </ul>
 

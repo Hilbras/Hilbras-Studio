@@ -112,7 +112,7 @@ export const posts = pgTable("posts", {
   imageUrl: text("image_url"),
   /** Target platforms as comma-separated list: "instagram,x,facebook" */
   platforms: text("platforms").notNull(),
-  /** draft | scheduled | published | failed */
+  /** draft | scheduled | publishing | published | failed */
   status: text("status").notNull().default("draft"),
   /** ISO timestamp — set when status = scheduled. */
   scheduledAt: timestamp("scheduled_at"),
@@ -120,7 +120,20 @@ export const posts = pgTable("posts", {
   results: text("results"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   publishedAt: timestamp("published_at"),
-});
+  /**
+   * Scheduler claim/lease (see `src/lib/scheduled-posts.ts`).
+   *
+   * `claim_id` is the attempt token: only the run holding it may finalize the
+   * post, so a stale invocation cannot overwrite a newer terminal state.
+   * `claim_expires_at` is the lease deadline — while it is in the future the
+   * claim is valid and no other run may take the post.
+   * `dispatch_started_at` records that platform calls began, which is what
+   * makes an expired claim's outcome uncertain: it is never blindly retried.
+   */
+  claimId: text("claim_id"),
+  claimExpiresAt: timestamp("claim_expires_at"),
+  dispatchStartedAt: timestamp("dispatch_started_at"),
+}, (t) => [index("posts_status_scheduled_idx").on(t.status, t.scheduledAt)]);
 
 export type Post = typeof posts.$inferSelect;
 

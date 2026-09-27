@@ -5,7 +5,13 @@
  * without vendor-specific dependencies.
  */
 
-import { assertPublicProviderUrl } from "@/lib/net-guard";
+import { fetchPinnedProvider } from "@/lib/pinned-provider-fetch";
+import {
+  AI_DEFAULT_MAX_OUTPUT_TOKENS,
+  AI_MAX_OUTPUT_CHARS,
+  assertAiInputSize,
+  assertAiOutputSize,
+} from "@/lib/ai-limits";
 
 export type ApiFormat = "openai" | "anthropic";
 
@@ -51,21 +57,24 @@ async function openaiChatCompletion(
 ): Promise<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/chat/completions";
 
+  assertAiInputSize(messages);
+
   const body: Record<string, unknown> = {
     model: config.modelId,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    max_tokens: opts?.maxTokens ?? AI_DEFAULT_MAX_OUTPUT_TOKENS,
   };
-  if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts?.temperature !== undefined) body.temperature = opts.temperature;
 
-  const res = await fetch(url, {
+  const providerRequest = {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  };
+  const res = await fetchPinnedProvider(url, providerRequest);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -75,7 +84,9 @@ async function openaiChatCompletion(
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
   };
-  return data.choices?.[0]?.message?.content ?? "";
+  const content = data.choices?.[0]?.message?.content ?? "";
+  assertAiOutputSize(content);
+  return content;
 }
 
 async function* openaiStreamChat(
@@ -85,22 +96,25 @@ async function* openaiStreamChat(
 ): AsyncGenerator<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/chat/completions";
 
+  assertAiInputSize(messages);
+
   const body: Record<string, unknown> = {
     model: config.modelId,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     stream: true,
+    max_tokens: opts?.maxTokens ?? AI_DEFAULT_MAX_OUTPUT_TOKENS,
   };
-  if (opts?.maxTokens) body.max_tokens = opts.maxTokens;
   if (opts?.temperature !== undefined) body.temperature = opts.temperature;
 
-  const res = await fetch(url, {
+  const providerRequest = {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify(body),
-  });
+  };
+  const res = await fetchPinnedProvider(url, providerRequest);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -149,6 +163,8 @@ async function anthropicChatCompletion(
 ): Promise<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/messages";
 
+  assertAiInputSize(messages);
+
   // Separate system message from conversation messages
   const systemMsg = messages.find((m) => m.role === "system");
   const convMsgs: AnthropicMessage[] = messages
@@ -157,13 +173,13 @@ async function anthropicChatCompletion(
 
   const body: Record<string, unknown> = {
     model: config.modelId,
-    max_tokens: opts?.maxTokens ?? 1024,
+    max_tokens: opts?.maxTokens ?? AI_DEFAULT_MAX_OUTPUT_TOKENS,
     messages: convMsgs,
   };
   if (systemMsg) body.system = systemMsg.content;
   if (opts?.temperature !== undefined) body.temperature = opts.temperature;
 
-  const res = await fetch(url, {
+  const providerRequest = {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -171,7 +187,8 @@ async function anthropicChatCompletion(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
-  });
+  };
+  const res = await fetchPinnedProvider(url, providerRequest);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -181,7 +198,9 @@ async function anthropicChatCompletion(
   const data = (await res.json()) as {
     content?: { type: string; text?: string }[];
   };
-  return data.content?.[0]?.text ?? "";
+  const content = data.content?.[0]?.text ?? "";
+  assertAiOutputSize(content);
+  return content;
 }
 
 async function* anthropicStreamChat(
@@ -191,6 +210,8 @@ async function* anthropicStreamChat(
 ): AsyncGenerator<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/messages";
 
+  assertAiInputSize(messages);
+
   const systemMsg = messages.find((m) => m.role === "system");
   const convMsgs: AnthropicMessage[] = messages
     .filter((m) => m.role !== "system")
@@ -198,14 +219,14 @@ async function* anthropicStreamChat(
 
   const body: Record<string, unknown> = {
     model: config.modelId,
-    max_tokens: opts?.maxTokens ?? 1024,
+    max_tokens: opts?.maxTokens ?? AI_DEFAULT_MAX_OUTPUT_TOKENS,
     messages: convMsgs,
     stream: true,
   };
   if (systemMsg) body.system = systemMsg.content;
   if (opts?.temperature !== undefined) body.temperature = opts.temperature;
 
-  const res = await fetch(url, {
+  const providerRequest = {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -213,7 +234,8 @@ async function* anthropicStreamChat(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
-  });
+  };
+  const res = await fetchPinnedProvider(url, providerRequest);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -254,6 +276,21 @@ async function* anthropicStreamChat(
   }
 }
 
+async function* capStreamOutput(
+  stream: AsyncGenerator<string>,
+): AsyncGenerator<string> {
+  let chars = 0;
+  for await (const chunk of stream) {
+    chars += chunk.length;
+    if (chars > AI_MAX_OUTPUT_CHARS) {
+      throw new Error(
+        `AI response exceeded the maximum length of ${AI_MAX_OUTPUT_CHARS} characters`,
+      );
+    }
+    yield chunk;
+  }
+}
+
 /* ── Public API ─────────────────────────────────────────────── */
 
 function stripTrailingSlash(url: string): string {
@@ -268,7 +305,6 @@ export async function chatCompletion(
   messages: ChatMessage[],
   opts?: { maxTokens?: number; temperature?: number }
 ): Promise<string> {
-  await assertPublicProviderUrl(config.baseUrl);
   if (config.apiFormat === "anthropic") {
     return anthropicChatCompletion(config, messages, opts);
   }
@@ -283,12 +319,11 @@ export async function* streamChat(
   messages: ChatMessage[],
   opts?: { maxTokens?: number; temperature?: number }
 ): AsyncGenerator<string> {
-  await assertPublicProviderUrl(config.baseUrl);
   if (config.apiFormat === "anthropic") {
-    yield* anthropicStreamChat(config, messages, opts);
+    yield* capStreamOutput(anthropicStreamChat(config, messages, opts));
     return;
   }
-  yield* openaiStreamChat(config, messages, opts);
+  yield* capStreamOutput(openaiStreamChat(config, messages, opts));
 }
 
 /**

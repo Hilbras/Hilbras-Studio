@@ -42,11 +42,15 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import { allPlatforms, type PlatformId } from "@/lib/platforms";
+import {
+  allPlatforms,
+  getPublishingCapability,
+  isPublishablePlatform,
+} from "@/lib/platforms";
 import { THREADS_PERMISSION_BADGE, THREADS_PERMISSION_FIX } from "@/lib/threads-errors";
 import { TOKEN_EXPIRED_BADGE, TOKEN_EXPIRED_FIX } from "@/lib/platform-tokens";
 import {
-  getPlatformCredentials,
+  getPlatformCredentialStatus,
   savePlatformCredentials,
   testPlatformCredentials,
   checkCredentialsExist,
@@ -94,6 +98,10 @@ const CONNECT_ERROR_MESSAGES: Record<string, string> = {
     "This platform does not use OAuth — open its Config on the Accounts page and connect with the form there.",
 };
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 function safeDecode(value: string): string {
   // `useSearchParams` already decodes; a second pass can throw on a stray "%".
   try {
@@ -140,6 +148,7 @@ export default function AccountsPage() {
   const [selectedPlatform, setSelectedPlatform] = useState<string>("");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [hasStoredClientSecret, setHasStoredClientSecret] = useState(false);
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState("");
@@ -203,6 +212,7 @@ export default function AccountsPage() {
     setSelectedPlatform(platform);
     setClientId("");
     setClientSecret("");
+    setHasStoredClientSecret(false);
     setTgToken("");
     setTgChat("");
     setModalError("");
@@ -217,12 +227,12 @@ export default function AccountsPage() {
     try {
       // The redirect URI comes from the server so it matches the value the
       // authorize route will send — `APP_URL` is not visible to the browser.
-      const [{ clientId: existingId, clientSecret: existingSecret }, uri] = await Promise.all([
-        getPlatformCredentials(platform),
+      const [{ clientId: existingId, hasClientSecret }, uri] = await Promise.all([
+        getPlatformCredentialStatus(platform),
         getConnectRedirectUri(platform),
       ]);
       if (existingId) setClientId(existingId);
-      if (existingSecret) setClientSecret(existingSecret);
+      setHasStoredClientSecret(hasClientSecret);
       setRedirectUri(uri);
     } finally {
       setLoadingKeys(false);
@@ -241,8 +251,12 @@ export default function AccountsPage() {
   };
 
   const handleSave = async () => {
-    if (!clientId.trim() || !clientSecret.trim()) {
-      setModalError("Both Client ID and Client Secret are required");
+    if (!clientId.trim() || (!clientSecret.trim() && !hasStoredClientSecret)) {
+      setModalError(
+        hasStoredClientSecret
+          ? "Enter a new secret or leave the field blank to keep the saved secret"
+          : "Both Client ID and Client Secret are required",
+      );
       return;
     }
     setSaving(true);
@@ -251,14 +265,15 @@ export default function AccountsPage() {
       const result = await savePlatformCredentials(selectedPlatform, clientId.trim(), clientSecret.trim());
       if (result.success) {
         setModalSuccess("Credentials saved securely");
+        setHasStoredClientSecret(true);
         setConfigured((prev) => new Set([...prev, selectedPlatform]));
         setTestResults((prev) => { const n = { ...prev }; delete n[selectedPlatform]; return n; });
         setTimeout(() => setModalOpen(false), 800);
       } else {
         setModalError(result.error || "Failed to save");
       }
-    } catch (e: any) {
-      setModalError(e.message || "Failed to save");
+    } catch (error: unknown) {
+      setModalError(errorMessage(error, "Failed to save"));
     } finally {
       setSaving(false);
     }
@@ -269,8 +284,8 @@ export default function AccountsPage() {
     try {
       const result = await testPlatformCredentials(platformId);
       setTestResults((prev) => ({ ...prev, [platformId]: result }));
-    } catch (e: any) {
-      setTestResults((prev) => ({ ...prev, [platformId]: { valid: false, message: e.message || "Test failed" } }));
+    } catch (error: unknown) {
+      setTestResults((prev) => ({ ...prev, [platformId]: { valid: false, message: errorMessage(error, "Test failed") } }));
     } finally {
       setTestingPlatform(null);
     }
@@ -358,6 +373,9 @@ export default function AccountsPage() {
 
   const PLATFORMS = allPlatforms();
   const selectedMeta = PLATFORMS.find((p) => p.id === selectedPlatform);
+  const selectedPublishing = selectedMeta
+    ? getPublishingCapability(selectedMeta.id)
+    : null;
   const selConfigured = configured.has(selectedPlatform);
   const selConnected = connected.has(selectedPlatform);
   const selNeedsReconnect = permissionsMissing.has(selectedPlatform);
@@ -412,6 +430,7 @@ export default function AccountsPage() {
           {PLATFORMS.map((platform) => {
             const isConfigured = configured.has(platform.id);
             const isConnected = connected.has(platform.id);
+            const publishable = isPublishablePlatform(platform.id);
             const needsReconnect = permissionsMissing.has(platform.id);
             const isExpired = expired.has(platform.id);
             const testResult = testResults[platform.id];
@@ -429,7 +448,9 @@ export default function AccountsPage() {
                       <CardDescription className="text-xs mt-0.5">{platform.accountModel.join(" / ")}</CardDescription>
                     </div>
                     {isConnected ? (
-                      needsReconnect ? (
+                      !publishable ? (
+                        <Badge variant="outline" className="text-[10px] shrink-0">Connect-only</Badge>
+                      ) : needsReconnect ? (
                         <Badge variant="outline" className="text-[10px] shrink-0 gap-1 border-amber-500/40 text-amber-600 dark:text-amber-400">
                           <AlertTriangle className="size-3" /> {THREADS_PERMISSION_BADGE}
                         </Badge>
@@ -628,7 +649,9 @@ export default function AccountsPage() {
               ) : selConnected ? (
                 <>
                   <p className="text-sm text-muted-foreground">
-                    This platform is linked through official OAuth. You can publish to it from the Composer.
+                    {selectedPublishing?.status === "supported"
+                      ? "This platform is linked through official OAuth. You can publish to it from the Composer."
+                      : `This platform is connected, but publishing is not available yet.${selectedPublishing?.note ? ` ${selectedPublishing.note}` : ""}`}
                   </p>
                   {selNeedsReconnect && (
                     <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
@@ -664,7 +687,9 @@ export default function AccountsPage() {
                 <>
                   <p className="text-sm text-muted-foreground">
                     {selConfigured
-                      ? "Credentials saved. Connect your account via OAuth to enable publishing."
+                      ? selectedPublishing?.status === "supported"
+                        ? "Credentials saved. Connect your account via OAuth to enable publishing."
+                        : "Credentials saved. Connect your account via OAuth; publishing is not available yet."
                       : "Save your developer app credentials below first — then connect via OAuth."}
                   </p>
                   <Button
@@ -704,7 +729,22 @@ export default function AccountsPage() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="modal-clientSecret">Client Secret</Label>
-                    <Input id="modal-clientSecret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="e.g., abcdef1234567890abcdef1234567890" />
+                    <Input
+                      id="modal-clientSecret"
+                      type="password"
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder={
+                        hasStoredClientSecret
+                          ? "Leave blank to keep the saved secret"
+                          : "e.g., abcdef1234567890abcdef1234567890"
+                      }
+                    />
+                    {hasStoredClientSecret && (
+                      <p className="text-[11px] text-muted-foreground">
+                        A client secret is already saved. Enter a new one only if you want to replace it.
+                      </p>
+                    )}
                   </div>
                   {redirectUri && (
                     <div className="space-y-1.5 rounded-lg border border-border bg-muted/40 p-3">
@@ -739,7 +779,7 @@ export default function AccountsPage() {
                     )}
                   </AnimatePresence>
                   <div className="flex items-center gap-2 pt-1">
-                    <Button variant="gold" onClick={handleSave} disabled={saving || loadingKeys || !clientId || !clientSecret} className="gap-1 rounded-xl">
+                    <Button variant="gold" onClick={handleSave} disabled={saving || loadingKeys || !clientId || (!clientSecret && !hasStoredClientSecret)} className="gap-1 rounded-xl">
                       {saving ? <Loader2 className="size-3 animate-spin" /> : null}
                       Save Keys
                     </Button>

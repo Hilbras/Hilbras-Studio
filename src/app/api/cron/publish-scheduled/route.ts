@@ -4,20 +4,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { publishDuePosts } from "@/lib/scheduled-posts";
 import { refreshExpiringTokens } from "@/lib/token-maintenance";
 import { getSessionUser } from "@/lib/session";
+import { isSameOriginRequest } from "@/lib/request-origin";
 
 /**
- * Scheduled-post runner endpoint. Two ways in, with deliberately different scope:
+ * Scheduled-post runner endpoint.
  *
- *   1. Vercel Cron — sends `Authorization: Bearer $CRON_SECRET` automatically
- *      when CRON_SECRET is set on the project. Runs every user's due queue.
- *   2. A signed-in user — no secret needed, but only their own queued posts are
- *      processed. This backs the Scheduler's "Publish due now" button, and is how
- *      a post goes out on time on Vercel's Hobby plan, where cron jobs may only
- *      run once a day.
+ * `GET` is reserved for Vercel Cron and accepts only the server-side bearer
+ * secret. A signed-in browser session is intentionally not accepted here: it
+ * keeps a cacheable GET from becoming a state-changing publish trigger.
  *
- * Anyone else gets a 401. A session caller can never trigger another user's
- * queue, so the endpoint is safe to leave publicly reachable.
+ * The Scheduler's "Publish due now" button uses `POST`, which requires both a
+ * valid session and a same-origin browser request. The route never accepts a
+ * user id from the caller; it derives the scope from the authenticated session.
  */
+
+/**
+ * Execution budget for this endpoint. The runner's own deadline
+ * (`DEFAULT_RUN_DEADLINE_MS`, 100s) stops claiming posts well before this, so
+ * the function returns cleanly instead of being terminated mid-publish — a
+ * hard termination is exactly what turns a live publish into an uncertain,
+ * potentially duplicated one. Comfortably under Vercel's 300s Hobby maximum.
+ */
+export const maxDuration = 120;
 
 /** Constant-time comparison, so the secret cannot be recovered byte by byte. */
 function matchesCronSecret(header: string | null, secret: string): boolean {
@@ -33,14 +41,21 @@ function matchesCronSecret(header: string | null, secret: string): boolean {
 
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
+  if (!secret || !matchesCronSecret(req.headers.get("authorization"), secret)) {
+    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
 
-  if (secret && matchesCronSecret(req.headers.get("authorization"), secret)) {
-    // Renew expiring sessions first, so the posts published just below run on
-    // a fresh token — and so a platform with nothing due still gets its token
-    // topped up instead of quietly expiring on day 60.
-    const tokens = await refreshExpiringTokens();
-    const summary = await publishDuePosts();
-    return NextResponse.json({ scope: "all-users", tokens, ...summary });
+  // Renew expiring sessions first, so the posts published just below run on a
+  // fresh token — and so a platform with nothing due still gets its token
+  // topped up instead of quietly expiring on day 60.
+  const tokens = await refreshExpiringTokens();
+  const summary = await publishDuePosts();
+  return NextResponse.json({ scope: "all-users", tokens, ...summary });
+}
+
+export async function POST(req: NextRequest) {
+  if (!isSameOriginRequest(req)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
 
   const session = await getSessionUser();

@@ -43,6 +43,35 @@ export function originFromHeaders(headers: Headers): string {
 }
 
 /**
+ * Whether a request has an Origin (or legacy Referer) that matches this app.
+ *
+ * Server actions normally carry a same-origin check of their own, but manual
+ * scheduler triggers use a route handler. A missing Origin is not accepted: a
+ * non-browser client can omit it, while a browser cross-site POST cannot.
+ */
+export function isSameOriginRequest(req: NextRequest): boolean {
+  const expected = originFromHeaders(req.headers);
+  if (!expected) return false;
+
+  const origin = req.headers.get("origin");
+  if (origin) {
+    try {
+      return new URL(origin).origin === new URL(expected).origin;
+    } catch {
+      return false;
+    }
+  }
+
+  const referer = req.headers.get("referer");
+  if (!referer) return false;
+  try {
+    return new URL(referer).origin === new URL(expected).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Normalise a redirect target that came from an untrusted source (the Referer
  * header or the OAuth `state` payload) into a safe same-origin path.
  *

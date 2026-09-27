@@ -1,20 +1,8 @@
 import "server-only";
+
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
-
-/**
- * SSRF guard for user-configured AI provider base URLs.
- *
- * The server fetches whatever baseUrl a user saves, and error paths echo
- * response fragments back to that user — without this guard a signed-in
- * account could point a provider at internal targets (cloud metadata
- * endpoints, RFC1918 hosts) and read the replies. Every outbound provider
- * request goes through assertPublicProviderUrl first.
- *
- * Known limit: DNS is resolved here and again by fetch, so a malicious
- * authoritative server can still rebind between the two lookups; closing
- * that requires pinning the verified IP into the request itself.
- */
+import type { LookupAddress } from "node:dns";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -65,21 +53,16 @@ export function isBlockedAddress(address: string): boolean {
 }
 
 /**
- * Active in production. Development skips it so localhost runtimes (Ollama,
- * LM Studio, …) keep working; set ALLOW_PRIVATE_AI_URLS=1 to make the same
- * exception in a trusted private deployment.
+ * Resolve and validate a user-configured provider host.
+ *
+ * Returning the verified address is intentional: the transport passes this
+ * result as a custom Node lookup callback, so the request uses the address
+ * that was checked instead of performing a second, potentially rebound DNS
+ * lookup. The original hostname is retained for Host and TLS SNI.
  */
-function guardEnabled(): boolean {
-  return (
-    process.env.NODE_ENV === "production" &&
-    process.env.ALLOW_PRIVATE_AI_URLS !== "1"
-  );
-}
-
-/** Throws when the URL must not be fetched server-side. */
-export async function assertPublicProviderUrl(rawUrl: string): Promise<void> {
-  if (!guardEnabled()) return;
-
+export async function resolvePublicProvider(
+  rawUrl: string,
+): Promise<{ url: URL; hostname: string; addresses: string[] }> {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -102,19 +85,26 @@ export async function assertPublicProviderUrl(rawUrl: string): Promise<void> {
     if (isBlockedAddress(hostname)) {
       throw new Error("Provider base URL points to a private network address");
     }
-    return;
+    return { url, hostname, addresses: [hostname] };
   }
 
-  let addresses;
+  let records: LookupAddress[];
   try {
-    addresses = await lookup(hostname, { all: true });
+    records = await lookup(hostname, { all: true });
   } catch {
     throw new Error("Could not resolve the provider host");
   }
+  const addresses = [...new Set(records.map((record) => record.address))];
   if (
     addresses.length === 0 ||
-    addresses.some((entry) => isBlockedAddress(entry.address))
+    addresses.some((address) => isBlockedAddress(address))
   ) {
     throw new Error("Provider base URL resolves to a private network address");
   }
+  return { url, hostname, addresses };
+}
+
+/** Validate a provider URL without retaining a DNS result for a later fetch. */
+export async function assertPublicProviderUrl(rawUrl: string): Promise<void> {
+  await resolvePublicProvider(rawUrl);
 }

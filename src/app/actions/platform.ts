@@ -1,40 +1,48 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
-import { getCredentialValue } from "@/app/actions/credentials";
+import { savePlatformCredentialsForUser } from "@/lib/platform-credential-store";
+import { getUserCredentialValue } from "@/lib/credential-store";
 import { getSessionUser } from "@/lib/session";
 import { db } from "@/db";
-import { socialAccounts, storedCredentials } from "@/db/schema";
-import { encryptSecret } from "@/lib/crypto";
+import { socialAccounts } from "@/db/schema";
 import { verifyAppCredentials } from "@/lib/platform-app-check";
 import { originFromHeaders } from "@/lib/request-origin";
+import { toPlatformCredentialStatus } from "@/lib/credential-status";
 
 /** A platform slug — it becomes part of stored credential key names, so it is bounded before interpolation. */
 const platformParam = z.string().regex(/^[a-z][a-z0-9_-]{0,29}$/, "Invalid platform");
 
-const platformCredentialsSchema = z.object({
-  platform: platformParam,
-  clientId: z.string().trim().min(1, "Client ID is required").max(500),
-  clientSecret: z.string().trim().min(1, "Client secret is required").max(500),
-});
-
-export async function getPlatformCredentials(platform: string): Promise<{ clientId: string | null; clientSecret: string | null }> {
+export async function getPlatformCredentialStatus(platform: string) {
   const parsed = platformParam.safeParse(platform);
-  if (!parsed.success) return { clientId: null, clientSecret: null };
-  const clientId = await getCredentialValue(`${parsed.data}_client_id`);
-  const clientSecret = await getCredentialValue(`${parsed.data}_client_secret`);
-  return { clientId, clientSecret };
+  const session = await getSessionUser();
+  if (!parsed.success || !session) return toPlatformCredentialStatus(null, null);
+  const clientId = await getUserCredentialValue(
+    session.id,
+    `${parsed.data}_client_id`,
+  );
+  const clientSecret = await getUserCredentialValue(
+    session.id,
+    `${parsed.data}_client_secret`,
+  );
+  return toPlatformCredentialStatus(clientId, clientSecret);
 }
 
 export async function checkCredentialsExist(platform: string): Promise<boolean> {
   const parsed = platformParam.safeParse(platform);
-  if (!parsed.success) return false;
-  const clientId = await getCredentialValue(`${parsed.data}_client_id`);
-  const clientSecret = await getCredentialValue(`${parsed.data}_client_secret`);
+  const session = await getSessionUser();
+  if (!parsed.success || !session) return false;
+  const clientId = await getUserCredentialValue(
+    session.id,
+    `${parsed.data}_client_id`,
+  );
+  const clientSecret = await getUserCredentialValue(
+    session.id,
+    `${parsed.data}_client_secret`,
+  );
   return !!(clientId && clientSecret);
 }
 
@@ -53,8 +61,17 @@ export async function testPlatformCredentials(platform: string): Promise<{ valid
     return { valid: false, message: `Unknown platform: ${platform}` };
   }
 
-  const clientId = await getCredentialValue(`${platform}_client_id`);
-  const clientSecret = await getCredentialValue(`${platform}_client_secret`);
+  const session = await getSessionUser();
+  if (!session) return { valid: false, message: "Not signed in" };
+
+  const clientId = await getUserCredentialValue(
+    session.id,
+    `${spec.id}_client_id`,
+  );
+  const clientSecret = await getUserCredentialValue(
+    session.id,
+    `${spec.id}_client_secret`,
+  );
 
   if (!clientId || !clientSecret) {
     return { valid: false, message: "Credentials not configured" };
@@ -78,47 +95,20 @@ export async function testPlatformCredentials(platform: string): Promise<{ valid
   };
 }
 
-async function upsertCredential(userId: string, keyName: string, value: string, label: string) {
-  const encrypted = encryptSecret(value);
-  await db
-    .insert(storedCredentials)
-    .values({
-      id: randomUUID(),
-      userId,
-      keyName,
-      encryptedValue: encrypted,
-      label,
-    })
-    .onConflictDoUpdate({
-      target: [storedCredentials.userId, storedCredentials.keyName],
-      set: { encryptedValue: encrypted, label, updatedAt: new Date() },
-    });
-}
-
+/** Save platform credentials for the current session. */
 export async function savePlatformCredentials(
   platform: string,
   clientId: string,
-  clientSecret: string
+  clientSecret: string,
 ): Promise<{ success: boolean; error?: string }> {
   const session = await getSessionUser();
   if (!session) return { success: false, error: "Not signed in" };
-
-  const parsed = platformCredentialsSchema.safeParse({ platform, clientId, clientSecret });
-  if (!parsed.success) {
-    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
-  }
-  if (!PLATFORM_REGISTRY[parsed.data.platform as PlatformId]) {
-    return { success: false, error: `Unknown platform: ${parsed.data.platform}` };
-  }
-
-  try {
-    const { platform: id, clientId: cid, clientSecret: secret } = parsed.data;
-    await upsertCredential(session.id, `${id}_client_id`, cid, `${id} Client ID`);
-    await upsertCredential(session.id, `${id}_client_secret`, secret, `${id} Client Secret`);
-    return { success: true };
-  } catch (e) {
-    return { success: false, error: e instanceof Error ? e.message : "Failed to save" };
-  }
+  return savePlatformCredentialsForUser(
+    session.id,
+    platform,
+    clientId,
+    clientSecret,
+  );
 }
 
 /**

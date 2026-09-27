@@ -40,6 +40,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { PlatformIcon } from "@/components/platform-icon";
 import { PLATFORMS, type Platform } from "@/components/platform-icon";
+import { isPublishablePlatform } from "@/lib/platforms";
 import { GradientMesh } from "@/components/motion/gradient-mesh";
 import { WordReveal } from "@/components/motion/word-reveal";
 import { MagneticButton } from "@/components/motion/magnetic-button";
@@ -48,8 +49,9 @@ import { Ripple } from "@/components/motion/ripple";
 import { OrbitingDots } from "@/components/motion/orbiting-dots";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
 import { improvePostAction, generateHashtagsAction } from "@/app/actions/ai";
-import { publishToAllNowAction } from "@/app/actions/publish";
-import { createPostAction, listPosts, deletePost, recordPublishOutcome, getConnectedPlatforms, getConfiguredPlatforms, type PostItem } from "@/app/actions/posts";
+import { publishComposerDraftAction } from "@/app/actions/publish";
+import { createPostAction, listPosts, deletePost, getConnectedPlatforms, getConfiguredPlatforms, type PostItem } from "@/app/actions/posts";
+import { parseLocalSchedule } from "@/lib/schedule";
 
 const AI_SUGGESTIONS = [
   { icon: Lightbulb, text: "Product launch announcement" },
@@ -102,7 +104,7 @@ export default function ComposerPage() {
       const configuredPlatforms = conf as Platform[];
       setConnected(connectedPlatforms);
       setConfigured(configuredPlatforms);
-      setSelected(connectedPlatforms); // auto-select connected only
+      setSelected(connectedPlatforms.filter(isPublishablePlatform)); // auto-select connected, publishable targets only
     });
     listPosts().then(setPosts);
   }, []);
@@ -193,12 +195,29 @@ export default function ComposerPage() {
 
     setPublishing(true);
     try {
-      const scheduledAt = scheduleMode && scheduledDate
-        ? new Date(`${scheduledDate}T${scheduledTime}:00`)
+      const scheduledAt = scheduleMode
+        ? parseLocalSchedule(scheduledDate, scheduledTime) ?? undefined
         : undefined;
+
+      if (scheduleMode && !scheduledAt) {
+        setPublishResults([
+          {
+            platform: "all",
+            success: false,
+            error: "Choose a valid date and time before scheduling.",
+          },
+        ]);
+        return;
+      }
 
       // Save to DB first
       const saveResult = await createPostAction(draft, selected, imageUrl || undefined, scheduledAt);
+      if (saveResult.error) {
+        setPublishResults([
+          { platform: "all", success: false, error: saveResult.error },
+        ]);
+        return;
+      }
 
       if (scheduledAt) {
         setPublishResults([{ platform: "all", success: true, postId: saveResult.postId, error: undefined, url: undefined }]);
@@ -208,14 +227,21 @@ export default function ComposerPage() {
         return;
       }
 
-      // Publish immediately
-      const results = await publishToAllNowAction(draft, imageUrl || undefined, selected);
-      setPublishResults(results);
-
-      // Save results
-      if (saveResult.postId) {
-        await recordPublishOutcome(saveResult.postId, results);
+      // Publish immediately and persist the server-produced result in the same
+      // server action. The client cannot fabricate a success flag or URL.
+      if (!saveResult.postId) {
+        setPublishResults([
+          { platform: "all", success: false, error: "Post was not saved" },
+        ]);
+        return;
       }
+      const results = await publishComposerDraftAction(
+        saveResult.postId,
+        draft,
+        imageUrl || undefined,
+        selected,
+      );
+      setPublishResults(results);
 
       listPosts().then(setPosts);
     } catch (e) {
@@ -443,7 +469,7 @@ export default function ComposerPage() {
                 <CardContent className="p-4">
                   <div className="flex items-center gap-3">
                     <MagneticButton strength={0.15}>
-                      <Button variant="gold" className="gap-1 rounded-xl" onClick={handlePublish} disabled={publishing || !draft.trim() || selected.length === 0}>
+                      <Button variant="gold" className="gap-1 rounded-xl" onClick={handlePublish} disabled={publishing || !draft.trim() || selected.length === 0 || (scheduleMode && !scheduledDate)}>
                         {publishing ? <Loader2 className="size-3 animate-spin" /> : scheduleMode ? <Calendar className="size-3" /> : <Send className="size-3" />}
                         {publishing ? "Processing..." : scheduleMode ? `Schedule for ${selected.length} platform${selected.length > 1 ? "s" : ""}` : `Publish to ${selected.length} platform${selected.length > 1 ? "s" : ""}`}
                       </Button>
@@ -500,24 +526,28 @@ export default function ComposerPage() {
                   {PLATFORMS.map((p, i) => {
                     const isPlatformConnected = connected.includes(p);
                     const isPlatformConfigured = configured.includes(p);
+                    const isPublishable = isPublishablePlatform(p);
+                    const canSelect = isPlatformConnected && isPublishable;
                     return (
                       <motion.button
                         key={p}
-                        disabled={!isPlatformConnected}
+                        disabled={!canSelect}
                         onClick={() => toggle(p)}
                         initial={{ opacity: 0, x: 16 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: 0.15 + i * 0.03 }}
-                        whileHover={isPlatformConnected ? { x: 4 } : undefined}
-                        whileTap={isPlatformConnected ? { scale: 0.98 } : undefined}
+                        whileHover={canSelect ? { x: 4 } : undefined}
+                        whileTap={canSelect ? { scale: 0.98 } : undefined}
                         className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
                           selected.includes(p)
                             ? "bg-gold-500/15 text-gold-600 dark:text-gold-400 shadow-sm shadow-gold-500/5"
-                            : isPlatformConnected
+                            : canSelect
                               ? "hover:bg-accent/60 text-muted-foreground"
-                              : isPlatformConfigured
-                                ? "hover:bg-accent/40 text-muted-foreground"
-                                : "opacity-40 cursor-not-allowed text-muted-foreground"
+                              : isPlatformConnected
+                                ? "opacity-60 cursor-not-allowed text-muted-foreground"
+                                : isPlatformConfigured
+                                  ? "hover:bg-accent/40 text-muted-foreground"
+                                  : "opacity-40 cursor-not-allowed text-muted-foreground"
                         }`}
                       >
                         <PlatformIcon platform={p} size={20} />
@@ -525,10 +555,13 @@ export default function ComposerPage() {
                         {!isPlatformConnected && !isPlatformConfigured && (
                           <Badge variant="secondary" className="ml-auto text-[10px]">Not connected</Badge>
                         )}
+                        {isPlatformConnected && !isPublishable && (
+                          <Badge variant="outline" className="ml-auto text-[10px]">Connect-only</Badge>
+                        )}
                         {isPlatformConfigured && !isPlatformConnected && (
                           <Badge variant="gold" className="ml-auto text-[10px]">Ready to connect</Badge>
                         )}
-                        {selected.includes(p) && isPlatformConnected && (
+                        {selected.includes(p) && canSelect && (
                           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="ml-auto">
                             <Check className="size-3 text-gold-500" />
                           </motion.div>

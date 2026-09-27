@@ -13,7 +13,9 @@ export default function ConnectingAccountsPage() {
       <p className="lede">
         There are two ways to connect: OAuth consent for nine platforms, and a
         bot token for Telegram. Both live on the <strong>Accounts</strong>{" "}
-        page.
+        page. Instagram, Facebook, Threads, X, and Telegram are currently
+        publishable; the other OAuth platforms are connect-only until their
+        publishers are implemented.
       </p>
 
       <h2>OAuth platforms</h2>
@@ -134,7 +136,12 @@ export default function ConnectingAccountsPage() {
           platform isn&apos;t linked yet. Press Connect.
         </li>
         <li>
-          <strong>Connected</strong> — live link; publishing works.
+          <strong>Connected</strong> — live OAuth link. The Composer enables it
+          only when the platform is currently publishable.
+        </li>
+        <li>
+          <strong>Connect-only</strong> — credentials and the OAuth link are
+          available, but publishing is not implemented yet.
         </li>
         <li>
           <strong>Permissions / session warnings</strong> — the provider

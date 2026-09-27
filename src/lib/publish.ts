@@ -4,7 +4,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { socialAccounts } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
-import { PLATFORM_REGISTRY } from "@/lib/platforms";
+import { getPublishingCapability, PLATFORM_REGISTRY } from "@/lib/platforms";
 import {
   DEFAULT_TOKEN_LIFETIME_SECONDS,
   effectiveTokenExpiry,
@@ -850,12 +850,16 @@ async function publishForUser(
       return publishToThreads(userId, text, imageUrl);
     case "telegram":
       return publishToTelegram(userId, text, imageUrl);
-    default:
+    default: {
+      const capability = getPublishingCapability(platform);
       return {
         platform,
         success: false,
-        error: `Publishing not yet supported for ${platform}`,
+        error:
+          capability?.note ??
+          `Publishing not yet supported for ${platform}`,
       };
+    }
   }
 }
 
@@ -870,12 +874,27 @@ export async function publishToAllForUser(
   userId: string,
   text: string,
   imageUrl?: string,
-  platforms?: string[]
+  platforms?: string[],
+  publish: (
+    userId: string,
+    platform: string,
+    text: string,
+    imageUrl?: string,
+  ) => Promise<PublishResult> = publishForUser,
 ): Promise<PublishResult[]> {
   const targetPlatforms = platforms ?? DEFAULT_TARGET_PLATFORMS;
-  return Promise.all(
-    targetPlatforms.map((p) => publishForUser(userId, p, text, imageUrl))
+  const settled = await Promise.allSettled(
+    targetPlatforms.map((platform) => publish(userId, platform, text, imageUrl)),
   );
+
+  return settled.map((result, index) => {
+    if (result.status === "fulfilled") return result.value;
+    return {
+      platform: targetPlatforms[index] ?? "unknown",
+      success: false,
+      error: errorMessage(result.reason, "Publish failed"),
+    };
+  });
 }
 
 /**

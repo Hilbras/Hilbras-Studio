@@ -1,0 +1,302 @@
+import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+
+import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
+import { and, eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { Pool } from "pg";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+
+import * as schema from "../../src/db/schema";
+
+const { chatMessages, chatSessions, memories, posts, socialAccounts, users } = schema;
+
+let container: StartedPostgreSqlContainer;
+let pool: Pool;
+let testDb: ReturnType<typeof drizzle<typeof schema>>;
+let dbModule: typeof import("../../src/db");
+let aiBudgetModule: typeof import("../../src/lib/ai-budget");
+let originalDatabaseUrl: string | undefined;
+let originalEncryptionKey: string | undefined;
+let originalComposerLimit: string | undefined;
+let originalGlobalLimit: string | undefined;
+
+const importForContainer = async <T>(path: string): Promise<T> => {
+  return import(resolve(process.cwd(), path));
+};
+
+beforeAll(async () => {
+  container = await new PostgreSqlContainer("postgres:16-alpine").start();
+  pool = new Pool({ connectionString: container.getConnectionUri() });
+  testDb = drizzle(pool, { schema });
+  await migrate(testDb, { migrationsFolder: resolve(process.cwd(), "drizzle") });
+
+  originalDatabaseUrl = process.env.DATABASE_URL;
+  originalEncryptionKey = process.env.ENCRYPTION_KEY;
+  originalComposerLimit = process.env.AI_COMPOSER_RATE_LIMIT;
+  originalGlobalLimit = process.env.AI_GLOBAL_RATE_LIMIT;
+  process.env.DATABASE_URL = container.getConnectionUri();
+  process.env.ENCRYPTION_KEY = "integration-test-encryption-key";
+  // Force the application pool to bind the disposable URL before dependent
+  // modules import `@/db`; it is closed explicitly in afterAll.
+  dbModule = await importForContainer<typeof import("../../src/db")>("src/db");
+  aiBudgetModule = await importForContainer<typeof import("../../src/lib/ai-budget")>(
+    "src/lib/ai-budget",
+  );
+});
+
+afterAll(async () => {
+  if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = originalDatabaseUrl;
+  if (originalEncryptionKey === undefined) delete process.env.ENCRYPTION_KEY;
+  else process.env.ENCRYPTION_KEY = originalEncryptionKey;
+  if (originalComposerLimit === undefined) delete process.env.AI_COMPOSER_RATE_LIMIT;
+  else process.env.AI_COMPOSER_RATE_LIMIT = originalComposerLimit;
+  if (originalGlobalLimit === undefined) delete process.env.AI_GLOBAL_RATE_LIMIT;
+  else process.env.AI_GLOBAL_RATE_LIMIT = originalGlobalLimit;
+  await pool?.end();
+  await dbModule?.closeDb();
+  await container?.stop();
+});
+
+afterEach(() => {
+  if (originalComposerLimit === undefined) delete process.env.AI_COMPOSER_RATE_LIMIT;
+  else process.env.AI_COMPOSER_RATE_LIMIT = originalComposerLimit;
+  if (originalGlobalLimit === undefined) delete process.env.AI_GLOBAL_RATE_LIMIT;
+  else process.env.AI_GLOBAL_RATE_LIMIT = originalGlobalLimit;
+  vi.restoreAllMocks();
+});
+
+describe("PostgreSQL migrations and tenant boundaries", () => {
+  it("applies the migration chain and keeps user-owned rows isolated", async () => {
+    const aliceId = randomUUID();
+    const bobId = randomUUID();
+    const alicePostId = randomUUID();
+    const bobPostId = randomUUID();
+
+    await testDb.insert(users).values([
+      {
+        id: aliceId,
+        name: "Alice Test",
+        email: "alice-test@example.invalid",
+        username: "alice_test",
+        passwordHash: "not-a-real-hash",
+      },
+      {
+        id: bobId,
+        name: "Bob Test",
+        email: "bob-test@example.invalid",
+        username: "bob_test",
+        passwordHash: "not-a-real-hash",
+      },
+    ]);
+
+    await testDb.insert(posts).values([
+      {
+        id: alicePostId,
+        userId: aliceId,
+        content: "Alice post",
+        platforms: "instagram",
+        status: "draft",
+      },
+      {
+        id: bobPostId,
+        userId: bobId,
+        content: "Bob post",
+        platforms: "x",
+        status: "draft",
+      },
+    ]);
+
+    const alicePosts = await testDb
+      .select()
+      .from(posts)
+      .where(eq(posts.userId, aliceId));
+    const bobPosts = await testDb
+      .select()
+      .from(posts)
+      .where(eq(posts.userId, bobId));
+
+    expect(alicePosts.map((post) => post.id)).toEqual([alicePostId]);
+    expect(bobPosts.map((post) => post.id)).toEqual([bobPostId]);
+    expect(alicePosts[0]?.content).not.toBe(bobPosts[0]?.content);
+  });
+
+  it("cascades user-owned chat and memory rows when a user is deleted", async () => {
+    const userId = randomUUID();
+    const sessionId = randomUUID();
+
+    await testDb.insert(users).values({
+      id: userId,
+      name: "Cascade Test",
+      email: "cascade-test@example.invalid",
+      username: "cascade_test",
+      passwordHash: "not-a-real-hash",
+    });
+    await testDb.insert(chatSessions).values({
+      id: sessionId,
+      userId,
+      title: "Cascade test chat",
+    });
+    await testDb.insert(chatMessages).values({
+      id: randomUUID(),
+      sessionId,
+      role: "user",
+      content: "This row should cascade",
+    });
+    await testDb.insert(memories).values({
+      id: randomUUID(),
+      userId,
+      content: "This memory should cascade",
+    });
+    await testDb.insert(socialAccounts).values({
+      id: randomUUID(),
+      userId,
+      platform: "x",
+      platformAccountId: "cascade-account",
+    });
+
+    await testDb.delete(users).where(eq(users.id, userId));
+
+    const [remainingSession] = await testDb
+      .select()
+      .from(chatSessions)
+      .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, userId)));
+    const remainingMessages = await testDb
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.sessionId, sessionId));
+    const remainingMemories = await testDb
+      .select()
+      .from(memories)
+      .where(eq(memories.userId, userId));
+    const remainingAccounts = await testDb
+      .select()
+      .from(socialAccounts)
+      .where(eq(socialAccounts.userId, userId));
+
+    expect(remainingSession).toBeUndefined();
+    expect(remainingMessages).toHaveLength(0);
+    expect(remainingMemories).toHaveLength(0);
+    expect(remainingAccounts).toHaveLength(0);
+  });
+
+  it("keeps a stored platform secret when only the client ID is edited", async () => {
+    const userId = randomUUID();
+    await testDb.insert(users).values({
+      id: userId,
+      name: "Credential Test",
+      email: `credentials-${userId}@example.invalid`,
+      username: `credentials_${userId.slice(0, 8)}`,
+      passwordHash: "not-a-real-hash",
+    });
+
+    const { savePlatformCredentialsForUser } = await importForContainer<
+      typeof import("../../src/lib/platform-credential-store")
+    >("src/lib/platform-credential-store");
+    const first = await savePlatformCredentialsForUser(
+      userId,
+      "x",
+      "old-client-id",
+      "original-secret",
+    );
+    expect(first).toEqual({ success: true });
+
+    const { getUserCredentialValue } =
+      await importForContainer<typeof import("../../src/lib/credential-store")>(
+        "src/lib/credential-store",
+      );
+    const initialStatus = await getUserCredentialValue(
+      userId,
+      "x_client_id",
+    );
+    expect(initialStatus).toBe("old-client-id");
+    expect(
+      await getUserCredentialValue(
+        userId,
+        "x_client_secret",
+      ),
+    ).toBe("original-secret");
+
+    const otherUser = randomUUID();
+    await testDb.insert(users).values({
+      id: otherUser,
+      name: "Other Credential Test",
+      email: `other-credentials-${otherUser}@example.invalid`,
+      username: `other_credentials_${otherUser.slice(0, 8)}`,
+      passwordHash: "not-a-real-hash",
+    });
+    await savePlatformCredentialsForUser(
+      otherUser,
+      "x",
+      "other-client-id",
+      "other-secret",
+    );
+    expect(await getUserCredentialValue(otherUser, "x_client_secret")).toBe(
+      "other-secret",
+    );
+    expect(await getUserCredentialValue(userId, "x_client_secret")).toBe(
+      "original-secret",
+    );
+
+    const replaced = await savePlatformCredentialsForUser(
+      userId,
+      "x",
+      "replaced-client-id",
+      "replacement-secret",
+    );
+    expect(replaced).toEqual({ success: true });
+    expect(await getUserCredentialValue(userId, "x_client_id")).toBe(
+      "replaced-client-id",
+    );
+    expect(await getUserCredentialValue(userId, "x_client_secret")).toBe(
+      "replacement-secret",
+    );
+
+    const edited = await savePlatformCredentialsForUser(
+      userId,
+      "x",
+      "new-client-id",
+      "",
+    );
+    expect(edited).toEqual({ success: true });
+
+    const storedSecret = await getUserCredentialValue(
+      userId,
+      "x_client_secret",
+    );
+    expect(storedSecret).toBe("replacement-secret");
+    expect(await getUserCredentialValue(userId, "x_client_id")).toBe(
+      "new-client-id",
+    );
+  });
+
+  it("enforces shared AI budgets per user and deployment", async () => {
+    process.env.AI_COMPOSER_RATE_LIMIT = "1";
+    process.env.AI_GLOBAL_RATE_LIMIT = "2";
+
+    const firstUser = randomUUID();
+    const secondUser = randomUUID();
+    const thirdUser = randomUUID();
+    const first = await aiBudgetModule.consumeAiBudget(firstUser, "composer");
+    const second = await aiBudgetModule.consumeAiBudget(secondUser, "composer");
+    const blocked = await aiBudgetModule.consumeAiBudget(firstUser, "composer");
+    const globalBlocked = await aiBudgetModule.consumeAiBudget(thirdUser, "composer");
+
+    expect(first.allowed).toBe(true);
+    expect(second.allowed).toBe(true);
+    expect(blocked).toEqual({
+      allowed: false,
+      retryAfterSec: expect.any(Number),
+      remaining: 0,
+    });
+    expect(globalBlocked).toEqual({
+      allowed: false,
+      retryAfterSec: expect.any(Number),
+      remaining: 0,
+    });
+    expect(blocked.retryAfterSec).toBeGreaterThan(0);
+    expect(globalBlocked.retryAfterSec).toBeGreaterThan(0);
+  });
+});

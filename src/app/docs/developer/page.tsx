@@ -127,7 +127,12 @@ pnpm dev                        # http://localhost:3000`}</code>
           <strong>AI:</strong> <code>HILBRAS_AI_API_KEY</code> (+{" "}
           <code>HILBRAS_AI_BASE_URL</code>, <code>HILBRAS_AI_API_FORMAT</code>
           , <code>HILBRAS_AI_MODEL_ID</code>) powers the built-in model; falls
-          back to <code>OPENAI_API_KEY</code>/<code>ANTHROPIC_API_KEY</code>.
+          back to <code>OPENAI_API_KEY</code>/<code>ANTHROPIC_API_KEY</code>.{" "}
+          Per-user and deployment-wide request budgets are configured with{" "}
+          <code>ASSISTANT_RATE_LIMIT</code>, <code>AI_COMPOSER_RATE_LIMIT</code>,{" "}
+          <code>AI_INBOX_RATE_LIMIT</code>, <code>AI_PROVIDER_TEST_RATE_LIMIT</code>,{" "}
+          <code>AI_MEMORY_RATE_LIMIT</code>, <code>AI_SUMMARY_RATE_LIMIT</code>, and{" "}
+          <code>AI_GLOBAL_RATE_LIMIT</code>.
         </li>
         <li>
           <strong>Platform apps:</strong>{" "}
@@ -211,7 +216,9 @@ pnpm dev                        # http://localhost:3000`}</code>
           <code>PLATFORM_REGISTRY</code> in <code>src/lib/platforms.ts</code>:
           id, name, <code>connection: &quot;oauth&quot; | &quot;manual&quot;</code>,
           optional OAuth <code>auth</code> block, character limit
-          (<code>maxTextLength</code>), and content rules.
+          (<code>maxTextLength</code>), and content rules. Add the matching
+          <code>PUBLISHING_CAPABILITIES</code> entry; connection support and
+          publishing support are separate.
         </li>
         <li>
           <strong>Icon &amp; color</strong> — SVG + brand color in{" "}
@@ -232,9 +239,9 @@ pnpm dev                        # http://localhost:3000`}</code>
         </li>
         <li>
           <strong>Guards</strong> — anything gated on a live connection goes
-          through <code>platformCredentialsConfigured</code> and the
-          connection helpers, so the UI (badges, Composer selection) picks the
-          platform up automatically.
+          through the connection helpers and the capability matrix, so the UI
+          can distinguish Connected from Connect-only and only enables a
+          publishable target in Composer.
         </li>
       </ol>
       <div className="callout">

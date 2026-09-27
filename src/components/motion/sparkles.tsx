@@ -10,6 +10,7 @@ interface Particle {
   size: number;
   delay: number;
   duration: number;
+  color: string;
 }
 
 interface SparklesProps {
@@ -33,14 +34,18 @@ export function Sparkles({
       size: Math.random() * 4 + 2,
       delay: Math.random() * 0.5,
       duration: Math.random() * 1.5 + 1,
+      color: colors[Math.floor(Math.random() * colors.length)] ?? colors[0] ?? "white",
     }));
     setParticles((prev) => [...prev.slice(-count), ...newParticles]);
   }, [count]);
 
   useEffect(() => {
-    spawn();
+    const initial = setTimeout(spawn, 0);
     const interval = setInterval(spawn, 2000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [spawn]);
 
   return (
@@ -64,7 +69,7 @@ export function Sparkles({
               width: p.size,
               height: p.size,
               borderRadius: "50%",
-              background: colors[Math.floor(Math.random() * colors.length)],
+              background: p.color,
               boxShadow: `0 0 ${p.size * 2}px ${colors[0]}`,
             }}
           />

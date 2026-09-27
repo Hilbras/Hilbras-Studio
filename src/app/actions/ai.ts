@@ -5,6 +5,8 @@ import { z } from "zod";
 import { chatCompletion, generatePost, completeWithSystem, type ChatMessage } from "@/lib/ai";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { getSessionUser } from "@/lib/session";
+import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
+import type { AiBudgetKind } from "@/lib/ai-limits";
 
 export interface ChatResult {
   content: string;
@@ -39,6 +41,15 @@ const generateInput = z.object({
   prompt: z.string().max(4000),
   platform: z.string().max(30).optional(),
 });
+
+async function aiBudgetError(userId: string, kind: AiBudgetKind): Promise<string | null> {
+  try {
+    const budget = await consumeAiBudget(userId, kind);
+    return budget.allowed ? null : aiBudgetMessage(budget);
+  } catch {
+    return "AI usage controls are temporarily unavailable. Try again later.";
+  }
+}
 
 /**
  * The Composer is an editor, not a chat: every response must be usable content
@@ -118,6 +129,9 @@ export async function improvePostAction(
     return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
+  const budgetError = await aiBudgetError(session.id, "composer");
+  if (budgetError) return { content: "", error: budgetError };
+
   try {
     const draft = parsed.data.text.trim();
     const context = platformContext(parsed.data.platforms);
@@ -145,6 +159,9 @@ export async function generateHashtagsAction(text: string): Promise<ChatResult> 
 
   const draft = parsed.data.text.trim();
   if (!draft) return { content: "", error: "Write a post first." };
+
+  const budgetError = await aiBudgetError(session.id, "composer");
+  if (budgetError) return { content: "", error: budgetError };
 
   try {
     const content = await completeWithSystem(
@@ -174,6 +191,9 @@ export async function processAssistantMessage(
     return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
+  const budgetError = await aiBudgetError(session.id, "suggestion");
+  if (budgetError) return { content: "", error: budgetError };
+
   try {
     const response = await chatCompletion([
       ...parsed.data.messages,
@@ -200,6 +220,9 @@ export async function generatePostAction(
   if (!parsed.success) {
     return { content: "", error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
+
+  const budgetError = await aiBudgetError(session.id, "composer");
+  if (budgetError) return { content: "", error: budgetError };
 
   try {
     const content = await generatePost(parsed.data.prompt, parsed.data.platform);

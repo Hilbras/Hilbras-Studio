@@ -225,22 +225,22 @@ const FEATURES = [
   {
     icon: Globe2,
     title: "Unified Publishing",
-    desc: "One post, nine platforms. Content is automatically adapted to each network's format and limits.",
+    desc: "One post to the five currently publishable networks, with the other OAuth platforms available as connect-only integrations.",
   },
   {
     icon: CalendarClock,
     title: "Smart Scheduling",
-    desc: "AI picks the optimal posting time per platform based on when your audience is most active.",
+    desc: "AI rewrites your draft with the selected platform limits in view, while scheduling keeps the publish time explicit.",
   },
   {
     icon: BarChart3,
     title: "Deep Analytics",
-    desc: "Reach, engagement and audience insights across all platforms in one clean dashboard.",
+    desc: "See publishing outcomes and weekly activity in one clean dashboard; deeper platform insights are on the roadmap.",
   },
   {
     icon: MessageSquare,
     title: "Unified Inbox",
-    desc: "Comments, mentions and DMs from every platform in a single stream with AI-suggested replies.",
+    desc: "Review X mentions and Instagram conversations in the current inbox, with AI-suggested replies.",
   },
   {
     icon: ShieldCheck,
@@ -394,7 +394,7 @@ function Testimonials() {
                     <Sparkles key={i} className="size-3.5 fill-gold-400 text-gold-400" />
                   ))}
                 </div>
-                <p className="text-sm leading-relaxed flex-1">"{t.text}"</p>
+                <p className="text-sm leading-relaxed flex-1">&quot;{t.text}&quot;</p>
                 <div className="mt-6 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center text-white text-sm font-bold">
                     {t.name[0]}

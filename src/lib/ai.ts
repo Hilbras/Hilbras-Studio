@@ -2,6 +2,8 @@ import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
+import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
+import type { AiBudgetKind } from "@/lib/ai-limits";
 import { decryptSecret } from "@/lib/crypto";
 import { listMemories } from "@/lib/chat";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
@@ -27,6 +29,14 @@ import {
  */
 
 export type { ChatMessage } from "@/lib/ai-sdk";
+
+async function consumeBackgroundAiBudget(
+  userId: string,
+  kind: AiBudgetKind,
+): Promise<void> {
+  const budget = await consumeAiBudget(userId, kind);
+  if (!budget.allowed) throw new Error(aiBudgetMessage(budget));
+}
 
 const SYSTEM_PROMPT = `You are Hilbras Studio's AI social media assistant.
 You help users create, adapt, and schedule content across social platforms.
@@ -246,7 +256,11 @@ Output strictly:
 - If the message contains nothing durable, output exactly: NONE`;
 
 /** Pull durable facts out of a user message — `[]` when there are none. */
-export async function extractMemories(message: string): Promise<string[]> {
+export async function extractMemories(
+  message: string,
+  userId: string,
+): Promise<string[]> {
+  await consumeBackgroundAiBudget(userId, "memory");
   const raw = await completeWithSystem(MEMORY_SYSTEM, message.slice(0, 4000));
   const lines = raw
     .split("\n")
@@ -261,7 +275,11 @@ Cover: facts about the user, decisions made, drafts written, and open threads.
 Output ONLY the summary, at most 180 words, no preamble or labels.`;
 
 /** Compress old turns into text that can stand in for them in context. */
-export async function summarizeSegment(segment: string): Promise<string> {
+export async function summarizeSegment(
+  segment: string,
+  userId: string,
+): Promise<string> {
+  await consumeBackgroundAiBudget(userId, "summary");
   const raw = await completeWithSystem(SUMMARY_SYSTEM, segment.slice(0, 12000));
   return raw.trim();
 }

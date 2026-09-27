@@ -149,6 +149,17 @@ export default function SignupPage() {
               </div>
             </div>
 
+            <div className="space-y-1.5">
+              <Label htmlFor="inviteCode">Invite code <span className="font-normal text-muted-foreground">(if required)</span></Label>
+              <Input
+                id="inviteCode"
+                name="inviteCode"
+                autoComplete="off"
+                placeholder="Optional"
+                className="rounded-xl"
+              />
+            </div>
+
             <MagneticButton strength={0.1} className="w-full">
               <Button
                 type="submit"

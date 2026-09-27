@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.mts",
-    "typecheck": "tsc --noEmit --incremental false"
+    "typecheck": "tsc --noEmit --incremental false",
+    "release:check": "node scripts/release-check.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

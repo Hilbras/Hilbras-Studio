@@ -268,6 +268,9 @@ Create Goal → Select Accounts → Set Schedule → Runtime → AI Planning
 
 ## Release requirements
 
+> **Standing rule: after every phase, update GitHub with a release.** A phase is
+> not done when the code works — it is done when the release exists.
+
 A phase is **not complete** until all of these exist:
 
 ```
@@ -284,6 +287,23 @@ Release
 Plus: implementation, tests, README update, CHANGELOG entry, version bump, git
 commit, git tag, GitHub Release. Tags are `vX.Y.Z`, created only from a green CI
 run on `main` (ADR-007).
+
+### The gate is enforced, not remembered
+
+```bash
+pnpm release:check          # validate the version in package.json
+pnpm release:check -- 0.3.0 # validate a specific version
+```
+
+Fails **before** a tag exists if the version in `package.json` and
+`docs/architecture.md` disagree, the changelog entry is missing or undated,
+`[Unreleased]` still holds work, the tree is dirty, the tag already exists,
+`HEAD` is already pushed, or a `.env`/`.db` file is tracked. See
+[`docs/releasing.md`](docs/releasing.md) for the full procedure.
+
+`v*` tags are protected by a repository ruleset — a published version cannot be
+moved or deleted. Publish a new version instead of force-pushing a tag.
+
 
 ## Documentation-first rule
 

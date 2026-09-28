@@ -45,6 +45,32 @@ export const MIN_GOAL_INTERVAL_MS = 15 * 60 * 1000;
 /** How many consecutive firings are probed to enforce the floor above. */
 const INTERVAL_PROBE_DEPTH = 4;
 
+// ---------------------------------------------------------------------------
+// Status
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a goal is in the schedule.
+ *
+ * Lives here rather than in `service.ts` because the goal domain's vocabulary
+ * is shared with the client: the view that renders a goal's status imports
+ * these three strings, and `service.ts` is `server-only`. A vocabulary that can
+ * only be read on the server is a vocabulary the UI ends up restating, and a
+ * restated vocabulary is one that drifts.
+ *
+ * `archived` is terminal and `paused` is not, which is a rule about behaviour
+ * and not about display — `setGoalStatus` refuses to revive an archived goal —
+ * so the distinction is carried by the union and the service, not by a style
+ * choice in a badge.
+ */
+export const GOAL_STATUSES = ["active", "paused", "archived"] as const;
+
+export type GoalStatus = (typeof GOAL_STATUSES)[number];
+
+// ---------------------------------------------------------------------------
+// The gate
+// ---------------------------------------------------------------------------
+
 /** An account a goal may target, in the shape validation needs. */
 export interface GoalTarget {
   /** `platform:handle`, e.g. "x:hilbras". */

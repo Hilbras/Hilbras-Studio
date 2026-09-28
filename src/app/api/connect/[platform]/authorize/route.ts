@@ -20,7 +20,9 @@ export async function GET(
   // modal and have no authorize page to hand the browser to; anything else
   // reaching here without an `auth` block is a misconfigured registry entry.
   if (platform.connection === "manual" || !platform.auth) {
-    return NextResponse.redirect(new URL("/accounts?error=manual_connection", req.url));
+    return NextResponse.redirect(
+      new URL("/settings/credentials?error=manual_connection", req.url),
+    );
   }
 
   // Credentials belong to the signed-in user: their own Settings → Accounts row
@@ -29,7 +31,7 @@ export async function GET(
   const credentials = await readPlatformAppCredentials(session.id, platform.id);
   if (!credentials) {
     return NextResponse.redirect(
-      new URL("/accounts?error=credentials_not_configured", req.url)
+      new URL("/settings/credentials?error=credentials_not_configured", req.url)
     );
   }
   const { clientId } = credentials;
@@ -43,15 +45,21 @@ export async function GET(
   const verdict = await verifyAppCredentials(platform.id, credentials);
   if (verdict.status === "invalid") {
     return NextResponse.redirect(
-      new URL(`/accounts?error=${encodeURIComponent(verdict.code)}`, req.url)
+      new URL(
+        `/settings/credentials?error=${encodeURIComponent(verdict.code)}`,
+        req.url,
+      )
     );
   }
 
   // The Referer is attacker-controllable, so only its path is kept as the
   // post-callback destination (see `safeReturnPath`).
+  // The fallback is the page that owns the connect form, so a request that
+  // arrives without a referer still returns somewhere that can finish or fix
+  // the flow rather than to a list of accounts with no context.
   const returnUrl = safeReturnPath(
     req.headers.get("referer"),
-    `${requestOrigin(req)}/accounts`
+    `${requestOrigin(req)}/settings/credentials`
   );
   const state = Buffer.from(JSON.stringify({ userId: session.id, returnUrl })).toString("base64url");
 

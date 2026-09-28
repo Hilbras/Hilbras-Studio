@@ -32,18 +32,36 @@ import { db } from "@/db";
 import { accounts, goals, runSteps, runs } from "@/db/schema";
 import { capabilitiesForAccount } from "@/lib/accounts/store";
 
-import { isValidTimeZone, nextSlot, parseCron, slotKey } from "./cron";
 import {
+  isValidTimeZone,
+  nextSlot,
+  parseCron,
+  slotKey,
+} from "./cron";
+import {
+  GOAL_STATUSES,
   validateGoal,
   type GoalDraft,
   type GoalIssue,
+  type GoalStatus,
   type GoalTarget,
 } from "./validation";
 
-/** The lifecycle states a goal moves through. */
-export const GOAL_STATUSES = ["active", "paused", "archived"] as const;
+/**
+ * Re-exported so the rest of the app has one import for the goal vocabulary.
+ *
+ * The values are defined in `./validation`, which is pure, because the client
+ * reads them too. This module cannot be that import site: it is `server-only`,
+ * and a badge that cannot name the state it is rendering is a badge that
+ * restates the union by hand.
+ */
+export { GOAL_STATUSES, type GoalStatus };
 
-export type GoalStatus = (typeof GOAL_STATUSES)[number];
+/**
+ * Re-exported so a caller that already imports the service does not need a
+ * second import path to name what the service returns.
+ */
+export type { GoalIssue };
 
 function isGoalStatus(value: string): value is GoalStatus {
   return (GOAL_STATUSES as readonly string[]).includes(value);
@@ -444,6 +462,12 @@ export async function listRecentRuns(goalId: string, limit = 10) {
       state: runs.state,
       scheduleSlot: runs.scheduleSlot,
       attempt: runs.attempt,
+      // `createdAt` because it is the only one of the three that every run has:
+      // a queued run has no `startedAt` yet, and a run whose dispatch failed
+      // before it was claimed has no `finishedAt` either. Ordering is already
+      // by `createdAt`, so a history that rendered `startedAt` would be missing
+      // the runs it is most likely to be asked about.
+      createdAt: runs.createdAt,
       startedAt: runs.startedAt,
       finishedAt: runs.finishedAt,
     })

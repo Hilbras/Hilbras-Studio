@@ -13,6 +13,184 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.9.0] — 2026-09-28
+
+Studio UI 2.0. The Runtime has been complete since v0.8.0 and none of it was
+visible: every capability — goals, plans, runs, approvals, policies — had a
+service function and no screen. A user who set an `approval` policy had no way to
+answer the question it created. This release is the interface, and the part of it
+worth reading about is the read layer the interface needed.
+
+### Added
+
+- **An owner-scoped read layer** (`src/lib/runtime/queries.ts`, `server-only`) —
+  the only module UI code may read user data through.
+  - **`runtime/service.ts` has readers that are deliberately unscoped.**
+    `getRun`, `listRunSteps`, and `listRunEvents` take a `runId` and nothing else,
+    because the executor and the resume path are handed a run id by the queue and
+    cannot ask whose run it is. They are the right functions for the Runtime and
+    the wrong ones for a page: a run row holds the plan, and the steps hold the
+    *resolved* input — the real post text and a media URL. They stay, because the
+    callers that need them are correct; they are simply not reachable from a page.
+  - **Every function here takes a `userId` and puts it in the `WHERE` clause**, not
+    in a filter applied afterwards, so a row that is not the caller's never exists
+    in memory to be rendered by mistake. Run ids are `randomUUID`, so the
+    unscoped readers are not *practically* guessable — but "not practical" is not a
+    property a tenancy boundary should rest on.
+  - **A known id belonging to someone else is `null`, not an error.** An error
+    would distinguish "does not exist" from "not yours", which is a tenant
+    enumeration oracle. `getRunDetail` returns `null` for both.
+  - **A filter narrows, never widens.** `listRuns(userId, { goalId })` scopes by
+    the *run's own* `userId`, not by looking up the goal first, so a `goalId`
+    belonging to someone else matches nothing rather than matching their runs.
+  - **`clampLimit` caps every list** at 200, so a `?limit=` in a URL cannot ask
+    for the whole table. A history too long for one page is a reason to build
+    pagination, not to let a request size itself.
+  - See [ADR-008](docs/architecture.md#adr-008--a-page-reads-user-data-only-through-an-owner-scoped-read-layer).
+- **A shared state vocabulary** (`src/lib/runtime/view.ts`, pure) — state to
+  label, tone, and meaning, with no fetch and no formatting of user text.
+  - **The tables are `Record<ExecutionState, StatusMeta>`** and friends, so adding
+    a state without deciding what it *means* is a `typecheck` failure rather than a
+    bare badge in one place. The status tables are keyed exhaustively for the same
+    reason the executor's state machine is.
+  - **`approvalDeadlineView` calls the server's own `isOverdue`** rather than
+    re-deriving the comparison, and takes the clock as a parameter. If the screen
+    used its own arithmetic a user could watch a countdown reach zero, press
+    Approve, and be refused with `approval_expired` — the screen said open, the
+    server said closed, and both were right. The countdown is advisory; the label
+    is authoritative.
+  - **Unknown values resolve to an explicit "Unknown"** rather than a guess, so a
+    state written by a later build renders readably here instead of being
+    mislabelled.
+- **The Runtime dashboard** (`/runtime`) — active goals, runs in flight, failures
+  this week, connected accounts, everything waiting on you, and the recent runs.
+  - **A run waiting on a person is not counted as in flight.** It is holding a
+    question, not doing anything, and it is counted on its own. A dashboard
+    reporting "2 in flight" when one of them is waiting on you sends you to the
+    wrong screen.
+  - **"Failed this week" is a seven-day window on purpose.** A count of all
+    failures ever only goes up and says nothing about whether the system is
+    healthy now.
+  - **Goals that will not fire are counted.** If a goal targets an account that is
+    switched off, disconnected, or can no longer publish, nothing errors and no
+    run is ever created — the goal simply goes quiet, forever. It is the one
+    Runtime problem that never appears in the run history. A *paused* goal is not
+    counted: a paused goal not firing is why you paused it.
+- **Goals UI** (`/goals`, `/goals/new`, `/goals/[goalId]`) — create and configure
+  a goal, pause, resume, and archive it, with its firing history and every run it
+  has made. The gate that validates a goal at save time is the same one from
+  v0.6.0; the screen renders its issues verbatim.
+- **Approvals UI** (`/approvals`) — the open questions, oldest deadline first,
+  with approve, reject, and edit-before-approve. **The client never decides
+  state**: no optimistic transition, no local copy. The card renders the action's
+  return value including every validation issue, and derives its editable fields
+  from `editableFields(getTool(...))` rather than hardcoding them, so the screen
+  cannot offer a field the tool would refuse.
+- **Execution history** (`/runtime/runs`, `/runs/[runId]`) — every run, and a log
+  per run: the plan, each step in order with its exact input and output, and a
+  timestamped event trail.
+- **Policies UI** (`/settings/policies`) — `auto` / `approval` / `disabled` per
+  account and per tool, rendered from the server's own result rather than an
+  assumed next value. Lists only what `describePolicyTargets` may name: a control
+  for `compose_post` would be a switch that does nothing.
+- **Account management** (`/accounts`) — enable, disable, and disconnect a
+  connected account, with the reason it is unusable shown on the account itself.
+- **`src/lib/runtime/inngest/wake.ts`** — the queue-wake rule, extracted from a
+  private function in a `"use server"` module and taking its sender as a
+  parameter, so "a failed send is not a failed approval" can be tested by handing
+  it a sender that throws. It could not be reached before without a session, a
+  form post, and a database — a test expensive enough that it would not have got
+  written, which ADR-004's own reasoning predicts.
+- **Seven UI primitives** — `table`, `textarea`, `select`, `checkbox`, `separator`,
+  `tabs`, `progress`; `badge` gained the six tone variants `view.ts` defines. No
+  new dependencies; every Radix primitive was already installed.
+- **User guide** — Runtime, Goals, Approvals, and Execution policies pages under
+  `src/app/docs/*`, in a new "Goals & Runtime" nav group.
+
+### Changed
+
+- **`/dashboard` is a permanent redirect to `/runtime`.** The URL is the one most
+  bookmarks and screenshots already carry, and a 404 on it would be a worse
+  answer than a redirect.
+- **The integration-centric pages are demoted, not deleted.** Dashboard (the old
+  one), Assistant, Accounts, Composer, Scheduler, Inbox, and Analytics are now a
+  "Quick tools" group in the sidebar. They still work; removing a working screen
+  to make a redesign look decisive would be a worse outcome than a slightly busier
+  sidebar.
+- **`/accounts` is now connected-account management.** The credentials form moved
+  to **`/settings/credentials`** (`git mv`, so history follows), and the OAuth
+  failure redirects in `authorize`, `callback`, and `safeReturnPath` were repointed
+  to match — a failed connect now lands on the page where the fix is.
+- **`GOAL_STATUSES` / `GoalStatus` moved to `src/lib/goals/validation.ts`**, which
+  is pure, and are re-exported from `goals/service.ts`. A client component needs
+  the vocabulary to label a goal, and vocabulary is not a secret; behind a
+  `server-only` import, copying the list would have been the only way out.
+- **`listRecentRuns` gained `createdAt`** — the only timestamp every run has, and
+  the one a list orders by.
+- **`PROTECTED` routes extended** to `/runtime`, `/runs`, `/goals`, and
+  `/approvals`.
+- **The status badge takes a tone** from `view.ts`'s `Tone` union, with `neutral`
+  as the default so a missing tone renders readably rather than invisibly.
+
+### Testing
+
+- **`tests/integration/queries.test.ts`, 25 tests.** Almost entirely about
+  separation, because that is the property that cannot be checked without two
+  users against one database: two tenants' runs, run details, goals, and
+  approvals each stay with their owner; a `goalId` filter cannot widen scope; a
+  known foreign id is `null`; the overview's counts are the caller's counts; the
+  pending question is read from the approval row and not from `run.state`; the
+  overdue count sits exactly on the boundary `isOverdue` enforces; a goal that
+  cannot act is counted and a paused one is not; and `clampLimit` clamps.
+- **`src/lib/runtime/view.test.ts`, 26 tests** — every status, the deadline view
+  at and around the boundary, and the non-guessing fallbacks.
+- **`src/lib/runtime/inngest/wake.test.ts`, 4 tests** — the send shape, and that a
+  rejection, a non-`Error` rejection, and a synchronous throw are all swallowed.
+- **Unit 371 (was 341), integration 151 (was 126), lint unchanged at 31 warnings.**
+- **`scripts/mutate-phase7.sh` — 16 mutations, 0 holes.** Each removes the
+  `userId` from a different `WHERE` clause, inverts a state predicate, drops the
+  limit cap, or re-derives the deadline comparison, and requires the suite to
+  fail. Every expression is deliberately type-valid: the integration suite is
+  transpiled, not typechecked, so a mutation referencing an unimported helper
+  would die of a `ReferenceError` and report "ok" for a file that no longer runs.
+  Three mutations are expected to break `typecheck` and `build` rather than a
+  test — that is the `server-only` import boundary ADR-004 predicted would be
+  mechanically checkable.
+
+### Fixed
+
+- **`tests/integration/goals.test.ts` asserted a hardcoded `nextFiringAt`** while
+  `updateGoal` recomputes from the wall clock, so the test only passed between
+  midnight and 06:30 Berlin each day — it was one afternoon away from breaking
+  CI. It now asserts the property the recomputation exists to provide: the stored
+  time is 06:30 in the schedule's own timezone, and in the future. That is also
+  correct across a daylight-saving boundary, which a UTC comparison would not be.
+
+### Not included, deliberately
+
+- **Cursor pagination.** Run lists and event logs use recent-N with a cap, chosen
+  over cursors because a run history is read top-down and almost never deep. A
+  user who genuinely needs page 40 of the event log is a use case to design
+  against, not to pre-build for.
+- **Real-time updates.** The Runtime is server-rendered and revalidates on
+  action. Nothing polls, and nothing is pushed. A second tab does not update on
+  its own, which is a defensible thing to notice and not a bug.
+- **Wiring the plan gate's `policy` input**, still deferred exactly as in
+  v0.8.0. `validatePlan` accepts one and would report a `disabled` step as an
+  issue; the repair that invites is to drop the step, which for a goal targeting
+  two accounts would take the permitted account's post down with it. The dispatch
+  gate remains the live one.
+- **Bulk policy editing.** One account or tool at a time. A multi-select would
+  need its own confirmation surface, and a bulk `disabled` that partially applies
+  is a bad thing to have designed quickly.
+- **Per-goal execution limits in the UI.** The counters are enforced
+  (`perPlan 2`, `perStep 2`, `perRun 12`) and were not made editable, because an
+  editable limit with no explanation of what happens when it is hit is a support
+  ticket waiting to happen.
+- **A re-planning path after a mid-run failure**, still deferred as in v0.7.0.
+
+---
+
 ## [0.8.0] — 2026-09-28
 
 Human-in-the-Loop. A plan could publish, and nothing in the product could stop

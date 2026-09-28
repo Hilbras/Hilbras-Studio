@@ -25,8 +25,8 @@ Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
 | v0.5.1 | Unified Platform API: connectors |
 | v0.6.0 | Goal Engine |
 | v0.7.0 | AI Planning |
-| **v0.8.0** | **Current — Human-in-the-Loop** |
-| v0.9.0 | Studio 2.0 |
+| v0.8.0 | Human-in-the-Loop |
+| **v0.9.0** | **Current — Studio UI 2.0** |
 | v0.9.5 | Release Candidate |
 | **v1.0.0** | **Goal-Driven AI Runtime** |
 
@@ -34,7 +34,7 @@ See [`ROADMAP.md`](ROADMAP.md) for the full plan and
 [`docs/architecture.md`](docs/architecture.md) for the layer contracts and
 architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
 
-## Today's capabilities (v0.8.0)
+## Today's capabilities (v0.9.0)
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
   provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.
@@ -58,8 +58,25 @@ architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
   edit it. Approve, reject, or let the 24-hour window close — all three let the
   run continue to its other accounts rather than abandoning them. Unanswered
   approvals expire; a decision that fails to reach the queue is picked up by a
-  sweep, so a suspension is never lost. The interface for setting policies and
-  answering questions is the next phase; the system behind it ships now.
+  sweep, so a suspension is never lost.
+- **Studio UI 2.0** — The product is organised around the Runtime rather than
+  around integrations. A **Runtime** dashboard answers *is it running, is it
+  stuck, does it need me* in one place, and counts the one failure that never
+  appears in a run history: a goal targeting an account that is switched off or
+  can no longer publish, which errors nowhere and simply never fires. **Goals**
+  can be created, configured, paused, and resumed, and show their firing
+  history. **Approvals** is a queue of open questions, oldest deadline first,
+  with editing before approval. **Execution history** gives every run a log of
+  its plan, its steps with the exact input and output, and a timestamped event
+  trail. The integration pages are demoted to *Quick tools*; the credentials
+  form moved to Settings, and a failed OAuth connect now lands there.
+- **A read layer built for pages** — Every screen reads user data through one
+  owner-scoped module, so the `WHERE` clause is the boundary rather than a
+  filter applied afterwards. The Runtime keeps its own deliberately unscoped
+  readers for the executor, which is handed a run id by the queue and cannot ask
+  whose run it is; a page cannot reach them. A known run id belonging to someone
+  else is `null`, not an error, so the app does not confirm the existence of
+  another tenant's data.
 - **Inbox** — X mentions and Instagram conversations.
 - **Assistant** — Streaming chat with persistent sessions and long-term memory.
 - **Analytics** — Publishing outcomes and weekly activity.
@@ -110,7 +127,7 @@ See [`.env.example`](.env.example) for the full list. Required:
 | `APP_URL` | Public base URL, used to build OAuth redirect URIs |
 | `CRON_SECRET` | Random string authorising the scheduled-post cron endpoint (`openssl rand -hex 32`) |
 
-Platform credentials are configured per-user in the UI (Settings → Accounts) and stored encrypted in the database, or supplied as `{PLATFORM}_CLIENT_ID` / `{PLATFORM}_CLIENT_SECRET` env vars.
+Platform credentials are configured per-user in the UI (Settings → Credentials) and stored encrypted in the database, or supplied as `{PLATFORM}_CLIENT_ID` / `{PLATFORM}_CLIENT_SECRET` env vars.
 
 ### Built-in AI model
 

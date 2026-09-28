@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.8.0
+**Current version:** v0.9.0
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -190,6 +190,41 @@ execution policy, and it is deliberately the last: it runs immediately before a
 dispatch, because a policy can change between a plan being written and a step
 being executed, so the reading that governs whether something happens has to be
 the one immediately before it happens.
+
+#### Two modules the UI is allowed to use, and why there are only two
+
+The Runtime module holds two kinds of reader, and v0.9.0 made that split explicit
+because a screen had to be able to tell them apart.
+
+`runtime/service.ts` has readers that are **deliberately unscoped** — `getRun`,
+`listRunSteps`, `listRunEvents`. They take a `runId` and nothing else, because
+the executor and the resume path are handed a run id by the queue and cannot ask
+whose run it is. Removing the scope would mean an ownership lookup on every step
+of every run, on the hot path, to answer a question those callers do not have.
+
+Those are the right functions for the Runtime and the wrong ones for a page.
+`getRun` answers "does this run exist", and a screen that renders what it gets
+will show one tenant's plan, step input, and drafts to another. So:
+
+- **`runtime/queries.ts` (`server-only`)** — every function takes a `userId` and
+  puts it in the `WHERE` clause, not in a filter applied afterwards, so a row
+  that is not the caller's never exists in memory to be rendered by mistake. This
+  is the **only** module UI code may read user data through. Run ids are
+  `randomUUID`, so the unscoped readers are not *practically* guessable — but
+  "not practical" is not a property a tenancy boundary should rest on.
+- **`runtime/view.ts` (pure)** — state to label, tone, and meaning. No fetch, no
+  formatting of user text, no decision about what a screen should show. It is
+  separate from the read layer so the same vocabulary is reusable by the
+  dashboard, the run log, and the approval screen without three copies of the
+  labels drifting apart. Being pure is also what lets a client component import
+  it: it sits on the same side of the `server-only` line as the component.
+
+See [ADR-008](#adr-008--a-page-reads-user-data-only-through-an-owner-scoped-read-layer).
+
+`view.ts` also moved `GOAL_STATUSES` into `goals/validation.ts`, which is pure,
+and re-exported it from `goals/service.ts`. A client component that wants to
+label a goal needs the vocabulary, and vocabulary is not a secret; leaving it
+behind a `server-only` import would have made copying the list the only way out.
 
 #### Infrastructure
 
@@ -625,6 +660,82 @@ complete before a phase counts as done.
 bumped together. A phase is not complete until the CHANGELOG entry, the docs
 update, and the tag all exist -- the "documentation-first rule" is enforced by
 the release checklist, not by good intentions.
+
+---
+
+### ADR-008 — A page reads user data only through an owner-scoped read layer
+
+**Status:** Accepted · Phase 7
+
+**Context.** Phase 7 put a Runtime UI in front of data that has existed since
+v0.3.0, and the first question was where a page should get a run from. There were
+two functions that would work, and they are not equivalent:
+
+- `runtime/service.ts::getRun(runId)` — what the executor and the resume path use.
+- A reader that checks whose run it is.
+
+The first is the right one for the Runtime. The queue hands a `runId` to a step
+and has no idea who owns the run; the only way to know is a lookup, and doing it
+on every step of every run to answer a question those callers do not have is a
+real cost for no benefit. The second is the right one for a page.
+
+The hazard is that both are called `getRun`-shaped things in the same module, and
+nothing stopped a page from reaching for the cheap one. A run row contains the
+plan, and the steps contain the **resolved** input — the actual post text, and a
+media URL. A screen that renders what it gets shows one tenant's drafts to
+another.
+
+**Decision.** `runtime/queries.ts` is the only module UI code may read user data
+through. Every function in it takes a `userId` and puts it in the `WHERE`
+clause. The unscoped readers in `runtime/service.ts` stay, because the callers
+that need them are correct, and are simply not reachable from a page.
+
+**Consequences.**
+
+- **A known id belonging to someone else is `null`, not an error.** An error
+  would distinguish "does not exist" from "not yours", which is a tenant
+  enumeration oracle. `getRunDetail` returns `null` for both.
+- **A filter can narrow, never widen.** `listRuns(userId, { goalId })` scopes by
+  the *run's own* `userId`, not by looking up the goal first — so a `goalId`
+  belonging to someone else matches nothing rather than matching their runs.
+- **Scope is necessary but not sufficient.** A caller must also not render what a
+  run *contains* to a reader who should not see it. Within this product that is
+  the step input, and it is carried only by `getRunDetail`, never by the list
+  shape — a list needs a title and a state, not a post body.
+- **A limit cannot be asked past the cap.** `clampLimit` exists so a `?limit=` in
+  a URL cannot ask for the whole table. A history too long for one page is a
+  reason to build pagination, not to let a request size itself.
+- **Two readers can disagree, so one owns each meaning.** `getRunDetail` reads
+  the pending question from the *approval row*, not from `run.state`, because the
+  approval is settled before the resume transitions the run: a page reading the
+  state alone renders a question that has already been answered. And
+  `countOverdueApprovals` uses `expires_at <= now`, the exact negation of
+  `isOverdue`, so it counts what is *about* to fail rather than only what already
+  has. The sweeper may be up to five minutes from marking an approval expired, and
+  a dashboard reporting `overdue: 0` across four lapsed questions is the cheerful
+  lie the count exists to prevent.
+- **The deadline is computed with the server's own comparison.**
+  `runtime/view.ts` calls `isOverdue` rather than re-deriving the arithmetic, and
+  takes the clock as a parameter. If the screen used its own comparison, a user
+  could watch a countdown reach zero, press Approve, and be refused with
+  `approval_expired` — the screen said open and the server said closed, and both
+  were right. The countdown is advisory; the label is authoritative.
+- **A new state is a compile error.** The status tables are
+  `Record<ExecutionState, StatusMeta>` and friends, so adding a state without
+  deciding what it *means* fails `typecheck` rather than rendering a bare badge in
+  one place. The tables are keyed exhaustively for the same reason the executor's
+  state machine is.
+- **Enforced, not merely documented.** `scripts/mutate-phase7.sh` removes the
+  `userId` from each of these `WHERE` clauses in turn and requires the integration
+  suite to fail; three further mutations are expected to break `typecheck` and
+  `build` rather than a test. ADR-004 predicted that a `server-only` import
+  boundary would be mechanically checkable — the last of those is that check.
+
+**Related.** The UI is reorganised around the Runtime, so `/dashboard` now
+redirects permanently to `/runtime` and the integration-centric pages are demoted
+to a "Quick tools" group rather than deleted. The old `/accounts` credentials form
+moved to `/settings/credentials`, and the OAuth failure redirects were repointed
+to match, so a failed connect lands on the page where the fix is.
 
 ---
 

@@ -19,7 +19,9 @@ export async function GET(
   const { platform: platformIdStr } = await params;
   const platform = PLATFORM_REGISTRY[platformIdStr as PlatformId];
   if (!platform) {
-    return NextResponse.redirect(new URL("/accounts?error=unknown_platform", req.url));
+    return NextResponse.redirect(
+      new URL("/settings/credentials?error=unknown_platform", req.url),
+    );
   }
 
   const verifierCookieName = `pkce_${platformIdStr}`;
@@ -41,8 +43,13 @@ export async function GET(
     return res;
   };
 
+  // A failure returns to the page that *started* the flow, because that is
+  // where the thing to fix lives. Phase 7 moved the app-credentials form and
+  // the connect button to `/settings/credentials` and gave `/accounts` over to
+  // connected accounts, so a failure banner on the accounts list would be a
+  // complaint with no remedy on the screen showing it.
   const fail = (reason: string) =>
-    respond(`/accounts?error=${encodeURIComponent(reason)}`);
+    respond(`/settings/credentials?error=${encodeURIComponent(reason)}`);
 
   // Manual platforms (Telegram) never round-trip through this OAuth callback —
   // their connection is written by the Accounts modal's own action. Anything

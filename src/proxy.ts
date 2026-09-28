@@ -2,7 +2,36 @@ import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
 const SESSION_COOKIE = "hilbras_session";
-const PROTECTED = ["/dashboard", "/assistant", "/accounts", "/composer", "/scheduler", "/inbox", "/analytics", "/settings"];
+
+/**
+ * Routes that require a session.
+ *
+ * Listed as roots rather than as a prefix test so a route is protected by
+ * *appearing here*, which is reviewable, rather than by happening to share a
+ * prefix with something protected. The Runtime screens are in this list for the
+ * same reason `/accounts` was: each one reads or writes rows belonging to the
+ * session's user, and an unauthenticated request should be turned away at the
+ * edge rather than reaching a page that would then have to render a login form
+ * itself.
+ *
+ * `/dashboard` stays listed although Phase 7 redirects it to `/runtime`, because
+ * the redirect is a client-visible convenience and a stale bookmark should not
+ * be served the old shell.
+ */
+const PROTECTED = [
+  "/dashboard",
+  "/runtime",
+  "/runs",
+  "/goals",
+  "/approvals",
+  "/assistant",
+  "/accounts",
+  "/composer",
+  "/scheduler",
+  "/inbox",
+  "/analytics",
+  "/settings",
+];
 const AUTH_PAGES = ["/login", "/signup"];
 
 /**

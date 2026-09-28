@@ -431,14 +431,112 @@ over `step.waitFor`.
 
 Redesign Studio around the Runtime instead of around integrations.
 
-- [ ] Runtime dashboard (status, running goals).
-- [ ] Goals dashboard and creation/configuration UI.
-- [ ] Account and connection management.
-- [ ] Execution history and runtime logs.
-- [ ] Approval interface and runtime controls.
-- [ ] Error management; usage metrics.
+- [x] Runtime dashboard (status, running goals).
+- [x] Goals dashboard and creation/configuration UI.
+- [x] Account and connection management.
+- [x] Execution history and runtime logs.
+- [x] Approval interface and runtime controls.
+- [x] Error management; usage metrics.
 
 **Docs:** user guide under `src/app/docs/*`
+
+### v0.9.0 — shipped ✅
+
+The Runtime has been complete since v0.8.0 and none of it was visible. Every
+capability — goals, plans, runs, approvals, policies — had a service function and
+no screen, so a user setting an `approval` policy had no way to answer the
+question it created. This phase is the interface, and the interesting part of it
+is the read layer the interface needed.
+
+**The Runtime dashboard is the new home.** `/dashboard` permanently redirects to
+`/runtime`. The integration pages are kept, not deleted, and demoted to a *Quick
+tools* group — they still work, and removing a working screen to make a redesign
+look decisive would be a worse outcome than a slightly busier sidebar.
+
+**`runtime/queries.ts` is the only module UI code may read user data through.**
+`runtime/service.ts` has readers that are deliberately unscoped — `getRun`,
+`listRunSteps`, `listRunEvents` — because the executor and the resume path are
+handed a `runId` by the queue and cannot ask whose run it is. They are the right
+functions for the Runtime and the wrong ones for a page: a run row contains the
+plan, and the steps contain the *resolved* input, so a screen that renders what it
+gets shows one tenant's drafts to another. Every function in `queries.ts` takes a
+`userId` and puts it in the `WHERE` clause, not in a filter applied afterwards. A
+known id belonging to someone else is `null` rather than an error, because an
+error would confirm the row exists. See ADR-008.
+
+**`runtime/view.ts` is pure, and that is why it can be shared.** State to label,
+tone, and meaning, with no fetch and no formatting of user text, so the
+dashboard, the run log, and the approval screen cannot drift apart on what a
+status *is*. The tables are `Record<ExecutionState, StatusMeta>` and friends, so
+adding a state without deciding what it means is a `typecheck` failure rather than
+a bare badge in one place. `approvalDeadlineView` calls the server's own
+`isOverdue` instead of re-deriving the comparison, so the countdown and the
+decision cannot disagree about the boundary.
+
+**`GOAL_STATUSES` moved to `goals/validation.ts`** and is re-exported from
+`goals/service.ts`. A client component needs the vocabulary to label a goal, and
+vocabulary is not a secret; behind a `server-only` import, copying the list would
+have been the only way out.
+
+**Two reads that could have lied, and do not.** The pending question on a run is
+read from the *approval row*, not from `run.state` — the approval is settled
+before the resume transitions the run, so a page reading the state alone renders a
+question that has already been answered. And "overdue" uses `expires_at <= now`,
+the exact negation of `isOverdue`, so it counts what is *about* to fail rather than
+only what already has: the sweeper may be five minutes from marking an approval
+expired, and `overdue: 0` across four lapsed questions is the cheerful lie the
+count exists to prevent.
+
+**The client never decides state.** The approval card renders the action's return
+value verbatim, including every validation issue, and has no optimistic transition
+and no local copy. If the server refuses an edit, the screen says so with the rule
+that refused it. The editable fields are derived from `editableFields(getTool(...))`
+rather than hardcoded, so the screen cannot offer a field the tool would not
+accept.
+
+**Waking the queue is best-effort, and the swallowing is the design.** The
+decision is durably written before the event is sent, so a send that fails leaves
+the system correct and merely slow — the sweeper re-sends within five minutes.
+Reporting it would tell a user their approval failed when it was in fact recorded,
+and they would press Approve again and be told `already_decided`. Without the call
+the delay is not an edge case, it is every approval.
+
+**Pages moved, and the errors moved with them.** `/accounts` is now connected
+account management; the credentials form moved to `/settings/credentials`, and the
+OAuth failure redirects and the `safeReturnPath` fallback were repointed to match,
+so a failed connect lands on the page where the fix is. Policies live at
+`/settings/policies`, and list only what `describePolicyTargets` may name — a
+control for `compose_post` would be a switch that does nothing.
+
+**Recent-N paging, capped.** Run lists and the event log page by `clampLimit(...)`,
+so a `?limit=` in a URL cannot ask for the whole table. A history too long for one
+page is a reason to build pagination, not to let a request size itself.
+
+**A goal that cannot act is counted.** If a goal targets an account that is
+switched off or can no longer publish, nothing errors and no run is ever created —
+the goal simply goes quiet, forever. The dashboard counts those goals explicitly,
+because it is the one Runtime problem that never appears in the run history.
+
+**Enforced.** `scripts/mutate-phase7.sh` — 16 mutations, 0 holes. Each removes the
+`userId` from a different `WHERE` clause, inverts a state predicate, drops the
+limit cap, or re-derives the deadline comparison, and requires the integration
+suite to fail. Three are expected to break `typecheck` and `build` rather than a
+test, which is the `server-only` import boundary ADR-004 predicted would be
+mechanically checkable.
+
+**One pre-existing bug found and fixed.** `tests/integration/goals.test.ts`
+asserted a hardcoded `nextFiringAt`, and `updateGoal` recomputes from the wall
+clock. The test therefore only passed between midnight and 06:30 Berlin each day
+— one afternoon away from breaking CI. It now asserts the property the
+recomputation exists to provide — the stored time is 06:30 in the schedule's own
+timezone, and in the future — rather than a date, which also makes it correct
+across a daylight-saving boundary.
+
+**Also in this release:** the `wakeRun` rule moved out of a private function in a
+`"use server"` module into `src/lib/runtime/inngest/wake.ts`, following ADR-004's
+own reasoning. As written it could only be tested by standing up a session, a form
+post, and a database to assert that a thrown error is *not* propagated — a test
+expensive enough that it would not have got written.
 
 ---
 

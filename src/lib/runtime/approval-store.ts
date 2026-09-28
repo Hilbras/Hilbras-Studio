@@ -130,6 +130,35 @@ export async function listPolicyRows(userId: string) {
     .where(eq(executionPolicies.userId, userId));
 }
 
+/**
+ * A user's set policies, keyed `scope:key`, already coerced.
+ *
+ * The screen that renders them needs a `PolicyDecision` for every row it shows,
+ * and the column is a plain `text` — so a row written by a newer build, or by
+ * hand, can carry anything. Coercing here rather than at the call site means one
+ * implementation of "an unrecognised decision is no rule" instead of one per
+ * screen, and it is the *same* `coerceDecision` `loadPolicy` uses, so a policy
+ * read for the last gate before a publish and a policy read for a settings table
+ * cannot disagree about what a row means.
+ *
+ * An unrecognised decision is dropped rather than surfaced: the gate would ignore
+ * it, so showing it as a fourth option would describe a control that does
+ * nothing.
+ */
+export async function policyDecisionsFor(
+  userId: string,
+): Promise<Map<string, PolicyDecision>> {
+  const rows = await listPolicyRows(userId);
+  const decisions = new Map<string, PolicyDecision>();
+
+  for (const row of rows) {
+    const decision = coerceDecision(row.decision);
+    if (decision) decisions.set(`${row.scope}:${row.scopeKey}`, decision);
+  }
+
+  return decisions;
+}
+
 export type SetPolicyResult =
   | { ok: true }
   | { ok: false; reason: string };

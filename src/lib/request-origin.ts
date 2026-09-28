@@ -81,7 +81,7 @@ export function isSameOriginRequest(req: NextRequest): boolean {
  */
 export function safeReturnPath(
   raw: string | null | undefined,
-  fallback = "/accounts"
+  fallback = "/settings/credentials"
 ): string {
   if (!raw) return fallback;
 

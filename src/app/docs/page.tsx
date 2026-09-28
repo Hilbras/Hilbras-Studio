@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
+  Activity,
   ArrowRight,
   CalendarClock,
   Code2,
@@ -8,7 +9,9 @@ import {
   Link2,
   PenLine,
   Rocket,
+  ShieldCheck,
   Sparkles,
+  Target,
 } from "lucide-react";
 
 export const metadata: Metadata = {
@@ -28,6 +31,30 @@ const GUIDES = [
     icon: Link2,
     title: "Connecting accounts",
     desc: "OAuth developer apps, plus Telegram's bot connection.",
+  },
+  {
+    href: "/docs/goals",
+    icon: Target,
+    title: "Goals",
+    desc: "Set up recurring work: statement, schedule, timezone, targets.",
+  },
+  {
+    href: "/docs/runtime",
+    icon: Activity,
+    title: "Runtime",
+    desc: "What your goals are doing, what is waiting, what went wrong.",
+  },
+  {
+    href: "/docs/approvals",
+    icon: ShieldCheck,
+    title: "Approvals",
+    desc: "Approve, reject, or edit a planned post before it publishes.",
+  },
+  {
+    href: "/docs/policies",
+    icon: CalendarClock,
+    title: "Execution policies",
+    desc: "Automatic, ask first, or never — per tool and per account.",
   },
   {
     href: "/docs/composer",

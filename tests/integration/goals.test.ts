@@ -157,6 +157,23 @@ async function createOk(
 }
 
 /**
+ * `HH:MM` as a wall clock reads it in `Europe/Berlin`.
+ *
+ * The goal tests need this because a cron expression means a local time, and
+ * the only honest way to assert on a firing time is as the schedule's own
+ * timezone sees it. It also sidesteps DST: 06:30 Berlin is `04:30Z` in summer
+ * and `05:30Z` in winter, so a UTC comparison would be right for only half the
+ * year.
+ */
+const berlinWallClock = (at: Date): string =>
+  new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Berlin",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(at);
+
+/**
  * Leave exactly one goal in the due set.
  *
  * The scheduler is global by design — it has no user scope, because a goal
@@ -248,15 +265,28 @@ describe("editing a goal", () => {
     const userId = await seedUser("goal_edit");
     const goalId = await createOk(userId);
 
+    // 09:00 in Berlin, derived from the fixture's `from` — so this one is a
+    // fixed value and worth pinning.
+    const before = (await goalService.getGoal(userId, goalId))?.nextFiringAt;
+    expect(before?.toISOString()).toBe("2026-09-28T07:00:00.000Z");
+
     const result = await goalService.updateGoal(userId, goalId, {
       schedule: "30 6 * * *",
     });
     expect(result.ok).toBe(true);
 
-    const goal = await goalService.getGoal(userId, goalId);
-    // 06:30 in Berlin, computed from the new expression — not the old 09:00
-    // with a new label.
-    expect(goal?.nextFiringAt?.toISOString()).toBe("2026-09-28T04:30:00.000Z");
+    const after = (await goalService.getGoal(userId, goalId))?.nextFiringAt;
+    expect(after).not.toBeNull();
+
+    // `updateGoal` recomputes from the wall clock and takes no `from`, so the
+    // *date* of the next firing is not this test's to assert — a hardcoded one
+    // would only hold for the part of each day before 06:30 Berlin. The
+    // property the recomputation exists to provide is clock-independent, and is
+    // what is checked here: the stored time is 06:30 in Berlin, taken from the
+    // new expression rather than the old 09:00 relabelled.
+    expect(berlinWallClock(after!)).toBe("06:30");
+    expect(after!.getTime()).toBeGreaterThan(Date.now());
+    expect(after?.toISOString()).not.toBe(before?.toISOString());
   });
 
   it("re-validates the whole goal, not just the changed field", async () => {

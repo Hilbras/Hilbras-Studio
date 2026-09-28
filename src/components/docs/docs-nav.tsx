@@ -16,6 +16,20 @@ const SECTIONS = [
     items: [
       { href: "/docs/getting-started", label: "Getting started" },
       { href: "/docs/connecting-accounts", label: "Connecting accounts" },
+    ],
+  },
+  {
+    label: "Goals & Runtime",
+    items: [
+      { href: "/docs/goals", label: "Goals" },
+      { href: "/docs/runtime", label: "Runtime" },
+      { href: "/docs/approvals", label: "Approvals" },
+      { href: "/docs/policies", label: "Execution policies" },
+    ],
+  },
+  {
+    label: "Tools",
+    items: [
       { href: "/docs/composer", label: "Composer" },
       { href: "/docs/scheduler", label: "Scheduler" },
       { href: "/docs/assistant", label: "AI Assistant" },

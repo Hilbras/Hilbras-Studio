@@ -41,10 +41,13 @@ export function AppShell({
   children,
   user,
   connectedPlatforms,
+  pendingApprovals = 0,
 }: {
   children: React.ReactNode;
   user: ShellUser;
   connectedPlatforms: Platform[];
+  /** Read by the layout and passed down, so the sidebar never fetches its own. */
+  pendingApprovals?: number;
 }) {
   const [collapsed, setCollapsed] = React.useState(false);
   const router = useRouter();
@@ -62,6 +65,7 @@ export function AppShell({
         collapsed={collapsed}
         onToggle={() => setCollapsed((c) => !c)}
         connectedPlatforms={connectedPlatforms}
+        pendingApprovals={pendingApprovals}
       />
 
       <div className="flex flex-col flex-1 min-w-0">

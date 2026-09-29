@@ -3,6 +3,7 @@ import "server-only";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
 import { fetchWithTimeout } from "./http";
+import { sanitizePublishResult, sanitizeResultUrl } from "./result-url";
 import { accounts, connections } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getPublishingCapability, PLATFORM_REGISTRY } from "@/lib/platforms";
@@ -283,7 +284,10 @@ async function sendTelegramText(
 /** Permalink for public chats — private chats and groups have no t.me link. */
 function telegramPermalink(message: TelegramMessage): string | undefined {
   return message.chat.username
-    ? `https://t.me/${message.chat.username}/${message.message_id}`
+    ? sanitizeResultUrl(
+        "telegram",
+        `https://t.me/${message.chat.username}/${message.message_id}`
+      )
     : undefined;
 }
 
@@ -332,7 +336,7 @@ async function instagramPermalink(
     );
     if (!res.ok) return undefined;
     const { permalink } = (await res.json()) as { permalink?: string };
-    return permalink;
+    return sanitizeResultUrl("instagram", permalink);
   } catch {
     return undefined;
   }
@@ -589,7 +593,7 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
       platform: "facebook",
       success: true,
       postId: published.id,
-      url: `https://www.facebook.com/posts/${published.id}`,
+      url: sanitizeResultUrl("facebook", `https://www.facebook.com/posts/${published.id}`),
     };
   } catch (e) {
     return { platform: "facebook", success: false, error: errorMessage(e, "Facebook publish failed") };
@@ -626,7 +630,9 @@ async function publishToX(userId: string, text: string, accountKey?: string): Pr
       platform: "x",
       success: true,
       postId: published.data?.id,
-      url: published.data?.id ? `https://x.com/i/web/status/${published.data.id}` : undefined,
+      url: published.data?.id
+        ? sanitizeResultUrl("x", `https://x.com/i/web/status/${published.data.id}`)
+        : undefined,
     };
   } catch (e) {
     return { platform: "x", success: false, error: errorMessage(e, "X publish failed") };
@@ -723,7 +729,7 @@ async function threadsPermalink(
     );
     if (!res.ok) return undefined;
     const { permalink } = (await res.json()) as { permalink?: string };
-    return permalink;
+    return sanitizeResultUrl("threads", permalink);
   } catch {
     return undefined;
   }
@@ -857,8 +863,25 @@ const DEFAULT_TARGET_PLATFORMS = ["instagram", "facebook", "x", "threads"];
  *
  * Exported for the legacy connector adapter in `@/lib/connectors`, which is the
  * only other caller. New code should go through the connector registry instead.
+ *
+ * Every result passes through `sanitizePublishResult` before leaving this
+ * module: connector outputs are third-party API data, and Task 7/11 of the
+ * remediation plan requires result URLs and text fields to be validated
+ * server-side before they are rendered or persisted.
  */
 export async function publishForUser(
+  userId: string,
+  platform: string,
+  text: string,
+  imageUrl?: string,
+  accountKey?: string
+): Promise<PublishResult> {
+  return sanitizePublishResult(
+    await routePublishForUser(userId, platform, text, imageUrl, accountKey)
+  );
+}
+
+async function routePublishForUser(
   userId: string,
   platform: string,
   text: string,
@@ -914,12 +937,12 @@ export async function publishToAllForUser(
   );
 
   return settled.map((result, index) => {
-    if (result.status === "fulfilled") return result.value;
-    return {
+    if (result.status === "fulfilled") return sanitizePublishResult(result.value);
+    return sanitizePublishResult({
       platform: targetPlatforms[index] ?? "unknown",
       success: false,
       error: errorMessage(result.reason, "Publish failed"),
-    };
+    });
   });
 }
 

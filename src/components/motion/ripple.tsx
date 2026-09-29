@@ -31,6 +31,10 @@ export function Ripple({ children, className = "" }: RippleProps) {
   };
 
   return (
+    // Decorative pointer effect on a wrapper that usually contains real
+    // interactive elements (buttons, links); giving this div a role would
+    // shadow the semantics of what it wraps.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       className={`relative overflow-hidden ${className}`}
       onMouseDown={addRipple}

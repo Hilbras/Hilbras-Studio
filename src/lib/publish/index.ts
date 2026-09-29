@@ -7,7 +7,7 @@ import { getSessionUser } from "../session";
 
 import { publishToFacebook } from "./facebook";
 import { publishToInstagram } from "./instagram";
-import { publishToTelegram, telegramApi } from "./telegram";
+import { publishToTelegram } from "./telegram";
 import { publishToThreads } from "./threads";
 import { publishToX } from "./x";
 import type { PublishResult } from "./types";

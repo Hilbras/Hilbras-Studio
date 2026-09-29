@@ -252,7 +252,14 @@ export function AssistantClient({
               <AnimatePresence>
                 {sessionsOpen && (
                   <>
-                    <div className="fixed inset-0 z-30" onClick={() => setSessionsOpen(false)} />
+                    {/* The scrim is the button: a real interactive element a
+                        keyboard user can reach and activate to dismiss. */}
+                    <button
+                      type="button"
+                      aria-label="Close session list"
+                      className="fixed inset-0 z-30 cursor-default"
+                      onClick={() => setSessionsOpen(false)}
+                    />
                     <motion.div
                       initial={{ opacity: 0, y: -4 }}
                       animate={{ opacity: 1, y: 0 }}

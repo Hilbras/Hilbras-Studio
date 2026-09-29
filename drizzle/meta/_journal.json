@@ -106,6 +106,20 @@
       "when": 1790702546220,
       "tag": "0014_post_status_check_and_default_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790708251787,
+      "tag": "0015_inbox_read_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790708598458,
+      "tag": "0016_timestamps_to_timestamptz",
+      "breakpoints": true
     }
   ]
 }

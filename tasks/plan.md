@@ -1,5 +1,17 @@
 # Implementation Plan: Hilbras Studio Stabilization and Remediation
 
+> **Re-baselined 2026-09-29.** This plan was written before the rebuild into
+> the Goal-Driven AI Runtime (Phases 3–8, v0.5.0→v0.9.5). A full audit
+> re-verified every task against the current code: Tasks 1, 2, 4, 5, 6, and 10
+> are done; 3, 7, 9, 11, 12, 13, 14, and 16 are partial; 8, 15, 17, 18 are
+> unstarted; Task 0 is operational. Several plan references predate the new
+> architecture (`src/lib/platforms.ts` remains, but publishing now lives in
+> `src/lib/publish.ts` + `src/lib/connectors/`, scheduling in
+> `src/lib/goals/` + `src/lib/scheduled-posts.ts`, accounts in
+> `src/lib/accounts/store.ts` after the `social_accounts` table was dropped).
+> **Authoritative per-item status and work order live in
+> [`tasks/todo.md`](./todo.md).** Acceptance criteria below are historical.
+
 ## Overview
 
 This plan turns the repository audit into a staged remediation program. The goal is to make the existing Next.js application safe to operate and truthful about its capabilities before adding new features. The plan preserves the current Next.js App Router, PostgreSQL/Drizzle, Vercel, server-action, and provider-integration architecture; it does not require a rewrite.
@@ -195,7 +207,7 @@ The program is complete when:
 - [x] Manual trigger uses POST with Origin/CSRF validation or a one-time action token.
 - [x] Cron requests require the configured bearer secret and fail clearly when it is missing.
 - [x] A client cannot mark a post published or inject result URLs/errors.
-- [ ] URLs are parsed and restricted to intended `https:`/platform hosts.
+- [x] URLs are parsed and restricted to intended `https:`/platform hosts. *(2026-09-29 — `src/lib/result-url.ts`)*
 
 **Verification:**
 - [x] Route tests cover unauthenticated, wrong-secret, cross-origin, and authenticated cases; replay behavior is covered by the scheduler claim tests under Task 10.
@@ -292,7 +304,7 @@ The program is complete when:
 - [x] One platform failure cannot erase another platform’s result.
 - [x] All connector promises settle before finalization.
 - [x] Composer and scheduler use the same server-side transition rules.
-- [ ] Result IDs, URLs, and error fields are validated server-side.
+- [x] Result IDs, URLs, and error fields are validated server-side. *(2026-09-29)*
 
 **Verification:**
 - [x] Tests cover all-success, partial-success, and rejection cases.

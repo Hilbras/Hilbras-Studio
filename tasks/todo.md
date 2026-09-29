@@ -2,59 +2,123 @@
 
 Source plan: [`tasks/plan.md`](./plan.md)
 
+> **Re-baselined 2026-09-29** against the current codebase (Phase 8 / v0.9.5,
+> commit `e8d2340`). The rebuild into the Goal-Driven AI Runtime (Phases 3–8)
+> landed after the last update below; a full five-agent audit re-verified every
+> task against the live code. This file is now the authoritative per-item
+> status; plan.md keeps the historical acceptance criteria. Baseline at
+> re-baseline time: 421 unit tests green, typecheck/lint/build green.
+
+## Verified status (audit 2026-09-29)
+
+| Task | Verdict | Evidence / remaining gap |
+|---|---|---|
+| 0 Secrets inventory | Open (operational) | Nothing implemented; requires owner action, no code change. |
+| 1 Test/CI foundations | **Done** | `.github/workflows/ci.yml` runs install→lint→typegen→typecheck→unit→integration→build→migration check→audit. 421 unit tests + Testcontainers integration suite. Only gap: analytics untested. |
+| 2 Composer scheduling | **Done** | `composer/page.tsx` blocks invalid schedules; `posts/service.ts` single-transaction draft/scheduled; `actions/publish.ts` publishes only `status="draft"`. |
+| 3 Platform capabilities | Partial | Capability registry + Composer gating + server-side refusal verified. **2026-09-29: exact-count contract test added (5 publishers / 5 connect-only).** Remaining: `mediaTypes` not in the capability contract; `createPostAction` has no server-side validation (gating is client-side; server still refuses at publish time). |
+| 4 AI spend limits | **Done** | All model entry points budgeted (assistant, composer, runtime planner/compose/tools, pings, summaries, memory); fail-closed; signup policy. Gap: no test for limiter DB-failure path. |
+| 5 SSRF hardening | **Done** | `net-guard.ts` blocks private/metadata/CGNAT ranges (v4+v6); DNS-pinned transport, manual redirects, 1 MiB cap; dev bypass was removed entirely (plan's "gate it" wording is obsolete). **2026-09-29: TEST-NET-1/2/3, 192.0.0.0/24, multicast/broadcast ranges added with tests.** |
+| 6 Secrets write-only | **Done** | Server-only stores; blank-secret preserves; masked/presence DTOs only; tenant-separation tests. |
+| 7 CSRF-safe publishing | Partial → **URL gap closed 2026-09-29** | Secret-only GET (fails closed), same-origin POST, server-authoritative finalization, full route tests. **2026-09-29: every result URL is now validated server-side (`src/lib/result-url.ts` — https + per-platform host allowlist) at all five permalink construction sites and both result funnels (`publishForUser`, `publishToAllForUser`), with unit tests.** Remaining: an action-level fabricated-outcome test is mitigated by the zod-stripped action inputs, the guarded conditional update (`eq(status, "draft")`), and the funnel sanitization tests; a dedicated integration test would still be nice. |
+| 8 Export & deletion | **Not started** | No export, no self-serve deletion (cascade FKs exist but nothing deletes the user row; `rate_limits` not user-FK'd); Threads deletion callback only; privacy page promises export/"30 days" that don't exist. |
+| 9 OAuth matrix | Partial | Signed state (Phase 8) verified; Facebook GET vs Meta POST separated; Instagram/Threads refresh implemented. Gaps: X/Reddit `tokenAuth:"basic"` is dead metadata; profile failures store `"unknown"` as account ID (six platforms have no profile lookup); `usesPkce` flag dead + verifier omitted on Facebook GET branch; X refresh token stored but never used; no mocked provider contract tests. |
+| 10 Scheduler leases | **Done** | Claim/lease (5 min), 100s deadline, 60s per-post timeout under 120s route maxDuration, uncertain-outcome handling, 10 integration tests + Inngest run-idempotency tests. |
+| 11 Independent settlement | Partial core done → **remaining items closed 2026-09-29** | `Promise.allSettled`, shared server-side transitions, receipts. **2026-09-29: connector results validated server-side (URL host allowlist, bounded text, `success === true` strictness — `sanitizePublishResult`); composer-path all-failure, timeout, and sanitization tests added to `publish.test.ts`.** Remaining (minor): an analytics/Composer display-parity test. |
+| 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`; EXPLAIN before/after evidence for the index strategy. |
+| 13 Timezones/HTTP | Partial → **HTTP half closed 2026-09-29** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`). **2026-09-29: `fetchWithTimeout` no longer follows redirects (`redirect: "manual"`, a 3xx surfaces to the caller's existing `!ok` handling) and bounds every response body at 2 MiB inside the total deadline (`HttpResponseTooLargeError`); the assistant stream cancels upstream generation on client disconnect (`req.signal` into the provider transport + `generator.return()` + reader cancel in both format generators).** Remaining: `posts.scheduled_at` is a bare `timestamp` (second, undocumented contract) — migrating it to `timestamptz` needs a deliberate data decision; connect-phase timeout distinct from the total deadline (low value). |
+| 14 Analytics/inbox/prefs | Partial | Analytics reads real results incl. partial success. **2026-09-29: analytics query bounded (`.limit(500)`).** Gaps: inbox read-state hardcoded `unread:true`, provider errors swallowed as `[]`; four preference toggles inert; goal-run publishes never reach analytics. |
+| 15 Dead code | Partial → **confirmed residue removed 2026-09-29** | **2026-09-29: `src/lib/mock-data.ts` deleted (zero importers); the four unused direct dependencies (@tanstack/react-query, zustand, @hookform/resolvers, react-hook-form) removed and the lockfile regenerated.** Remaining: a final reference-checked sweep after the behavior work stabilizes (plan's original ordering). |
+| 16 Docs truthfulness | Partial → **public-facing claims fixed 2026-09-29** | README/platform claims match the registry (done by the rebuild). **2026-09-29: the pricing page no longer quotes unimplemented tiers/trial/seats (now: free while v1 is built, honest capability list); fabricated testimonials removed from the landing page; the CTA no longer claims GDPR compliance; the privacy page now describes the retention/deletion scope that actually exists and marks self-serve export/deletion as roadmap instead of promising it.** Remaining: canonical setup docs pass, product-owner sign-off on public claims. |
+| 17 Boundaries/DAL | Not started | Actions and server pages import `@/db` directly; `publish.ts` 952 LOC; client components import fat action modules. |
+| 18 Observability/a11y | Not started | No structured logging/metrics; no bundle/CWV budgets; no a11y tests. |
+
+## Work order (re-baselined priority)
+
+1. ~~**Task 7/11 close-out** — result-URL validation; composer-path all-failure/timeout tests~~ **done 2026-09-29**.
+2. ~~**Task 15 quick wins** — mock-data.ts, 4 unused deps, exact-count contract test, net-guard reserved ranges, analytics limit~~ **done 2026-09-29**.
+3. ~~**Task 12** — `posts.status` CHECK, `ai_providers` default partial-unique (migration 0014), transactional writes~~ **done 2026-09-29**.
+4. ~~**Task 13** — bounded bodies + manual redirects; assistant disconnect cancellation~~ **done 2026-09-29** (`posts.scheduled_at` decision remains).
+5. ~~**Task 16 remainder** — pricing/testimonials/privacy claims~~ **done 2026-09-29** (owner sign-off remains).
+6. **Task 9** — mocked OAuth contract tests; resolve X/Reddit basic-auth metadata (implement or mark unsupported); stop storing `"unknown"` account IDs.
+7. **Task 14 remainder** — inbox read-state + provider-error surfacing; decide preferences (implement or remove); route goal-run publishes into analytics or mark out of scope.
+8. **Task 8** — export + self-serve deletion (needs the plan's DB design decision: `rate_limits` keying, retention/backup documentation).
+9. **Task 17** — DAL extraction, publish.ts split (multi-PR).
+10. **Task 18** — structured logging, budgets, a11y smoke.
+11. **Task 0** — owner action, no code.
+
+## Migration note — 0014_post_status_check_and_default_provider
+
+- **Verification:** `drizzle-kit check` passes (journal/snapshot consistent); the
+  disposable-PostgreSQL integration suite applies the full chain and asserts
+  both constraints fire (`tests/integration/database.test.ts` — "enforces the
+  post status check and the one-default-provider invariant").
+- **Repair note:** applying 0014 to an existing deployment fails if
+  `posts.status` holds a value outside the five modeled states, or if any user
+  already has two default providers. Preflight: `SELECT status, count(*) FROM
+  posts GROUP BY 1;` and `SELECT user_id, count(*) FROM ai_providers WHERE
+  is_default GROUP BY 1 HAVING count(*) > 1;`. Repair: rewrite offending rows
+  to the nearest modeled state (`queued → draft`) and demote extras to
+  non-default before re-running the migration.
+- **Rollback:** drop the constraint and index —
+  `ALTER TABLE posts DROP CONSTRAINT posts_status_check;`
+  `DROP INDEX ai_providers_user_default_unique_idx;`
+
 ## Current Progress
 
-- Task 1 foundation: Vitest, CI workflow, 42 unit tests, and 4 disposable-PostgreSQL integration tests are in place.
+- Task 1 foundation: Vitest, CI workflow, and the disposable-PostgreSQL integration suite are in place; 421 unit tests green at re-baseline.
 - Task 2 first increment: strict local schedule parsing and draft-save failure guards prevent accidental immediate publishing.
 - Task 3 first increment: centralized publishing capabilities gate Composer/Accounts and align public docs.
 - Task 6 first increment: platform credential responses are write-only and preserve existing secrets during edits.
-- The user-ID-scoped credential writer now lives in a server-only module rather than the browser-callable action module; integration coverage verifies replacement, tenant separation, and redacted status DTOs.
 - Task 4 first increment: centralized per-user/deployment AI budgets cover Assistant, Composer, inbox suggestions, provider pings, summaries, and memory extraction; input/output limits and fail-closed limiter errors are added.
 - Task 5 first increment: user-configured AI provider fetches use a DNS-pinned transport with manual redirects, no-store policy, bounded timeouts, and response-size limits; address/URL guard tests cover private and unsupported targets.
-- Credential and AI-budget integration coverage now verifies write-only secret replacement/preservation, tenant separation, redacted status DTOs, and both per-user and deployment-wide limiter exhaustion against disposable PostgreSQL.
-- Signup controls: deployments can disable public registration or require `SIGNUP_INVITE_CODE`; the UI accepts an optional invite field and tests cover the policy.
-- Current verification: 42 unit tests, 14 PostgreSQL integration tests (4 database + 10 scheduler), typecheck, lint (0 errors/26 warnings), production build, frozen install, and dependency audit all pass.
-- Task 7 first increment: cron `GET` is secret-only and fails closed without `CRON_SECRET`; manual runs use an authenticated same-origin `POST`, with route coverage for missing/wrong secrets, cross-origin rejection, and session scoping.
-- Task 7 first increment: Composer persists connector results through a server action, so the client no longer submits terminal success flags or result URLs; multi-platform publishing settles each target independently.
-- Task 10 done: scheduled posts now use claim owner IDs with a 5-minute lease, conditional finalization, a 100s run deadline, a 60s per-post provider timeout under a 120s route `maxDuration`, and uncertain-outcome handling (post-dispatch crashes and hangs are failed with an explicit "verify before retrying" result, never blindly retried). Ten integration tests cover overlap, lease ownership, stale/legacy recovery, deadline, timeout, and partial/all-failure results.
+- Signup controls: deployments can disable public registration or require `SIGNUP_INVITE_CODE`.
+- Task 7 first increment: cron `GET` is secret-only and fails closed without `CRON_SECRET`; manual runs use an authenticated same-origin `POST`; Composer persists connector results through a server action.
+- Task 10 done: scheduled posts use claim owner IDs with a 5-minute lease, conditional finalization, a 100s run deadline, a 60s per-post provider timeout under a 120s route `maxDuration`, and uncertain-outcome handling. Ten integration tests.
+- Task 11 first increment: `Promise.allSettled` settles each target independently; Composer persists the server-produced result in one authenticated action.
+- (Historical entries above were preserved from the pre-rebaseline file; per-item status is in the table.)
+
+### Session 2026-09-29 — re-baseline audit + first execution tranche
+
+- Five-audit sweep re-verified all 19 plan tasks against the live code; the
+  status table above is the result. Baseline before changes: 421 unit tests,
+  0 lint errors, clean typecheck/build.
+- Result URLs and result text fields are validated server-side
+  (`src/lib/result-url.ts`), wired into `publishForUser`/`publishToAllForUser`
+  and all five permalink builders; composer-path all-failure/timeout/sanitization
+  tests added. (Tasks 7/11)
+- Migration 0014: `posts.status` CHECK + one-default-provider partial unique
+  index, integration-tested; `registerConnection`, provider selection, and the
+  provider save path wrapped in transactions. (Task 12)
+- `fetchWithTimeout`: manual redirects, 2 MiB bounded body inside the total
+  deadline; assistant stream cancels upstream generation on disconnect.
+  (Task 13)
+- Reserved-range additions to `net-guard.ts` (TEST-NET-1/2/3, 192.0.0.0/24,
+  multicast/broadcast). (Task 5)
+- Dead code removed: `mock-data.ts`, 4 unused dependencies. Analytics query
+  bounded at 500 rows. (Tasks 15/14)
+- Truthful public claims: pricing page rewritten (no fictional tiers/trial),
+  testimonials removed, GDPR claim dropped, privacy page states the actual
+  retention/deletion scope. (Task 16)
+- Verification after the tranche: **437 unit tests, 169 integration tests,
+  typecheck clean, lint 0 errors / 31 warnings, production build green.**
+- Deliberately deferred with reasons: `posts.scheduled_at` → `timestamptz`
+  (needs a data-semantics decision), X/Reddit basic-auth + OAuth contract
+  tests (Task 9, sandbox verification), inbox read-state/preferences (product
+  decision), export/deletion (Task 8 design decision), DAL/observability
+  (Tasks 17/18, multi-PR).
 
 ## Phase 0: Safety Baseline
 
-- [ ] **Task 0 — Inventory and rotate local secrets**
-
-  Treat the populated local environment as potentially exposed, restrict permissions, document rotation/reconnect consequences, and scan tracked history without copying secret values. **Depends on:** none.
-
-- [x] **Task 1 — Establish test and CI foundations**
-
-  Add test/typecheck/quality scripts, a test stack, mocked external boundaries, and CI gates. **Depends on:** none. **Checkpoint:** tests, typecheck, lint, build, migration check, and audit run from a clean checkout.
-
-- [x] **Task 2 — Fix Composer scheduling and save-state transitions**
-
-  Require valid schedule input, stop on save errors, and separate draft/scheduled/immediate states. **Depends on:** Task 1.
-
-- [x] **Task 3 — Define and enforce platform capabilities**
-
-  Separate connectable/publishable/media/account/token capabilities and align Accounts, Composer, scheduler, and docs. **Depends on:** Task 1.
-
-- [x] **Task 4 — Add global AI spend and request limits**
-
-  Cover every model entry point, summaries, memory extraction, provider pings, input/output limits, and public signup controls. **Depends on:** Task 1.
-
-- [x] **Task 5 — Harden provider URL fetching against SSRF**
-
-  Enforce safe schemes/IP ranges, redirect policy, DNS pinning/egress filtering, timeouts, and response limits. **Depends on:** Task 1.
-
-- [x] **Task 6 — Remove platform secrets from browser responses**
-
-  Return presence/masked DTOs only; secrets are write-only from the client boundary, and the user-ID-scoped writer is server-only. **Depends on:** Task 1.
-
-- [ ] **Task 7 — Make cron/manual publishing CSRF-safe and server-authoritative**
-
-  First increment is in place: `GET` is secret-only and fails closed when `CRON_SECRET` is absent; manual runs use an authenticated same-origin `POST`. Composer persistence uses the server-produced connector outcome rather than a client-supplied success flag or result URL. Lease/deadline recovery and replay coverage are tracked under Task 10. **Depends on:** Tasks 1 and 6.
-
-- [ ] **Task 8 — Implement truthful account export and deletion**
-
-  Define tenant data scope, implement export/deletion, and align Meta callbacks/privacy/retention behavior. **Depends on:** Tasks 1 and 7; requires a database design decision.
+- [ ] **Task 0 — Inventory and rotate local secrets** — operational, see work order 11. **Depends on:** none.
+- [x] **Task 1 — Establish test and CI foundations** (re-verified 2026-09-29)
+- [x] **Task 2 — Fix Composer scheduling and save-state transitions** (re-verified)
+- [x] **Task 3 — Define and enforce platform capabilities** (core verified; remaining: exact-count contract test, media capability contract, server-side createPost validation — work order 2)
+- [x] **Task 4 — Add global AI spend and request limits** (verified; remaining: limiter DB-failure test)
+- [x] **Task 5 — Harden provider URL fetching against SSRF** (verified; remaining: reserved-range additions — work order 2)
+- [x] **Task 6 — Remove platform secrets from browser responses** (verified)
+- [ ] **Task 7 — Make cron/manual publishing CSRF-safe and server-authoritative** — remaining: result-URL restriction, fabricated-outcome test (work order 1). **Depends on:** Tasks 1 and 6.
+- [ ] **Task 8 — Implement truthful account export and deletion** (work order 8). **Depends on:** Tasks 1 and 7; requires a database design decision.
 
 ### Checkpoint: Safety Baseline
 
@@ -63,59 +127,31 @@ Source plan: [`tasks/plan.md`](./plan.md)
 - [x] No client request can trigger an unintended scheduled publish.
 - [x] Provider URLs and model spend are bounded.
 - [ ] Account deletion/export behavior is approved.
-- [ ] `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build` pass.
+- [ ] `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build` pass. (green at re-baseline; re-verify per session)
 
 ## Phase 1: Reliability and Data Integrity
 
-- [ ] **Task 9 — Build and test the OAuth provider matrix**
-
-  Implement/test token method, auth style, PKCE, scopes, response parsing, profile lookup, and refresh lifecycle per provider. **Depends on:** Tasks 1, 3, and 5.
-
-- [x] **Task 10 — Add scheduler leases, time budgets, and idempotency**
-
-  Add claim ownership/attempt IDs, elapsed-time limits, conditional finalization, and uncertain-side-effect handling. **Depends on:** Tasks 1, 3, and 7.
-
-- [x] **Task 11 — Make multi-platform publishing settle independently**
-
-  `Promise.allSettled` preserves successful platform outcomes when another connector rejects; Composer now persists the server-produced result in one authenticated action; the scheduler settles and finalizes under Task 10's claim model. **Depends on:** Tasks 7 and 10.
-
-- [ ] **Task 12 — Add database constraints, indexes, and tenant defense-in-depth**
-
-  Add safe constraints/indexes/RLS or documented app isolation, and make connection/provider writes transactional. **Depends on:** Tasks 8–10.
-
-- [ ] **Task 13 — Standardize timezones and external HTTP behavior**
-
-  Establish timestamp semantics and shared timeout/cancellation/redirect/response-bound policies. **Depends on:** Tasks 4, 5, and 10.
-
-- [ ] **Task 14 — Correct analytics, inbox, and preference behavior**
-
-  Use actual result data, match inbox support to implementation, persist read/error state, and implement or remove inert preferences. **Depends on:** Tasks 1, 3, and 11.
+- [ ] **Task 9 — Build and test the OAuth provider matrix** (work order 6). **Depends on:** Tasks 1, 3, and 5.
+- [x] **Task 10 — Add scheduler leases, time budgets, and idempotency** (verified)
+- [ ] **Task 11 — Make multi-platform publishing settle independently** — core done; remaining: server-side result validation, all-failure/timeout tests, display parity (work order 1). **Depends on:** Tasks 7 and 10.
+- [ ] **Task 12 — Add database constraints, indexes, and tenant defense-in-depth** (work order 3). **Depends on:** Tasks 8–10.
+- [ ] **Task 13 — Standardize timezones and external HTTP behavior** (work order 4). **Depends on:** Tasks 4, 5, and 10.
+- [ ] **Task 14 — Correct analytics, inbox, and preference behavior** (work order 7). **Depends on:** Tasks 1, 3, and 11.
 
 ### Checkpoint: Reliability and Data Integrity
 
 - [ ] OAuth contracts and refresh behavior are tested.
-- [ ] Scheduler claims, timeouts, and duplicate behavior are tested.
-- [ ] Database constraints and tenant isolation are verified.
-- [ ] Timezone and external HTTP behavior are bounded.
+- [x] Scheduler claims, timeouts, and duplicate behavior are tested.
+- [ ] Database constraints and tenant isolation are verified. (isolation verified; constraints outstanding)
+- [ ] Timezone and external HTTP behavior are bounded. (partially)
 - [ ] `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm build`, and migration checks pass.
 
 ## Phase 2: Cleanup and Refactoring
 
-- [ ] **Task 15 — Remove confirmed dead code and dependencies**
-
-  Remove checked source/action/export/dependency residue; retain migrations, Proxy, templates, callbacks, and write-only schema fields. **Depends on:** Tasks 1–14 sufficiently stabilized.
-
-- [ ] **Task 16 — Rewrite documentation and product claims**
-
-  Align roadmap, README, setup docs, pricing, privacy, platform claims, and environment instructions with verified code. **Depends on:** Tasks 3, 8, 9, and 14.
-
-- [ ] **Task 17 — Extract server data and publishing boundaries**
-
-  Introduce a server-only DAL, typed connector contract, shared HTTP policy, and feature-level client splits without bulk rewrite. **Depends on:** Tasks 9–14. **Note:** split into multiple PRs before implementation.
-
-- [ ] **Task 18 — Add observability, performance, and accessibility guardrails**
-
-  Add structured metrics/logging, query/bundle/Core Web Vitals baselines, CI checks, and critical browser accessibility coverage. **Depends on:** Tasks 1, 13, and 16.
+- [ ] **Task 15 — Remove confirmed dead code and dependencies** (work order 2 — quick wins; rest after stabilization).
+- [ ] **Task 16 — Rewrite documentation and product claims** (work order 5 — pricing/testimonials remain).
+- [ ] **Task 17 — Extract server data and publishing boundaries** (work order 9; split into multiple PRs before implementation). **Depends on:** Tasks 9–14.
+- [ ] **Task 18 — Add observability, performance, and accessibility guardrails** (work order 10). **Depends on:** Tasks 1, 13, and 16.
 
 ### Checkpoint: Release Readiness
 

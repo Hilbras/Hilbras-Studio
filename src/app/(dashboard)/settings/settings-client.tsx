@@ -28,6 +28,7 @@ import {
   Sparkles,
   Wifi,
   WifiOff,
+  Download,
   X,
 } from "lucide-react";
 import { GradientMesh } from "@/components/motion/gradient-mesh";
@@ -55,6 +56,7 @@ import {
   clearAssistantMemories,
   type MemoryItem,
 } from "@/app/actions/chat";
+import { deleteAccountAction } from "@/app/actions/account";
 
 type Prefs = {
   autoHashtags: boolean;
@@ -119,6 +121,7 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
 }) {
   const [profileState, profileAction, profilePending] = useActionState(updateProfileAction, {});
   const [passwordState, passwordAction, passwordPending] = useActionState(changePasswordAction, {});
+  const [deleteState, deleteAction, deletePending] = useActionState(deleteAccountAction, {});
   const [localProviders, setLocalProviders] = useState<AiProviderItem[]>(providers);
   const [prefs, setPrefs] = useState<Prefs>(preferences);
   // The provider form calls the action directly (it needs to refresh the list
@@ -478,6 +481,43 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                   </div>
                   <ThemeToggle />
                 </div>
+              </CardContent></Card>
+            </Ripple></BlurFade>
+          </div>
+        </section>
+        {/* ── Data & account ─────────────────────────── */}
+        <section className="mt-4 mb-8">
+          <SectionLabel icon={Shield} label="Data & account" />
+          <div className="mt-2 space-y-2">
+            <BlurFade><Ripple className="rounded-xl">
+              <Card><CardContent className="py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Export your data</p>
+                    <p className="text-xs text-muted-foreground">Everything your account stores, as one JSON file. Secrets are never included.</p>
+                  </div>
+                  <a href="/api/account/export" download>
+                    <Button variant="outline" size="sm" className="rounded-xl gap-1 shrink-0">
+                      <Download className="size-3" /> Export
+                    </Button>
+                  </a>
+                </div>
+              </CardContent></Card>
+            </Ripple></BlurFade>
+
+            <BlurFade><Ripple className="rounded-xl">
+              <Card><CardContent className="py-4">
+                <p className="text-sm font-medium text-red-600 dark:text-red-400">Delete account</p>
+                <p className="text-xs text-muted-foreground mb-3">Permanently removes your profile, credentials, platform connections, posts, media, chats and memories. This cannot be undone.</p>
+                <form action={deleteAction} className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <Input type="password" name="password" placeholder="Confirm your password" autoComplete="current-password" className="sm:max-w-xs" />
+                  <Button type="submit" variant="outline" size="sm" disabled={deletePending} className="rounded-xl gap-1 shrink-0 text-red-600 border-red-500/40 hover:bg-red-500/10">
+                    {deletePending ? <Loader2 className="size-3 animate-spin" /> : <Trash2 className="size-3" />} Delete forever
+                  </Button>
+                </form>
+                {deleteState.error && (
+                  <p className="mt-2 text-xs text-red-600 dark:text-red-400">{deleteState.error}</p>
+                )}
               </CardContent></Card>
             </Ripple></BlurFade>
           </div>

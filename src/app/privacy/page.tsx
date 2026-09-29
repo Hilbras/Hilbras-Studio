@@ -122,14 +122,13 @@ export default function PrivacyPolicyPage() {
 
         <h2>5. Data Retention</h2>
         <p>
-          We retain your data for as long as your account is active. When your
-          account is deleted, all data owned by the account — profile,
+          We retain your data for as long as your account is active. When you
+          delete your account, all data owned by the account — profile,
           credentials, platform connections, posts, media, chats and memories —
-          is removed with it by the database cascade rules; platform tokens
-          become unrecoverable immediately because decryption keys and encrypted
-          values are deleted together. Self-serve account deletion from the
-          product is not built yet: deletion is currently performed by the
-          operators on request, and a self-serve flow is on the roadmap.
+          is removed with it by the database cascade rules, and the request
+          counters tied to your account are deleted in the same transaction.
+          Platform tokens become unrecoverable immediately because the
+          encrypted values are destroyed together with the account.
         </p>
 
         <h2>6. Your Rights</h2>
@@ -138,12 +137,16 @@ export default function PrivacyPolicyPage() {
           <li>Access the personal data we hold about you</li>
           <li>Request correction of inaccurate data</li>
           <li>Request deletion of your personal data</li>
+          <li>Export your data in a portable format</li>
           <li>Withdraw consent for data processing at any time</li>
         </ul>
         <p>
-          To exercise these rights, contact us at the email address below. These
-          requests are handled manually today; automated export in a portable
-          format is on the roadmap and is not available in the product yet.
+          You can exercise the export and deletion rights yourself from
+          Settings → Data &amp; account: export produces a machine-readable
+          JSON file of everything your account stores (secret keys are never
+          included), and deletion — confirmed with your password — permanently
+          removes it all. For anything else, contact us at the email address
+          below.
         </p>
 
         <h2>7. Third-Party Services</h2>

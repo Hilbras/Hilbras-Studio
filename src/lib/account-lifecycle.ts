@@ -11,6 +11,7 @@ import {
   connections,
   executionPolicies,
   goals,
+  inboxReadState,
   mediaAssets,
   memories,
   postTargets,
@@ -67,7 +68,7 @@ export async function exportUserData(userId: string): Promise<Record<string, unk
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) return {};
 
-  const [preferencesRows, credentialRows, postRows, providerRows, mediaRows, chatSessionRows, memoryRows, goalRows, runRows, policyRows, receiptRows, connectionRows, accountRows] =
+  const [preferencesRows, credentialRows, postRows, providerRows, mediaRows, chatSessionRows, memoryRows, goalRows, runRows, policyRows, receiptRows, readStateRows, connectionRows, accountRows] =
     await Promise.all([
       db.select().from(userPreferences).where(eq(userPreferences.userId, userId)),
       db.select().from(storedCredentials).where(eq(storedCredentials.userId, userId)),
@@ -80,6 +81,7 @@ export async function exportUserData(userId: string): Promise<Record<string, unk
       db.select().from(runs).where(eq(runs.userId, userId)),
       db.select().from(executionPolicies).where(eq(executionPolicies.userId, userId)),
       db.select().from(publishReceipts).where(eq(publishReceipts.userId, userId)),
+      db.select().from(inboxReadState).where(eq(inboxReadState.userId, userId)),
       db.select().from(connections).where(eq(connections.userId, userId)),
       db.select().from(accounts).where(eq(accounts.userId, userId)),
     ]);
@@ -126,6 +128,7 @@ export async function exportUserData(userId: string): Promise<Record<string, unk
     runStepApprovals: approvalRows.map(stripSecrets),
     executionPolicies: policyRows,
     publishReceipts: receiptRows,
+    inboxReadState: readStateRows,
     chats: chatSessionRows,
     chatMessages: messageRows,
     memories: memoryRows,

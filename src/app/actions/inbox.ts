@@ -5,6 +5,7 @@ import { listGrants } from "@/lib/accounts/store";
 import { getSessionUser } from "@/lib/session";
 import { fetchWithTimeout } from "@/lib/http";
 import { decryptSecret } from "@/lib/crypto";
+import { markMessageRead, readMessageKeys } from "@/lib/inbox/read-state";
 
 export interface InboxMessage {
   id: string;
@@ -196,12 +197,46 @@ export async function getInboxMessages(): Promise<{
     }
   }
 
+  // Read state lives in the database, not in the provider's API: a message the
+  // user already opened stays unread=false across fetches (Task 14).
+  const readKeys = await readMessageKeys(
+    session.id,
+    allMessages.map((m) => `${m.platform}:${m.id}`),
+  );
+  for (const message of allMessages) {
+    message.unread = !readKeys.has(`${message.platform}:${message.id}`);
+  }
+
   allMessages.sort((a, b) => {
     if (a.unread !== b.unread) return a.unread ? -1 : 1;
     return 0;
   });
 
   return { messages: allMessages.slice(0, 20), errors };
+}
+
+/** Persist that the user opened one provider message. */
+export async function markInboxRead(
+  platform: string,
+  messageId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const session = await getSessionUser();
+  if (!session) return { ok: false, error: "Not signed in" };
+
+  const parsed = z
+    .object({
+      platform: z.string().regex(/^[a-z][a-z0-9_-]{0,29}$/),
+      messageId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Invalid message"),
+    })
+    .safeParse({ platform, messageId });
+  if (!parsed.success) return { ok: false, error: "Invalid input" };
+
+  try {
+    await markMessageRead(session.id, parsed.data.platform, parsed.data.messageId);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "Could not save the read state." };
+  }
 }
 
 export async function sendReply(

@@ -16,7 +16,7 @@ import { PlatformIcon } from "@/components/platform-icon";
 import { BlurFade } from "@/components/motion/blur-fade";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { Sparkles, Send, Wand2, Loader2 } from "lucide-react";
-import { sendReply, type InboxMessage, type InboxPlatformError } from "@/app/actions/inbox";
+import { sendReply, markInboxRead, type InboxMessage, type InboxPlatformError } from "@/app/actions/inbox";
 import { processAssistantMessage } from "@/app/actions/ai";
 
 export function InboxClient({
@@ -26,7 +26,7 @@ export function InboxClient({
   initialMessages: InboxMessage[];
   initialErrors: InboxPlatformError[];
 }) {
-  const [messages] = React.useState<InboxMessage[]>(initialMessages);
+  const [messages, setMessages] = React.useState<InboxMessage[]>(initialMessages);
   const [errors] = React.useState<InboxPlatformError[]>(initialErrors);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [reply, setReply] = React.useState("");
@@ -68,6 +68,12 @@ export function InboxClient({
     setReply("");
     setSendResult(null);
     setSuggestions([]);
+    // Opening a message is what marks it read — persisted server-side so the
+    // unread count survives reloads (Task 14), flipped optimistically here.
+    if (next?.unread) {
+      setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, unread: false } : m)));
+      void markInboxRead(next.platform, next.id);
+    }
     if (next) void generateSuggestions(next.text);
   };
 

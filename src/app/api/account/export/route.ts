@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/session";
 import { exportUserData } from "@/lib/account-lifecycle";
 
@@ -10,7 +10,7 @@ import { exportUserData } from "@/lib/account-lifecycle";
  * like every account route: the session is the only scoping input, so an
  * export is always exactly the caller's own data.
  */
-export async function GET(_req: NextRequest) {
+export async function GET() {
   const session = await getSessionUser();
   if (!session) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });

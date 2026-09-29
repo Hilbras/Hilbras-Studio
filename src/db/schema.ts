@@ -17,14 +17,14 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   /** Sign-in brute-force lockout — driven by signInAction. */
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
-  loginLockedUntil: timestamp("login_locked_until"),
+  loginLockedUntil: timestamp("login_locked_until", { withTimezone: true }),
   /**
    * Session revocation: JWTs carry this number (0 when absent), and
    * getSessionUser compares it against the row. Bumping it invalidates
    * every outstanding cookie for the user — password changes do this.
    */
   tokenVersion: integer("token_version").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**
@@ -39,7 +39,7 @@ export const userPreferences = pgTable("user_preferences", {
   adaptTone: boolean("adapt_tone").notNull().default(true),
   autoSchedule: boolean("auto_schedule").notNull().default(false),
   engagementNotifications: boolean("engagement_notifications").notNull().default(true),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type UserPreferences = typeof userPreferences.$inferSelect;
@@ -52,7 +52,7 @@ export type UserPreferences = typeof userPreferences.$inferSelect;
 export const rateLimits = pgTable("rate_limits", {
   key: text("key").primaryKey(),
   count: integer("count").notNull().default(0),
-  resetAt: timestamp("reset_at").notNull(),
+  resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
 });
 
 /**
@@ -70,8 +70,8 @@ export const storedCredentials = pgTable("stored_credentials", {
   encryptedValue: text("encrypted_value").notNull(),
   /** Optional label for display (e.g., "OpenAI (GPT-4)") */
   label: text("label"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [unique().on(t.userId, t.keyName)]);
 
 export type StoredCredential = typeof storedCredentials.$inferSelect;
@@ -101,11 +101,11 @@ export const posts = pgTable("posts", {
   /** draft | scheduled | publishing | published | failed */
   status: text("status").notNull().default("draft"),
   /** ISO timestamp — set when status = scheduled. */
-  scheduledAt: timestamp("scheduled_at"),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }),
   /** JSON array of per-platform publish results. */
   results: text("results"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  publishedAt: timestamp("published_at"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
   /**
    * Scheduler claim/lease (see `src/lib/scheduled-posts.ts`).
    *
@@ -117,8 +117,8 @@ export const posts = pgTable("posts", {
    * makes an expired claim's outcome uncertain: it is never blindly retried.
    */
   claimId: text("claim_id"),
-  claimExpiresAt: timestamp("claim_expires_at"),
-  dispatchStartedAt: timestamp("dispatch_started_at"),
+  claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+  dispatchStartedAt: timestamp("dispatch_started_at", { withTimezone: true }),
 }, (t) => [
   index("posts_status_scheduled_idx").on(t.status, t.scheduledAt),
   // Remediation Task 12: terminal-state values are enforced by the database,
@@ -150,8 +150,8 @@ export const aiProviders = pgTable("ai_providers", {
   apiFormat: text("api_format").notNull().default("openai"),
   modelId: text("model_id").notNull(),
   isDefault: boolean("is_default").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   // Remediation Task 12: at most one default provider per user. The partial
   // unique index turns "exactly zero or one defaults" into a database
@@ -186,7 +186,7 @@ export const mediaAssets = pgTable("media_assets", {
   mimeType: text("mime_type").notNull(),
   sizeBytes: integer("size_bytes").notNull(),
   data: bytea("data").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export type MediaAsset = typeof mediaAssets.$inferSelect;
@@ -208,8 +208,8 @@ export const chatSessions = pgTable(
     summary: text("summary").notNull().default(""),
     /** How many of the oldest messages are already covered by `summary`. */
     summaryUpTo: integer("summary_up_to").notNull().default(0),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("chat_sessions_user_idx").on(t.userId, t.updatedAt)]
 );
@@ -227,7 +227,7 @@ export const chatMessages = pgTable(
     /** user | assistant */
     role: text("role").notNull(),
     content: text("content").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("chat_messages_session_idx").on(t.sessionId, t.createdAt)]
 );
@@ -246,7 +246,7 @@ export const memories = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     content: text("content").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("memories_user_idx").on(t.userId)]
 );
@@ -312,8 +312,8 @@ export const goals = pgTable(
     targetAccounts: text("target_accounts").notNull().default("[]"),
     /** active | paused | archived */
     status: text("status").notNull().default("active"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("goals_user_status_idx").on(t.userId, t.status),
@@ -375,9 +375,9 @@ export const runs = pgTable(
     plan: text("plan"),
     /** Short human-readable summary of why the run ended, if it failed. */
     errorSummary: text("error_summary"),
-    startedAt: timestamp("started_at"),
-    finishedAt: timestamp("finished_at"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("runs_idempotency_key_unique").on(t.idempotencyKey),
@@ -423,8 +423,8 @@ export const runSteps = pgTable(
     error: text("error"),
     /** Derived from (runId, stepIndex, targetAccount) — see ADR-005. */
     idempotencyKey: text("idempotency_key").notNull(),
-    startedAt: timestamp("started_at"),
-    finishedAt: timestamp("finished_at"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
   },
   (t) => [
     unique("run_steps_run_index_unique").on(t.runId, t.stepIndex),
@@ -469,7 +469,7 @@ export const executionPolicies = pgTable(
     scopeKey: text("scope_key").notNull(),
     /** "auto" | "approval" | "disabled" */
     decision: text("decision").notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("execution_policies_user_scope_key_unique").on(
@@ -538,14 +538,14 @@ export const runStepApprovals = pgTable(
      * Not `timestamptz`: it is only ever displayed and ordered relatively
      * against another timestamp in this table.
      */
-    decidedAt: timestamp("decided_at"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
     /**
      * When the question stops being answerable. Compared against `now()` in a
      * query, so it must be timezone-aware — the same reason
      * `goals.next_firing_at` is (migration 0012).
      */
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("run_step_approvals_step_unique").on(t.stepId),
@@ -588,7 +588,7 @@ export const runEvents = pgTable(
     event: text("event").notNull(),
     /** Structured detail, as JSON. Must never contain a secret. */
     detail: text("detail"),
-    at: timestamp("at").notNull().defaultNow(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("run_events_run_at_idx").on(t.runId, t.at),
@@ -621,8 +621,8 @@ export const connections = pgTable(
     platform: text("platform").notNull(),
     accessTokenEnc: text("access_token_enc"),
     refreshTokenEnc: text("refresh_token_enc"),
-    tokenExpiresAt: timestamp("token_expires_at"),
-    connectedAt: timestamp("connected_at").notNull().defaultNow(),
+    tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("connections_user_platform_idx").on(t.userId, t.platform)]
 );
@@ -668,7 +668,7 @@ export const accounts = pgTable(
      * account type. Null until capabilities are resolved for the account.
      */
     capabilities: text("capabilities"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique("accounts_user_platform_identity_unique").on(
@@ -762,7 +762,7 @@ export const publishReceipts = pgTable(
     /** What the platform returned, so a redelivery can report it faithfully. */
     platformPostId: text("platform_post_id"),
     permalink: text("permalink"),
-    createdAt: timestamp("created_at").notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("publish_receipts_account_idx").on(t.userId, t.accountKey),
@@ -771,4 +771,32 @@ export const publishReceipts = pgTable(
 );
 
 export type PublishReceipt = typeof publishReceipts.$inferSelect;
+
+/**
+ * inbox_read_state — which provider messages the user has already seen.
+ *
+ * Provider messages are fetched live (there is no inbox table), so read state
+ * is stored per provider message id and consulted when mentions/DMs render.
+ * Rows older than the pruning window are deleted on write, keeping the table
+ * proportional to recent activity.
+ */
+export const inboxReadState = pgTable(
+  "inbox_read_state",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(),
+    /** The provider's own message id — stable across inbox fetches. */
+    messageId: text("message_id").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique("inbox_read_state_user_message_unique").on(t.userId, t.platform, t.messageId),
+    index("inbox_read_state_user_idx").on(t.userId, t.readAt),
+  ]
+);
+
+export type InboxReadState = typeof inboxReadState.$inferSelect;
 

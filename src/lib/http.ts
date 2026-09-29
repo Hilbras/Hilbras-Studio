@@ -29,6 +29,15 @@
 export const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
+ * The default response-body cap.
+ *
+ * Platform and OAuth responses here are JSON documents — small by nature — so a
+ * body that runs past 2 MiB is not a legitimate answer, it is a misbehaving or
+ * hostile endpoint. The response is cut off rather than buffered whole.
+ */
+export const DEFAULT_MAX_RESPONSE_BYTES = 2_000_000;
+
+/**
  * A request that outlived its deadline.
  *
  * A distinct class rather than a string match, so a caller that wants to
@@ -51,6 +60,21 @@ export class HttpTimeoutError extends Error {
   }
 }
 
+/** A response body that blew past its size cap before finishing. */
+export class HttpResponseTooLargeError extends Error {
+  readonly url: string;
+  readonly maxBytes: number;
+
+  constructor(url: string, maxBytes: number) {
+    super(
+      `Response from ${hostOf(url)} exceeded ${maxBytes} bytes and was cut off.`,
+    );
+    this.name = "HttpResponseTooLargeError";
+    this.url = url;
+    this.maxBytes = maxBytes;
+  }
+}
+
 /**
  * The host, and only the host, for an error message.
  *
@@ -68,15 +92,29 @@ function hostOf(url: string): string {
 }
 
 /**
- * `fetch`, but it cannot hang.
+ * `fetch`, but it cannot hang and it will not read forever.
  *
  * The caller's `init.signal` is honoured and composed rather than replaced: a
  * request aborted by the caller's own deadline should still abort, and a caller
  * that already has an `AbortSignal` should not have it silently dropped.
  *
- * The timer is always cleared. A `setTimeout` left running after its request
- * settles keeps the Node event loop alive for the full deadline, so without the
- * `finally` every publish would hold a handle open for fifteen seconds.
+ * Two policies beyond the timeout (remediation Tasks 5/13):
+ *
+ * - **Redirects are not followed.** `redirect: "manual"` — every URL this
+ *   server calls is a known https platform or provider endpoint, and the token
+ *   or the account identity lives in the query string or the POST body. A 3xx
+ *   surfaces to the caller as the response it is; their existing `!res.ok`
+ *   handling reports it. A caller that genuinely needs to follow redirects
+ *   must opt back in explicitly (`init.redirect`), revalidating each hop.
+ * - **The response body is bounded.** The body is buffered inside the same
+ *   deadline and cut off past `DEFAULT_MAX_RESPONSE_BYTES`, so "the request
+ *   had a timeout" cannot be quietly undone by a slow or enormous body that
+ *   `res.json()` then reads without limit.
+ *
+ * The timer is cleared only after the body settles. A `setTimeout` left running
+ * after its request settles keeps the Node event loop alive for the full
+ * deadline, so the `finally` matters — and placing the body read inside the
+ * timer's window is what makes the deadline a *total* one.
  */
 export async function fetchWithTimeout(
   input: string | URL | Request,
@@ -104,7 +142,39 @@ export async function fetchWithTimeout(
   }
 
   try {
-    return await fetch(input, { ...init, signal: controller.signal });
+    const res = await fetch(input, {
+      redirect: "manual",
+      ...init,
+      signal: controller.signal,
+    });
+
+    if (!res.body) return res; // 204/304 and empty bodies — nothing to bound.
+
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > DEFAULT_MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new HttpResponseTooLargeError(url, DEFAULT_MAX_RESPONSE_BYTES);
+      }
+      chunks.push(value);
+    }
+
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new Response(body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
   } catch (error) {
     // `controller.abort(reason)` surfaces the reason as the rejection when the
     // runtime supports abort reasons, and a bare `AbortError` when it does not.

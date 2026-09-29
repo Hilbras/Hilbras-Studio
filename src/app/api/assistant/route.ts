@@ -158,7 +158,10 @@ export async function POST(req: NextRequest) {
     : Promise.resolve();
 
   const history: ChatMessage[] = [{ role: "system", content: system }, ...recent];
-  const generator = sdkStream(provider, history);
+  // The request's abort signal reaches the provider transport: when the client
+  // disconnects, upstream generation is cancelled rather than left running
+  // unread (remediation Task 13).
+  const generator = sdkStream(provider, history, { signal: req.signal });
 
   // Pull the first token before replying: a dead key or bad base URL should
   // surface as a real HTTP error, not as a stream that dies immediately.
@@ -198,6 +201,12 @@ export async function POST(req: NextRequest) {
       } catch {
         // Status is already 200 — tell the user in-band instead of dropping it.
         push("\n\n⚠️ The response was interrupted — try again.");
+      }
+
+      if (!alive) {
+        // The client went away mid-reply: end the generator so its finally
+        // blocks close the upstream response and free the connection.
+        await generator.return(undefined).catch(() => {});
       }
 
       try {

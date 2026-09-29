@@ -89,10 +89,22 @@ async function openaiChatCompletion(
   return content;
 }
 
+/** Options shared by every streaming entry point. */
+interface StreamOptions {
+  maxTokens?: number;
+  temperature?: number;
+  /**
+   * Aborts the upstream provider request when fired — the assistant route
+   * passes the request's own signal so a client disconnect cancels generation
+   * instead of leaving it running unread (remediation Task 13).
+   */
+  signal?: AbortSignal;
+}
+
 async function* openaiStreamChat(
   config: ProviderConfig,
   messages: ChatMessage[],
-  opts?: { maxTokens?: number; temperature?: number }
+  opts?: StreamOptions
 ): AsyncGenerator<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/chat/completions";
 
@@ -113,6 +125,7 @@ async function* openaiStreamChat(
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   };
   const res = await fetchPinnedProvider(url, providerRequest);
 
@@ -127,30 +140,36 @@ async function* openaiStreamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") return;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") return;
 
-      try {
-        const parsed = JSON.parse(data) as {
-          choices?: { delta?: { content?: string } }[];
-        };
-        const content = parsed.choices?.[0]?.delta?.content;
-        if (content) yield content;
-      } catch {
-        // skip malformed chunks
+        try {
+          const parsed = JSON.parse(data) as {
+            choices?: { delta?: { content?: string } }[];
+          };
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) yield content;
+        } catch {
+          // skip malformed chunks
+        }
       }
     }
+  } finally {
+    // A consumer that stops early — client disconnect, output cap, error —
+    // must not leave the upstream response open; cancel frees the socket.
+    reader.cancel().catch(() => {});
   }
 }
 
@@ -206,7 +225,7 @@ async function anthropicChatCompletion(
 async function* anthropicStreamChat(
   config: ProviderConfig,
   messages: ChatMessage[],
-  opts?: { maxTokens?: number; temperature?: number }
+  opts?: StreamOptions
 ): AsyncGenerator<string> {
   const url = stripTrailingSlash(config.baseUrl) + "/messages";
 
@@ -234,6 +253,7 @@ async function* anthropicStreamChat(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   };
   const res = await fetchPinnedProvider(url, providerRequest);
 
@@ -248,31 +268,35 @@ async function* anthropicStreamChat(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
 
-      try {
-        const parsed = JSON.parse(data) as {
-          type?: string;
-          delta?: { type?: string; text?: string };
-        };
-        if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
-          if (parsed.delta.text) yield parsed.delta.text;
+        try {
+          const parsed = JSON.parse(data) as {
+            type?: string;
+            delta?: { type?: string; text?: string };
+          };
+          if (parsed.type === "content_block_delta" && parsed.delta?.type === "text_delta") {
+            if (parsed.delta.text) yield parsed.delta.text;
+          }
+        } catch {
+          // skip malformed chunks
         }
-      } catch {
-        // skip malformed chunks
       }
     }
+  } finally {
+    reader.cancel().catch(() => {});
   }
 }
 
@@ -317,7 +341,7 @@ export async function chatCompletion(
 export async function* streamChat(
   config: ProviderConfig,
   messages: ChatMessage[],
-  opts?: { maxTokens?: number; temperature?: number }
+  opts?: StreamOptions
 ): AsyncGenerator<string> {
   if (config.apiFormat === "anthropic") {
     yield* capStreamOutput(anthropicStreamChat(config, messages, opts));

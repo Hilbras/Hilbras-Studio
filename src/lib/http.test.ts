@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_MAX_RESPONSE_BYTES,
   DEFAULT_TIMEOUT_MS,
+  HttpResponseTooLargeError,
   HttpTimeoutError,
   fetchWithTimeout,
 } from "./http";
@@ -102,6 +104,47 @@ describe("a request that completes in time", () => {
     const [, init] = fetchMock.mock.calls[0]!;
     expect(init?.method).toBe("POST");
     expect(init?.body).toBe(JSON.stringify({ text: "hello" }));
+  });
+});
+
+describe("the outbound policy (Tasks 5/13)", () => {
+  it("does not follow redirects — a 3xx is handed back to the caller", async () => {
+    const fetchMock = installFetch(
+      vi.fn(async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "http://evil.example/steal" },
+        }),
+      ),
+    );
+
+    const res = await fetchWithTimeout("https://graph.facebook.com/v26.0/me");
+
+    // Outbound URLs carry access tokens; a redirect must never be replayed
+    // against another host by this module.
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init?.redirect).toBe("manual");
+    expect(res.status).toBe(302);
+    expect(res.ok).toBe(false);
+  });
+
+  it("still hands the caller a working body when the response is bounded", async () => {
+    installFetch(resolvingFetch({ data: { id: "2" } }));
+
+    const res = await fetchWithTimeout("https://api.x.com/2/tweets");
+
+    await expect(res.json()).resolves.toEqual({ data: { id: "2" } });
+    expect(res.status).toBe(200);
+  });
+
+  it("cuts off a response body that exceeds the size cap", async () => {
+    installFetch(
+      vi.fn(async () => new Response("x".repeat(DEFAULT_MAX_RESPONSE_BYTES + 1))),
+    );
+
+    await expect(
+      fetchWithTimeout("https://api.telegram.org/bot123/sendMessage"),
+    ).rejects.toBeInstanceOf(HttpResponseTooLargeError);
   });
 });
 

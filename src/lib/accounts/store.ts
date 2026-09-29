@@ -68,82 +68,88 @@ export interface RegisterConnectionInput {
  * Idempotent per account: reconnecting the same identity updates it in place
  * rather than appending a duplicate — which the missing unique constraint on
  * `social_accounts` made impossible.
+ *
+ * One transaction (remediation Task 12): a connect either records the grant
+ * and every account it reaches, or nothing — a mid-loop failure must not
+ * leave a connection row whose accounts still point at the previous grant.
  */
 export async function registerConnection(
   input: RegisterConnectionInput,
 ): Promise<{ connectionId: string; accountIds: string[] }> {
   const connectionId = randomUUID();
 
-  await db.insert(connections).values({
-    id: connectionId,
-    userId: input.userId,
-    platform: input.platform,
-    accessTokenEnc: input.accessTokenEnc,
-    refreshTokenEnc: input.refreshTokenEnc ?? null,
-    tokenExpiresAt: input.tokenExpiresAt ?? null,
-  });
+  return db.transaction(async (tx) => {
+    await tx.insert(connections).values({
+      id: connectionId,
+      userId: input.userId,
+      platform: input.platform,
+      accessTokenEnc: input.accessTokenEnc,
+      refreshTokenEnc: input.refreshTokenEnc ?? null,
+      tokenExpiresAt: input.tokenExpiresAt ?? null,
+    });
 
-  const accountIds: string[] = [];
-  for (const account of input.accounts) {
-    const key = accountKeyFor(
-      input.platform,
-      account.handle ?? account.platformAccountId,
-    );
-
-    // Conflict on (user, platform, identity) or on account_key: the account
-    // already exists from an earlier grant, so move it onto this connection
-    // rather than failing the whole connect.
-    const inserted = await db
-      .insert(accounts)
-      .values({
-        id: randomUUID(),
-        connectionId,
-        userId: input.userId,
-        platform: input.platform,
-        platformAccountId: account.platformAccountId,
-        accountKey: key,
-        handle: account.handle ?? null,
-        displayName: account.displayName ?? account.handle ?? null,
-      })
-      .onConflictDoNothing()
-      .returning({ id: accounts.id });
-
-    if (inserted.length) {
-      accountIds.push(inserted[0].id);
-      continue;
-    }
-
-    const [existing] = await db
-      .select({ id: accounts.id })
-      .from(accounts)
-      .where(
-        and(
-          eq(accounts.userId, input.userId),
-          eq(accounts.platform, input.platform),
-          eq(accounts.platformAccountId, account.platformAccountId),
-        ),
-      )
-      .limit(1);
-
-    if (!existing) {
-      // The unique keys disagree with the identity lookup — only reachable if
-      // account_key collides across different identities. Fail loudly rather
-      // than silently dropping an account the user connected.
-      throw new Error(
-        `Account ${key} conflicted with a different identity and was not found`,
+    const accountIds: string[] = [];
+    for (const account of input.accounts) {
+      const key = accountKeyFor(
+        input.platform,
+        account.handle ?? account.platformAccountId,
       );
+
+      // Conflict on (user, platform, identity) or on account_key: the account
+      // already exists from an earlier grant, so move it onto this connection
+      // rather than failing the whole connect.
+      const inserted = await tx
+        .insert(accounts)
+        .values({
+          id: randomUUID(),
+          connectionId,
+          userId: input.userId,
+          platform: input.platform,
+          platformAccountId: account.platformAccountId,
+          accountKey: key,
+          handle: account.handle ?? null,
+          displayName: account.displayName ?? account.handle ?? null,
+        })
+        .onConflictDoNothing()
+        .returning({ id: accounts.id });
+
+      if (inserted.length) {
+        accountIds.push(inserted[0].id);
+        continue;
+      }
+
+      const [existing] = await tx
+        .select({ id: accounts.id })
+        .from(accounts)
+        .where(
+          and(
+            eq(accounts.userId, input.userId),
+            eq(accounts.platform, input.platform),
+            eq(accounts.platformAccountId, account.platformAccountId),
+          ),
+        )
+        .limit(1);
+
+      if (!existing) {
+        // The unique keys disagree with the identity lookup — only reachable if
+        // account_key collides across different identities. Fail loudly rather
+        // than silently dropping an account the user connected.
+        throw new Error(
+          `Account ${key} conflicted with a different identity and was not found`,
+        );
+      }
+
+      // Repoint the existing account at the fresh grant, so its token comes from
+      // the connection the user just authorised.
+      await tx
+        .update(accounts)
+        .set({ connectionId })
+        .where(eq(accounts.id, existing.id));
+      accountIds.push(existing.id);
     }
 
-    // Repoint the existing account at the fresh grant, so its token comes from
-    // the connection the user just authorised.
-    await db
-      .update(accounts)
-      .set({ connectionId })
-      .where(eq(accounts.id, existing.id));
-    accountIds.push(existing.id);
-  }
-
-  return { connectionId, accountIds };
+    return { connectionId, accountIds };
+  });
 }
 
 /** An account plus what the Runtime needs to decide whether it can act. */

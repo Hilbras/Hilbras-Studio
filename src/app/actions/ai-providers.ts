@@ -91,51 +91,56 @@ export async function saveAiProviderAction(
   const id = (formData.get("id") as string) || randomUUID();
   const makeDefault = formData.get("isDefault") === "on";
 
-  // If setting as default, unset all others first
-  if (makeDefault) {
-    await db
-      .update(aiProviders)
-      .set({ isDefault: false, updatedAt: new Date() })
-      .where(eq(aiProviders.userId, session.id));
-  }
-
   const encrypted = encryptSecret(apiKey);
 
-  // Check if this is an insert or update
-  const existing = await db
-    .select({ id: aiProviders.id, isDefault: aiProviders.isDefault })
-    .from(aiProviders)
-    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
-    .limit(1);
+  // One transaction (remediation Task 12): the default handover and the
+  // insert/update are atomic. Without it a failure between "unset all" and
+  // the write left the user with no default provider at all.
+  await db.transaction(async (tx) => {
+    // If setting as default, unset all others first
+    if (makeDefault) {
+      await tx
+        .update(aiProviders)
+        .set({ isDefault: false, updatedAt: new Date() })
+        .where(eq(aiProviders.userId, session.id));
+    }
 
-  if (existing.length > 0) {
-    // Never silently deactivate on edit: only take the default slot when asked.
-    await db
-      .update(aiProviders)
-      .set({
+    // Check if this is an insert or update
+    const existing = await tx
+      .select({ id: aiProviders.id, isDefault: aiProviders.isDefault })
+      .from(aiProviders)
+      .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      // Never silently deactivate on edit: only take the default slot when asked.
+      await tx
+        .update(aiProviders)
+        .set({
+          name,
+          baseUrl,
+          apiKeyEnc: encrypted,
+          apiFormat,
+          modelId,
+          isDefault: makeDefault || existing[0].isDefault,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
+    } else {
+      // New providers are not auto-selected — the built-in model stays active
+      // until the user picks this one.
+      await tx.insert(aiProviders).values({
+        id,
+        userId: session.id,
         name,
         baseUrl,
         apiKeyEnc: encrypted,
         apiFormat,
         modelId,
-        isDefault: makeDefault || existing[0].isDefault,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
-  } else {
-    // New providers are not auto-selected — the built-in model stays active
-    // until the user picks this one.
-    await db.insert(aiProviders).values({
-      id,
-      userId: session.id,
-      name,
-      baseUrl,
-      apiKeyEnc: encrypted,
-      apiFormat,
-      modelId,
-      isDefault: makeDefault,
-    });
-  }
+        isDefault: makeDefault,
+      });
+    }
+  });
 
   return { success: "Provider saved" };
 }
@@ -240,17 +245,20 @@ export async function setDefaultAiProviderAction(
     .limit(1);
   if (!row) return { ok: false, error: "Provider not found" };
 
-  // Unset all defaults
-  await db
-    .update(aiProviders)
-    .set({ isDefault: false, updatedAt: new Date() })
-    .where(eq(aiProviders.userId, session.id));
+  // One transaction (remediation Task 12): the unset-all and set-one updates
+  // are atomic, so a failure between them cannot leave zero defaults — the
+  // active-model selection would silently fall back to the built-in model.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(aiProviders)
+      .set({ isDefault: false, updatedAt: new Date() })
+      .where(eq(aiProviders.userId, session.id));
 
-  // Set the chosen one as default
-  await db
-    .update(aiProviders)
-    .set({ isDefault: true, updatedAt: new Date() })
-    .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
+    await tx
+      .update(aiProviders)
+      .set({ isDefault: true, updatedAt: new Date() })
+      .where(and(eq(aiProviders.id, id), eq(aiProviders.userId, session.id)));
+  });
 
   return { ok: true };
 }

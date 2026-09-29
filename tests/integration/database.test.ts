@@ -136,6 +136,116 @@ describe("PostgreSQL migrations and tenant boundaries", () => {
     expect(alicePosts[0]?.content).not.toBe(bobPosts[0]?.content);
   });
 
+  it("enforces the post status check and the one-default-provider invariant", async () => {
+    // Drizzle wraps driver errors: the constraint name lives on the pg error
+    // in `cause`, not on the wrapper's message.
+    const expectViolation = async (statement: Promise<unknown>, pattern: RegExp) => {
+      let error: unknown;
+      try {
+        await statement;
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeDefined();
+      const messages: string[] = [];
+      let current: unknown = error;
+      while (current instanceof Error) {
+        messages.push(current.message);
+        current = (current as { cause?: unknown }).cause;
+      }
+      expect(messages.join(" ")).toMatch(pattern);
+    };
+
+    const userId = randomUUID();
+    const postId = randomUUID();
+
+    await testDb.insert(users).values({
+      id: userId,
+      name: "Constraint Test",
+      email: "constraint-test@example.invalid",
+      username: "constraint_test",
+      passwordHash: "not-a-real-hash",
+    });
+    await testDb.insert(posts).values({
+      id: postId,
+      userId,
+      content: "Status check",
+      status: "draft",
+    });
+
+    // Only the five modeled post states are writable (migration 0014).
+    await expectViolation(
+      testDb.update(posts).set({ status: "queued" }).where(eq(posts.id, postId)),
+      /posts_status_check/,
+    );
+
+    await testDb
+      .update(posts)
+      .set({ status: "published" })
+      .where(eq(posts.id, postId));
+    const [row] = await testDb.select().from(posts).where(eq(posts.id, postId));
+    expect(row?.status).toBe("published");
+
+    // The partial unique index permits several non-default providers per user…
+    const first = randomUUID();
+    const second = randomUUID();
+    await testDb.insert(schema.aiProviders).values([
+      {
+        id: first,
+        userId,
+        name: "A",
+        baseUrl: "https://a.example",
+        apiKeyEnc: "enc-a",
+        apiFormat: "openai",
+        modelId: "model-a",
+        isDefault: true,
+      },
+      {
+        id: second,
+        userId,
+        name: "B",
+        baseUrl: "https://b.example",
+        apiKeyEnc: "enc-b",
+        apiFormat: "openai",
+        modelId: "model-b",
+        isDefault: false,
+      },
+    ]);
+
+    // …but never two defaults at once…
+    await expectViolation(
+      testDb.insert(schema.aiProviders).values({
+        id: randomUUID(),
+        userId,
+        name: "C",
+        baseUrl: "https://c.example",
+        apiKeyEnc: "enc-c",
+        apiFormat: "openai",
+        modelId: "model-c",
+        isDefault: true,
+      }),
+      /ai_providers_user_default_unique_idx/,
+    );
+
+    // …and the unset-then-set handover the selection action uses stays legal.
+    await testDb.transaction(async (tx) => {
+      await tx
+        .update(schema.aiProviders)
+        .set({ isDefault: false })
+        .where(eq(schema.aiProviders.userId, userId));
+      await tx
+        .update(schema.aiProviders)
+        .set({ isDefault: true })
+        .where(eq(schema.aiProviders.id, second));
+    });
+    const providers = await testDb
+      .select()
+      .from(schema.aiProviders)
+      .where(eq(schema.aiProviders.userId, userId));
+    expect(providers.find((p) => p.id === second)?.isDefault).toBe(true);
+    expect(providers.filter((p) => p.isDefault)).toHaveLength(1);
+  });
+
   it("cascades user-owned chat and memory rows when a user is deleted", async () => {
     const userId = randomUUID();
     const sessionId = randomUUID();

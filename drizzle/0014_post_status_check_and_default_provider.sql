@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "ai_providers_user_default_unique_idx" ON "ai_providers" USING btree ("user_id") WHERE is_default;--> statement-breakpoint
+ALTER TABLE "posts" ADD CONSTRAINT "posts_status_check" CHECK ("posts"."status" in ('draft', 'scheduled', 'publishing', 'published', 'failed'));

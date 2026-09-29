@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { customType, pgTable, text, timestamp, boolean, integer, unique, index } from "drizzle-orm/pg-core";
+import { check, customType, index, pgTable, text, timestamp, boolean, integer, unique, uniqueIndex } from "drizzle-orm/pg-core";
 
 /**
  * users — application accounts for Hilbras Studio.
@@ -119,7 +119,17 @@ export const posts = pgTable("posts", {
   claimId: text("claim_id"),
   claimExpiresAt: timestamp("claim_expires_at"),
   dispatchStartedAt: timestamp("dispatch_started_at"),
-}, (t) => [index("posts_status_scheduled_idx").on(t.status, t.scheduledAt)]);
+}, (t) => [
+  index("posts_status_scheduled_idx").on(t.status, t.scheduledAt),
+  // Remediation Task 12: terminal-state values are enforced by the database,
+  // not only by the application. Every writer (Composer action, scheduler,
+  // recovery sweep) writes one of these five; anything else is a bug that
+  // must fail loudly at write time.
+  check(
+    "posts_status_check",
+    sql`${t.status} in ('draft', 'scheduled', 'publishing', 'published', 'failed')`
+  ),
+]);
 
 export type Post = typeof posts.$inferSelect;
 
@@ -142,7 +152,15 @@ export const aiProviders = pgTable("ai_providers", {
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => [
+  // Remediation Task 12: at most one default provider per user. The partial
+  // unique index turns "exactly zero or one defaults" into a database
+  // invariant instead of a discipline the two-step selection update has to
+  // maintain perfectly under concurrency.
+  uniqueIndex("ai_providers_user_default_unique_idx")
+    .on(t.userId)
+    .where(sql`is_default`),
+]);
 
 export type AiProvider = typeof aiProviders.$inferSelect;
 export type NewAiProvider = typeof aiProviders.$inferInsert;

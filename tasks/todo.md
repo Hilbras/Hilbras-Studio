@@ -14,7 +14,7 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | Task | Verdict | Evidence / remaining gap |
 |---|---|---|
 | 0 Secrets inventory | Open (operational) | Nothing implemented; requires owner action, no code change. |
-| 1 Test/CI foundations | **Done** | `.github/workflows/ci.yml` runs install→lint→typegen→typecheck→unit→integration→build→migration check→audit. 421 unit tests + Testcontainers integration suite. Only gap: analytics untested. |
+| 1 Test/CI foundations | **Done** | `.github/workflows/ci.yml` runs install→lint→typegen→typecheck→unit→integration→build→migration check→audit. 455 unit tests + a 179-test Testcontainers integration suite (15 files). Only gap: analytics untested. |
 | 2 Composer scheduling | **Done** | `composer/page.tsx` blocks invalid schedules; `posts/service.ts` single-transaction draft/scheduled; `actions/publish.ts` publishes only `status="draft"`. |
 | 3 Platform capabilities | Partial | Capability registry + Composer gating + server-side refusal verified. **2026-09-29: exact-count contract test added (5 publishers / 5 connect-only).** Remaining: `mediaTypes` not in the capability contract; `createPostAction` has no server-side validation (gating is client-side; server still refuses at publish time). |
 | 4 AI spend limits | **Done** | All model entry points budgeted (assistant, composer, runtime planner/compose/tools, pings, summaries, memory); fail-closed; signup policy. Gap: no test for limiter DB-failure path. |
@@ -26,7 +26,7 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | 10 Scheduler leases | **Done** | Claim/lease (5 min), 100s deadline, 60s per-post timeout under 120s route maxDuration, uncertain-outcome handling, 10 integration tests + Inngest run-idempotency tests. |
 | 11 Independent settlement | Partial core done → **remaining items closed 2026-09-29** | `Promise.allSettled`, shared server-side transitions, receipts. **2026-09-29: connector results validated server-side (URL host allowlist, bounded text, `success === true` strictness — `sanitizePublishResult`); composer-path all-failure, timeout, and sanitization tests added to `publish.test.ts`.** Remaining (minor): an analytics/Composer display-parity test. |
 | 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`; EXPLAIN before/after evidence for the index strategy. |
-| 13 Timezones/HTTP | **Done (2026-09-29)** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`); `fetchWithTimeout` does not follow redirects and bounds every response body at 2 MiB inside the total deadline; the assistant stream cancels upstream generation on client disconnect. **2026-09-29: migration 0016 converts all 33 remaining bare `timestamp` columns to `timestamptz` with explicit `AT TIME ZONE 'UTC'` casts — one timestamp contract; the scheduler, claim-lease, and rate-limit comparisons no longer depend on the server's timezone, verified by the full integration suite.** |
+| 13 Timezones/HTTP | **Done (2026-09-29)** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`); `fetchWithTimeout` does not follow redirects and bounds every response body at 2 MiB inside the total deadline; the assistant stream cancels upstream generation on client disconnect. **Migration 0016 converts all 33 remaining bare `timestamp` columns to `timestamptz` with explicit `AT TIME ZONE 'UTC'` casts** — one timestamp contract, so the scheduler, claim-lease, and rate-limit comparisons no longer depend on the server's timezone. This **reverses the deferral recorded twice above** (Task 13 previously read "`posts.scheduled_at` is a bare `timestamp` … needs a deliberate data decision"); that decision and its UTC precondition are now in the 0016 migration note. **Corrected 2026-09-29:** this row previously claimed 0016 was "verified by the full integration suite", which was not true — the suite applied 0016 and asserted nothing about it. `tests/integration/timestamptz-migration.test.ts` now stages the journal at 0015, writes a row through the pre-0016 schema, applies the real 0016, and asserts the instant is preserved and the session-dependence is gone; two drift guards read the migration file so a lost `AT TIME ZONE 'UTC'` fails in CI. Both were confirmed to fail against a deliberately wrong zone. Remaining: connect-phase timeout distinct from the total deadline (low value). |
 | 14 Analytics/inbox/prefs | **Done (2026-09-29, one recorded scope decision)** | Analytics reads real results incl. partial success; query bounded (`.limit(500)`); a failed provider fetch is reported per platform ("X: …") instead of reading as an empty inbox. **2026-09-29: inbox read state persists (`inbox_read_state` table, 30-day pruning, per-message `markInboxRead` action, unread count survives reloads); the four inert preference toggles are removed from the UI — none changed behavior, and a toggle that does nothing is a false claim (columns retained in schema, documented for reintroduction). Goal-run publishes in the analytics dashboard are recorded OUT OF SCOPE: receipts record successes only, so merging them into a published/failed split would distort the stats, and run outcomes are already visible in the Runs view — revisit only if the dashboard gains a runtime section.** |
 | 15 Dead code | Partial → **confirmed residue removed 2026-09-29** | **2026-09-29: `src/lib/mock-data.ts` deleted (zero importers); the four unused direct dependencies (@tanstack/react-query, zustand, @hookform/resolvers, react-hook-form) removed and the lockfile regenerated.** Remaining: a final reference-checked sweep after the behavior work stabilizes (plan's original ordering). |
 | 16 Docs truthfulness | Partial → **public-facing claims fixed 2026-09-29** | README/platform claims match the registry (done by the rebuild). **2026-09-29: the pricing page no longer quotes unimplemented tiers/trial/seats (now: free while v1 is built, honest capability list); fabricated testimonials removed from the landing page; the CTA no longer claims GDPR compliance; the privacy page now describes the retention/deletion scope that actually exists and marks self-serve export/deletion as roadmap instead of promising it.** Remaining: canonical setup docs pass, product-owner sign-off on public claims. |
@@ -81,6 +81,60 @@ Source plan: [`tasks/plan.md`](./plan.md)
   `ALTER TABLE posts DROP CONSTRAINT posts_status_check;`
   `DROP INDEX ai_providers_user_default_unique_idx;`
 
+## Migration note — 0015_inbox_read_state
+
+- **Verification:** applied by the full-chain apply in every integration file;
+  `tests/integration/inbox-read-state.test.ts` covers the read/unread
+  transition, cross-user isolation (one user's read state never marks another's
+  message read), and the `(user_id, platform, message_id)` uniqueness that keeps
+  the row count bounded.
+- **Preconditions:** none. Additive only — a new table, a new index, and one
+  foreign key with `ON DELETE CASCADE`, so removing a user removes their read
+  state with them.
+- **Repair note:** not applicable; there is no pre-existing data to reconcile.
+- **Rollback:** `DROP TABLE inbox_read_state;` — read state is derived, not a
+  record of anything, so discarding it costs only unread badges.
+
+## Migration note — 0016_timestamps_to_timestamptz
+
+> **This migration reverses a recorded deferral.** The status table above, and
+> the Task 13 row, twice declined this work by name: *"`posts.scheduled_at` is
+> a bare `timestamp` (second, undocumented contract) — migrating it to
+> `timestamptz` needs a deliberate data decision."* 0016 is that decision, now
+> made, and it is recorded here because reversing a deferral is the kind of
+> thing that otherwise disappears.
+
+- **What it does:** converts 33 `timestamp` columns to `timestamptz` across 19
+  tables. `goals.next_firing_at` was added as `timestamptz` by 0012 and is
+  correctly left alone.
+- **Verification:** `tests/integration/timestamptz-migration.test.ts` stages the
+  journal at 0015, writes a row through the pre-0016 schema, then applies the
+  real 0016 and asserts three things: that a bare timestamp *did* resolve to two
+  different instants depending on the session (the bug), that the instant is
+  unchanged afterwards, and that it no longer depends on the session. Two
+  drift guards read the migration file itself — one fails if any conversion
+  loses its `AT TIME ZONE 'UTC'`, the other if the schema declares a bare
+  timestamp 0016 does not convert. Both were verified to fail on a deliberately
+  wrong zone (`Europe/Berlin` shifted the instant by exactly 3600s).
+- **⚠️ Preflight — the whole safety of this migration is one precondition.**
+  Every conversion uses `USING "col" AT TIME ZONE 'UTC'`, which asserts the
+  stored wall-clock *was* UTC and reinterprets it as such. That preserves the
+  instant exactly on a database that ran in UTC — Vercel Postgres does. On a
+  self-hosted database whose server ran in local time, the same expression
+  reinterprets every stored wall-clock as UTC and **silently shifts all of them
+  by the offset.** Nothing in the schema can detect this afterwards.
+  Preflight: `SHOW timezone;` — if it is not `UTC`/`Etc/UTC`, stop and convert
+  with the correct zone instead. Take a backup first regardless.
+- **Operational cost:** `ALTER COLUMN ... TYPE` takes `ACCESS EXCLUSIVE` and
+  rewrites the table. On `run_events`, `chat_messages`, and `rate_limits` — the
+  high-write tables — that is a write outage proportional to table size. Apply
+  during a quiet window, and expect it to be the longest step of the deploy.
+- **Rollback:** reverting to a bare `timestamp` throws away the zone, and
+  `USING "col" AT TIME ZONE current_setting('TimeZone')"` would reinterpret every
+  row. There is no safe rollback. If 0016 is applied, it stays applied; take the
+  backup beforehand if the conversion itself is in doubt.
+
+
 ## Current Progress
 
 - Task 1 foundation: Vitest, CI workflow, and the disposable-PostgreSQL integration suite are in place; 421 unit tests green at re-baseline.
@@ -126,7 +180,6 @@ Source plan: [`tasks/plan.md`](./plan.md)
   (Tasks 17/18, multi-PR).
 
 ### Session 2026-09-29 (continued) — work order items 6–8
-
 - **Task 9 complete.** X and Reddit exchange their codes with HTTP Basic
   credentials (`tokenAuth: "basic"` is now consumed; the secret never appears
   in a request body). The six non-Meta OAuth platforms resolve real account
@@ -154,6 +207,40 @@ Source plan: [`tasks/plan.md`](./plan.md)
   verification of each OAuth provider; retention/backup runbook decisions;
   the Task 14 product decisions (read-state, preferences, goal-run
   analytics); Tasks 17/18 are multi-PR work by design.
+
+### Session 2026-09-29 (third) — migrations 0015/0016 made safe to release
+
+This session did not add features. It made two already-written migrations
+releasable, because both had landed without the evidence the ledger's own
+Definition of Done requires of a database change ("migration verification and
+repair/rollback notes").
+
+- **Migration 0015 (`inbox_read_state`)** — already had integration tests; given
+  a migration note. Additive, so no preconditions.
+- **Migration 0016 (`timestamptz`)** — had **no test at all**, and the status
+  table claimed it was "verified by the full integration suite". It was not: the
+  suite applied 0016 as part of the chain and asserted nothing about it, so the
+  claim was true of the migration existing and false of it being correct. New
+  `tests/integration/timestamptz-migration.test.ts` stages the journal at 0015,
+  writes a row through the pre-0016 schema, applies the real 0016, and asserts
+  that a bare timestamp *did* resolve to different instants per session (the
+  bug), that the instant is unchanged afterwards, that `NULL` stays `NULL`, and
+  that the already-correct `goals.next_firing_at` is left alone. Two drift guards
+  read the migration file itself.
+  - Both guards were confirmed to fail on a deliberately wrong zone: swapping
+    `UTC` for `Europe/Berlin` on one column failed the drift guard *and* moved the
+    stored instant by exactly 3600 seconds.
+  - **Precondition, now recorded rather than assumed:** `AT TIME ZONE 'UTC'`
+    asserts the stored wall-clock *was* UTC. True on Vercel Postgres. On a
+    self-hosted database running a non-UTC server it would silently shift every
+    timestamp by the offset, and nothing in the schema could detect it
+    afterwards. The 0016 note carries `SHOW timezone;` as a preflight.
+  - **No safe rollback** — reverting a `timestamptz` to a bare `timestamp` throws
+    the zone away. If applied, it stays applied. Back up first.
+- **Corrected a false verification claim** in the Task 13 row rather than leaving
+  it standing next to a test that had not existed.
+- **Verification:** 455 unit tests, 179 integration tests (15 files), typecheck
+  clean, lint 0 errors / 29 warnings, production build green.
 
 ### Session 2026-09-29 (third tranche) — Task 14 finished, Phase 1 closed
 

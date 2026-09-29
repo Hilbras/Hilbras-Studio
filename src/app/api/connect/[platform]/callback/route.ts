@@ -7,6 +7,9 @@ import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
 import { readPlatformAppCredentials } from "@/lib/platform-credentials";
 import { isThreadsPermissionError } from "@/lib/threads-errors";
+import { verifyState } from "@/lib/oauth-state";
+import { getSecretKey } from "@/lib/secret-key";
+import { fetchWithTimeout } from "@/lib/http";
 import {
   exchangeForLongLivedToken,
   supportsLongLivedToken,
@@ -77,14 +80,15 @@ export async function GET(
   const session = await getSessionUser();
   if (!session) return NextResponse.redirect(new URL("/login", req.url));
 
-  let state: { userId?: string; returnUrl?: string };
-  try {
-    state = JSON.parse(Buffer.from(stateStr, "base64url").toString());
-  } catch {
+  // Verified before it is trusted, and the verification is the boundary — not
+  // the userId comparison below, which used to be the *only* check. Until
+  // v0.9.5 the state was unsigned base64url JSON, so `state.userId === session.id`
+  // was a check an attacker could satisfy by knowing the victim's id, which
+  // links the attacker's social account to the victim's account. A state that
+  // did not come from our own `/authorize` is now rejected on its signature.
+  const state = verifyState(stateStr, getSecretKey());
+  if (!state || state.userId !== session.id) {
     return fail("invalid_state");
-  }
-  if (state.userId !== session.id) {
-    return NextResponse.redirect(new URL("/login", req.url));
   }
 
   // `state` round-trips through the browser, so the return path is validated
@@ -108,7 +112,7 @@ export async function GET(
   const useGet = platform.auth.tokenMethod === "get";
 
   const tokenRes = useGet
-    ? await fetch(
+    ? await fetchWithTimeout(
         (() => {
           const u = new URL(platform.auth.tokenUrl);
           u.searchParams.set("client_id", clientId);
@@ -119,7 +123,7 @@ export async function GET(
         })(),
         { headers: platform.auth.extraHeaders },
       )
-    : await fetch(platform.auth.tokenUrl, {
+    : await fetchWithTimeout(platform.auth.tokenUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
@@ -189,7 +193,7 @@ export async function GET(
     // `user_id` is the Instagram professional-account ID (`<IG_ID>`) that every
     // publish endpoint takes; `id` is only the app-scoped ID. Meta's guide also
     // shows the response wrapped in `data` — accept either shape.
-    const profileRes = await fetch(
+    const profileRes = await fetchWithTimeout(
       `https://graph.instagram.com/me?fields=user_id,username,account_type&access_token=${encodeURIComponent(accessToken)}`
     );
     if (profileRes.ok) {
@@ -213,7 +217,7 @@ export async function GET(
       }
     }
   } else if (platformIdStr === "threads") {
-    const profileRes = await fetch(
+    const profileRes = await fetchWithTimeout(
       `https://graph.threads.net/me?fields=username&access_token=${encodeURIComponent(accessToken)}`
     );
     if (profileRes.ok) {
@@ -240,7 +244,7 @@ export async function GET(
     // path identifies the account through `/me/accounts` — so read the id (and
     // the display name) straight from the Graph API instead of storing
     // "unknown".
-    const profileRes = await fetch(
+    const profileRes = await fetchWithTimeout(
       `https://graph.facebook.com/v26.0/me?fields=id,name&access_token=${encodeURIComponent(accessToken)}`
     );
     if (profileRes.ok) {

@@ -16,7 +16,7 @@
 
 import "server-only";
 
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 
 import { db } from "@/db";
@@ -182,12 +182,22 @@ export async function transitionRun(
     return null;
   }
 
+  // Narrowed, because only `fail` carries a summary and reading it off the
+  // union is exactly the sort of thing that silently becomes `undefined` for
+  // every other event type.
+  const summary = event.type === "fail" ? event.summary : undefined;
+
   await db
     .update(runs)
     .set({
       state: result.to,
       ...(STARTS_RUN.has(event.type) ? { startedAt: new Date() } : {}),
       ...(FINISHES_RUN.has(event.type) ? { finishedAt: new Date() } : {}),
+      // Only on failure, and only when the caller had something to say. Writing
+      // a null over an earlier attempt's summary on a later `succeed` would be
+      // wrong — the column describes why this run ended, and a run that ended
+      // well did not fail.
+      ...(result.to === "failed" && summary ? { errorSummary: summary } : {}),
     })
     .where(eq(runs.id, runId));
 
@@ -240,14 +250,60 @@ export async function settleStep(
  * key is what a *connector* uses to absorb a duplicate, and it only works for
  * connectors that implement the cache, which not all of them do.
  */
+/**
+ * How long a step's claim is honoured before another invocation may take it.
+ *
+ * **A claim is a lease, not a flag**, and this is how long it runs.
+ *
+ * `claimStep` is a compare-and-swap from whatever state the caller *read*, and
+ * the caller reads the live row. So a step observed as `running` can be "claimed"
+ * from `running` to `running` — and the queue is at-least-once, so a redelivery
+ * of the same event starts a second invocation while the first is still inside
+ * the step body. Both execute it, and both publish. The step's idempotency key
+ * does not save it: that only helps connectors which implement the receipt cache,
+ * and not all of them do.
+ *
+ * So a `running` step is not claimable — until this much time has passed, at
+ * which point the worker holding it is presumed gone. `releaseStepClaim` covers
+ * the recoverable crash (a `catch` runs); it does not cover a worker killed
+ * outright, and without a lease, refusing `running` outright would trade a
+ * double-execution bug for a permanently stuck run.
+ *
+ * Five minutes is generous on purpose. A model call is bounded at 30s and a
+ * publish is bounded by the connector timeout, so a step that is still `running`
+ * after this long is not slow — it is gone. It is also the approval sweeper's
+ * cadence, so a reclaimed step is noticed on the same tick a lapsed approval is.
+ */
+export const STEP_CLAIM_LEASE_MS = 5 * 60 * 1000;
+
+/**
+ * Take a step's claim, or report that someone else holds it.
+ *
+ * `from` is the state the caller observed, not a fixed expectation. The two
+ * rules that fall out of that:
+ *
+ *  - A step observed in any non-`running` state is claimable, and the swap makes
+ *    exactly one caller win.
+ *  - A step observed `running` is claimable only once its claim is older than
+ *    `STEP_CLAIM_LEASE_MS`. See that constant for why.
+ */
 export async function claimStep(
   stepId: string,
   from: ExecutionState,
+  now: Date = new Date(),
 ): Promise<boolean> {
   const claimed = await db
     .update(runSteps)
-    .set({ state: "running", startedAt: new Date() })
-    .where(and(eq(runSteps.id, stepId), eq(runSteps.state, from)))
+    .set({ state: "running", startedAt: now })
+    .where(
+      and(
+        eq(runSteps.id, stepId),
+        eq(runSteps.state, from),
+        from === "running"
+          ? lt(runSteps.startedAt, new Date(now.getTime() - STEP_CLAIM_LEASE_MS))
+          : undefined,
+      ),
+    )
     .returning({ id: runSteps.id });
 
   return claimed.length > 0;
@@ -256,10 +312,18 @@ export async function claimStep(
 /**
  * Put a step back into a settled state from `running`.
  *
- * The counterpart to `claimStep`, and needed because a claim is a *reservation*:
+ * The counterpart to `claimStep`, and needed because a claim is a reservation:
  * once taken, nothing else will execute that step, so a crash between claiming
- * and dispatching would otherwise leave it `running` forever — which reads as
- * in-progress to the lease logic and is settled by nobody.
+ * and dispatching would leave it `running` and unrecoverable for the lease.
+ *
+ * Returns it to the *original* state rather than to `failed`, so the queue's
+ * retry is a clean second look. A step left `failed` would be skipped as
+ * terminal and the run would report success having published nothing.
+ *
+ * This covers the crash that a `catch` can reach. A worker killed outright does
+ * not run a `catch`, and is covered by `STEP_CLAIM_LEASE_MS` instead. Both are
+ * needed: release makes a recoverable failure immediate, and the lease makes an
+ * unrecoverable one eventual.
  *
  * Called when execution cannot even be attempted, which after a successful claim
  * means a defect rather than a plan problem, and is recorded as one.

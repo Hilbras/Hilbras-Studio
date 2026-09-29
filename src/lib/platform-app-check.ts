@@ -1,6 +1,7 @@
 import "server-only";
 
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
+import { fetchWithTimeout } from "./http";
 
 /**
  * Are the saved app credentials really this platform's developer app?
@@ -115,7 +116,7 @@ export async function verifyAppCredentials(
 
   let res: Response;
   try {
-    res = await fetch(platform.auth.tokenUrl, {
+    res = await fetchWithTimeout(platform.auth.tokenUrl, {
       method: "POST",
       headers,
       body: new URLSearchParams({

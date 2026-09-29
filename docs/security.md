@@ -17,7 +17,7 @@ Names only. Grouped by what breaks when the value changes.
 
 | Variable | Protects | On rotation |
 |---|---|---|
-| `AUTH_SECRET` | HS256 session signing | All sessions invalidated; users re-login. Safe on its own. |
+| `AUTH_SECRET` | HS256 session signing **and** the HMAC on the OAuth `state` | All sessions invalidated; users re-login. In-flight connect flows fail. Safe on its own. |
 | `ENCRYPTION_KEY` | AES-256-GCM for every stored token and credential | **Every stored token becomes unreadable.** See the warning below. |
 | `DATABASE_URL` | Postgres connection | Sessions survive — the cookie is client-held and the password hash is in the DB. |
 
@@ -34,7 +34,33 @@ Names only. Grouped by what breaks when the value changes.
 > accounts.** Generate it once with `openssl rand -hex 32` and copy it to every
 > environment.
 >
+> The reason there is no re-encryption path is that the stored payload carries
+> no key identifier. `base64url(iv).base64url(authTag).base64url(ciphertext)`
+> says nothing about which key made it, so a reader holding two keys has nothing
+> to try and cannot tell a rotation from tampering. Adding a `kid` and a dual-key
+> read path is the fix and is deliberately **not** in v0.9.5: it changes the
+> format of every stored secret, needs a migration, and a bug in the migration is
+> unrecoverable in a way that a missing feature is not.
+>
 > `AUTH_SECRET` is safe to differ between environments.
+
+### Minimum strength (v0.9.5)
+
+Both secrets are checked for **presence and length** at startup in production. A
+secret shorter than 32 characters throws with the command to generate a proper
+one.
+
+This closes a real gap. Until v0.9.5 only *presence* was checked, so
+`ENCRYPTION_KEY=a` and `AUTH_SECRET=x` were both valid production configurations
+— the deployment started, encrypted or signed every token and every session
+cookie with something derived from one character, and nothing reported a problem.
+A JWT signed with a guessable key is forgeable by anyone who has ever seen a
+cookie, and the tokens still verify, so nothing looks wrong.
+
+Reading `AUTH_SECRET` lives in exactly one module,
+[`src/lib/secret-key.ts`](../src/lib/secret-key.ts), because it was previously
+written out twice — in `proxy.ts` and `lib/session.ts` — and a fix to one of them
+would not have reached the other.
 
 ### Scheduled publishing
 
@@ -104,9 +130,89 @@ cannot be committed by accident through the normal path.
 - `git status` confirmed no env file, database file, or build artifact is
   staged.
 
+### URL hygiene
+
+Outbound URLs to Meta carry the access token in the query string
+(`…/me?fields=id&access_token=…`). Those URLs must not be copied into:
+
+- **Error messages.** `HttpTimeoutError` reports the **host only** for this
+  reason; the full URL stays on the error object for a log somebody has
+  consciously chosen to write. Every user-facing publish error is built from a
+  platform's own error text or a status code, never from a request line.
+- **Logs.** Platform identifiers and status codes are logged; URLs are not.
+- **Support tickets.** A timeout is exactly the error a user pastes into one.
+
+Construct query strings with `URLSearchParams`, not by interpolation. An
+Instagram access token routinely contains `&`, `=`, `+` and `/`, and an unencoded
+one silently truncates the request at the first `&` — a message list that comes
+back empty with a `200`, which reads as "no new messages" rather than as a bug.
+This was a live bug until v0.9.5.
+
 ---
 
-## 3. Rotation procedure
+## 3. Access control boundaries
+
+### Scoping is in the query, not the caller
+
+Every function that reads or writes one user's rows takes a `userId` and puts it
+in the `WHERE` clause. A server action is reachable by anyone who can craft a
+POST, so "the UI would not have shown the button" is not a control.
+
+- `src/lib/runtime/queries.ts` — the only module UI code may read user data
+  through (ADR-008).
+- `src/lib/chat.ts` — `loadMessages`, `appendMessage`, `saveSummary` and
+  `touchSession` all scope on the session's owner (ADR-010). Session ids are
+  minted client-side and are therefore attacker-supplied.
+- `src/app/actions/*` — `"use server"` modules are authorization boundaries. Each
+  resolves the session itself.
+
+A known id belonging to someone else is **`null`, not an error**. An error would
+distinguish "does not exist" from "not yours", which is a tenant-enumeration
+oracle.
+
+### The OAuth `state` is signed
+
+`src/lib/oauth-state.ts` signs `state` with `AUTH_SECRET` and verifies the
+signature **before** parsing. Until v0.9.5 the state was unsigned base64url JSON
+and the callback's only check was `state.userId === session.id` — so the entire
+defence against an account-link CSRF was knowing a user id.
+
+`state` is not single-use, and does not need to be: replaying a captured genuine
+state still needs a `code` issued for that flow, and the token exchange sends the
+`code_verifier` held only in an httpOnly cookie. **Signing closes the forgery;
+PKCE closes the replay.** See ADR-011.
+
+### Manual and scheduled publishes are not gated by `execution_policies`
+
+`execution_policies` is consulted by the Runtime before it runs a step, so it
+governs **AI-planned runs only**. Publishing a post directly from the composer,
+or via the scheduler, does not consult it.
+
+This is deliberate and is the one Phase 8 decision that changes what a policy
+setting means. A user who sets a platform to `disabled` and then schedules a post
+by hand will still see it publish. Gating those paths would have meant a manual
+publish stops working for anyone holding such a policy — a visible regression in
+exchange for a guarantee about a code path the policy was never designed to
+govern. Recorded here and in the v0.9.5 changelog rather than left implicit.
+
+---
+
+## 4. What is not built yet
+
+Named, so their absence is a decision on the record rather than an oversight.
+
+| Gap | Why it is not in v0.9.5 |
+|---|---|
+| **No audit log.** Logins, failed logins, connects, disconnects, credential changes and policy changes are unrecorded. | It is a table, a migration, and writers in six places, plus a screen to read it. Half of that is worse than none: an audit log that misses the event you are investigating is worse than knowing there isn't one. |
+| **No `kid` in the ciphertext**, so `ENCRYPTION_KEY` cannot be rotated. | See §1. Changes the stored format of every secret; the migration is unrecoverable if it is wrong. |
+| **No outbound token revocation on disconnect.** Revoking a platform token is a third-party call per platform, and none is implemented. | Needs per-platform support/endpoints that do not all exist. |
+| **No graceful shutdown.** Zero `process.on` handlers. | Needs a decision about what an in-flight publish should do when the process is asked to stop. |
+| **Media is readable by UUID without authentication.** | The ids are unguessable but not secret. Fixing it means a signed or expiring URL scheme on the media route. |
+| **`maskSecret` shows 4 real characters at each end.** | Below a minimum length it masks the whole value instead. A UI that wants less should not render the ends. |
+
+---
+
+## 5. Rotation procedure
 
 1. **Generate** the replacement: `openssl rand -hex 32`.
 2. **Update every environment that shares the database** — preview and
@@ -129,7 +235,7 @@ cannot be committed by accident through the normal path.
 
 ---
 
-## 4. Reporting a suspected exposure
+## 6. Reporting a suspected exposure
 
 If a secret is ever committed, logged, or shared:
 

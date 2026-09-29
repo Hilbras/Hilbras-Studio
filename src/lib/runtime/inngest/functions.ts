@@ -209,7 +209,7 @@ export const executeGoalRun = inngest.createFunction(
 
     if (!plan.ok) {
       await step.run("finish-unplanned-run", () =>
-        transitionRun(runId, { type: "fail" }),
+        transitionRun(runId, { type: "fail", summary: plan.message }),
       );
 
       // Only a model call that failed in transit is worth another attempt, and
@@ -287,16 +287,16 @@ async function advanceRun(input: {
   // v0.6.0: a run that somehow reached execution with nothing to do reports a
   // failure rather than a success, and the backstop costs one comparison.
   if (steps.length === 0) {
+    const explanation =
+      "The run reached execution with no steps. The planner should have refused to persist an empty plan, so this is a defect rather than a known limitation.";
+
     await stepHandle.run("finish-empty-run", async () => {
       await recordEvent(runId, {
         level: "error",
         event: "run.no_steps",
-        detail: {
-          explanation:
-            "The run reached execution with no steps. The planner should have refused to persist an empty plan, so this is a defect rather than a known limitation.",
-        },
+        detail: { explanation },
       });
-      await transitionRun(runId, { type: "fail" });
+      await transitionRun(runId, { type: "fail", summary: explanation });
     });
 
     return { runId, outcome: "no_plan", reason: "no_steps", retryable: false };
@@ -314,6 +314,8 @@ async function advanceRun(input: {
 
   let anyFailed = false;
   let retryableFailure = false;
+  /** The first step failure's message, which becomes the run's `errorSummary`. */
+  let firstFailure: string | undefined;
 
   for (const stepRow of steps as StepRow[]) {
     if (isTerminal(stepRow.state as ExecutionState)) continue;
@@ -349,9 +351,10 @@ async function advanceRun(input: {
       claimStep(stepRow.id, stepRow.state as ExecutionState),
     );
     if (!claimed) {
-      // Another invocation holds it. Its own `step.run` will settle the row, so
-      // this pass must not settle it too, and must not act on a step it did not
-      // claim.
+      // Another invocation holds it, or it held it recently enough that the
+      // lease has not expired. Its own `step.run` will settle the row, so this
+      // pass must not settle it too, and must not act on a step it did not
+      // claim. See `STEP_CLAIM_LEASE_MS` for what "recently enough" means.
       continue;
     }
 
@@ -425,6 +428,12 @@ async function advanceRun(input: {
     if (outcome.state !== "completed") {
       anyFailed = true;
       if (outcome.shouldRetry) retryableFailure = true;
+      // The first failure is the summary. A run whose third step failed because
+      // Instagram was rate-limiting is *about* Instagram, and listing all three
+      // reasons would bury the one a user needs in order to act.
+      if (outcome.state === "failed" && !firstFailure) {
+        firstFailure = outcome.error.message;
+      }
     }
   }
 
@@ -440,7 +449,7 @@ async function advanceRun(input: {
       event: "run.step_failed",
       detail: { retryable: retryableFailure },
     });
-    await transitionRun(runId, { type: "fail" });
+    await transitionRun(runId, { type: "fail", summary: firstFailure });
   });
 
   return {

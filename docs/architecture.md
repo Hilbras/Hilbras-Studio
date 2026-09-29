@@ -1,7 +1,7 @@
 # Hilbras Studio — Architecture
 
 **Status:** Living document. Updated in the same phase as the code it describes.
-**Current version:** v0.9.0
+**Current version:** v0.9.5
 **Target version:** v1.0.0 — Goal-Driven AI Runtime
 
 This document defines the architectural layers, the boundaries between them, and
@@ -736,6 +736,189 @@ redirects permanently to `/runtime` and the integration-centric pages are demote
 to a "Quick tools" group rather than deleted. The old `/accounts` credentials form
 moved to `/settings/credentials`, and the OAuth failure redirects were repointed
 to match, so a failed connect lands on the page where the fix is.
+
+---
+
+### ADR-009 — A step claim is a lease, not a flag
+
+**Status:** Accepted · Phase 8
+
+**Context.** `claimStep(stepId, from)` is a compare-and-swap: it updates the row
+`WHERE id = $1 AND state = $2` and reports whether it won. The caller passes the
+state it *read*, which is the live state, and the queue is at-least-once
+(ADR-001). Those two facts together meant `claimStep(stepId, "running")` **succeeded**.
+
+So a redelivery of the same event starts a second invocation while the first is
+still inside the step body, both execute it, and both publish. The step's
+idempotency key (ADR-005) does not save it: that only helps connectors which
+implement the receipt cache, and not all of them do.
+
+v0.8.0 tested this by claiming twice *from `pending`*, which passes and proves
+nothing — `pending` is not the state a concurrent invocation ever observes.
+
+**Decision.** A claim carries a lease. `claimStep` refuses a step observed in
+`running` until its `started_at` is older than `STEP_CLAIM_LEASE_MS` (5
+minutes), enforced in the same `WHERE` clause as the state comparison so the
+refusal is atomic with the claim.
+
+**Consequences.**
+
+- **One predicate fixes two opposite problems.** Refusing `running` outright
+  would trade a double-execution bug for a permanently stuck run, because
+  `releaseStepClaim` runs in a `catch` and a worker killed outright never reaches
+  one. The lease makes an unrecoverable crash eventually recoverable, and
+  `releaseStepClaim` still makes a recoverable one immediate. Both are needed.
+- **The lease is long on purpose.** A model call is bounded at 30s and a publish
+  is bounded by the connector deadline (ADR-012), so a step still `running` after
+  five minutes is not slow, it is gone. It is also the approval sweeper's
+  cadence, so a reclaimed step is noticed on the same tick a lapsed approval is.
+- **The clock is a parameter.** `claimStep(stepId, from, now)` takes `now` so the
+  lease arithmetic is testable without waiting five minutes — the same rule
+  `runtime/view.ts` follows for the approval deadline.
+- **A stale claim is not automatically reclaimed.** Nothing sweeps it. A step
+  recovers when the queue redelivers the run, which for a crashed step happens on
+  the next retry. An explicit sweeper remains unbuilt and is named below.
+
+**Deferred, deliberately.** Two related gaps are *not* addressed here and are
+recorded rather than half-solved: there is no graceful shutdown (no `process.on`
+handler anywhere), and no sweep for runs that are `running` with no live
+invocation. Both need a runtime story — Inngest's `concurrency` and
+`maxEvents` configuration, and a decision about what a shutdown means for an
+in-flight publish — and neither is made better by half of it shipping first.
+
+---
+
+### ADR-010 — A security boundary lives in the query, not in the caller
+
+**Status:** Accepted · Phase 8
+
+**Context.** ADR-008 scoped the Runtime read layer: every function in
+`runtime/queries.ts` takes a `userId` and puts it in the `WHERE` clause, because
+the cheap unscoped readers in `service.ts` sit in the same file and nothing
+stopped a page from reaching for one.
+
+`lib/chat.ts` had the same shape and a different excuse. `ensureSession` did
+check that a session belonged to the caller, so nothing was exploitable — but
+`appendMessage`, `loadMessages`, `saveSummary` and `touchSession` each took a
+bare `sessionId` and enforced nothing themselves. The guarantee was a property of
+every *call site*.
+
+Session ids are minted client-side, so they are attacker-supplied. One new
+caller that skipped `ensureSession` would have had no second line of defence, and
+the failure mode is a write into another user's transcript — a prompt-injection
+channel into a system that acts on that user's behalf.
+
+**Decision.** Every function in `lib/chat.ts` that touches a session takes a
+`userId` and scopes in its own query: `loadMessages` inner-joins the session's
+owner (messages have no `user_id` of their own — the owner is one join away, and
+that join *is* the authorization), and the two updates add `userId` to their
+`WHERE` clause. `appendMessage` checks ownership and throws, because silently
+dropping a user's message would look like an assistant bug.
+
+**Consequences.**
+
+- **The two checks are not redundant.** `ensureSession` decides whether a *new*
+  session may be minted for this user; these decide whether an *existing* row is
+  this user's to read or write. Removing either leaves a hole the other does not
+  cover.
+- **Reads are scoped by returning nothing, writes by doing nothing.** A read for
+  someone else's session is `[]`; an update is a no-op. Throwing on an update
+  would make every caller handle an exception for a condition that is simply
+  "not yours", and would make a wrong id louder than it needs to be.
+- **The test holds the effect, not the signature.** "The function takes a
+  `userId`" is not a property anyone can rely on — a test asserting it would
+  still pass with the `WHERE` clause deleted. `tests/integration/chat.test.ts`
+  seeds two users and asserts one cannot read or write the other's transcript, and
+  the suite was confirmed to fail with the guards removed.
+
+---
+
+### ADR-011 — The OAuth `state` is signed, and PKCE is what closes the replay
+
+**Status:** Accepted · Phase 8
+
+**Context.** The `state` parameter was `base64url(JSON.stringify({ userId,
+returnUrl }))` — the same encoding a client uses, with no signature and no
+expiry. The callback's only check was `state.userId === session.id`, so the whole
+defence against an account-link CSRF was *knowing the victim's user id*, which is
+not a secret.
+
+The attack: an attacker starts their own connect flow, takes the authorization
+code returned to their own callback, and walks a victim through a callback URL
+carrying that code and a `state` naming them. The victim's account is then linked
+to the attacker's social account.
+
+**Decision.** `lib/oauth-state.ts` signs the payload with `AUTH_SECRET`
+(HMAC-SHA256, compared with `timingSafeEqual`) and puts `iat` *inside* the
+signature. Verification happens **before** the parse: a signature that does not
+verify means the bytes are not ours, and parsing them anyway would be treating
+attacker input as state.
+
+**Consequences.**
+
+- **Signing closes the forgery; PKCE closes the replay. Neither substitutes for
+  the other.** `state` is not single-use and this module does not make it so;
+  a nonce would need a store. Replaying a *captured genuine* state still requires
+  a `code` the platform issued for that flow, and the token exchange sends the
+  `code_verifier` whose only copy is the httpOnly `pkce_<platform>` cookie. An
+  attacker holding a captured state string does not hold that cookie, so the
+  replay cannot complete. A nonce store would defend against a threat that PKCE
+  already forecloses, at the cost of a table and a write on every connect.
+- **The window is 10 minutes, matching the PKCE cookie's `maxAge`.** A state
+  outliving its own verifier is a state that can no longer complete a flow, so
+  accepting it longer buys nothing.
+- **Expiry is inclusive, matching `isOverdue`.** Two places in one codebase that
+  both mean "expired" should not answer differently at the boundary.
+- **`safeReturnPath` is still applied afterwards.** A signature proves *we minted
+  it*, not that the value is safe to use; a future caller could sign whatever it
+  liked.
+- **The Facebook GET branch still omits `code_verifier`.** That is per Meta's
+  documented manual flow, and PKCE is optional on a branch that sends a client
+  secret. Left as-is deliberately, and the reason is in the code.
+
+---
+
+### ADR-012 — Every outbound request has a deadline
+
+**Status:** Accepted · Phase 8
+
+**Context.** `fetch` has no timeout by default. A platform that accepts a
+connection and then stops answering — a hung load balancer, a rate limiter
+holding a request open, a DNS black hole — leaves the promise pending forever.
+In Next.js that is a request that never returns and a server action that never
+settles.
+
+This is worse here than it would be in an ordinary app, because publishing is
+*sequential within a run*: Instagram creates a container, polls it, then publishes
+it; Threads is the same. One hung call is not one slow publish, it is a run
+holding a claimed step and never settling. There were 27 such calls.
+
+**Decision.** All outbound traffic goes through `lib/http.ts::fetchWithTimeout`,
+with a 15-second default. A source-scanning test fails if any module outside
+`lib/http.ts` calls `fetch` directly.
+
+**Consequences.**
+
+- **The test is the mechanism, not the edit.** Hand-editing 27 call sites is a
+  change that is correct today and half-finished in six months. The guard fails
+  the moment a twenty-eighth connector is written without a deadline — which is
+  the moment it matters, and long before anyone notices a stuck run in
+  production.
+- **The caller's signal is composed, not replaced.** A caller with a shorter
+  deadline must still win, or the helper would be a way of *extending* a request
+  past the limit its own author set. A caller's abort is also not reported as a
+  timeout, because "the platform did not respond" and "we cancelled" are
+  different failures.
+- **Errors name the host, not the URL.** Outbound URLs carry
+  `?access_token=…`, and a timeout is exactly the error a user pastes into a
+  support ticket. The full URL stays on the error object for a log somebody has
+  consciously decided to write.
+- **Existing behaviour is preserved by construction.** Every one of those call
+  sites already had a `catch` that turns a throw into a failed result, so a
+  timeout becomes an ordinary publish failure rather than a 500.
+- **The claim lease (ADR-009) is the safety net, not the fix.** A five-minute
+  lease bounds how long a stuck step blocks a run; the timeout is what stops the
+  call being stuck at all.
 
 ---
 

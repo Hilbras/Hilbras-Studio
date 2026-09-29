@@ -4,6 +4,8 @@ import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
 import { readPlatformAppCredentials } from "@/lib/platform-credentials";
 import { verifyAppCredentials } from "@/lib/platform-app-check";
+import { signState } from "@/lib/oauth-state";
+import { getSecretKey } from "@/lib/secret-key";
 
 export async function GET(
   req: NextRequest,
@@ -61,7 +63,11 @@ export async function GET(
     req.headers.get("referer"),
     `${requestOrigin(req)}/settings/credentials`
   );
-  const state = Buffer.from(JSON.stringify({ userId: session.id, returnUrl })).toString("base64url");
+  // Signed, and expiring. Until v0.9.5 this was unsigned base64url JSON, so the
+  // only thing standing between an attacker and an account-link CSRF was knowing
+  // the victim's user id. See `lib/oauth-state.ts` for why signing is what closes
+  // the forgery and PKCE is what closes the replay.
+  const state = signState({ userId: session.id, returnUrl }, getSecretKey());
 
   const codeVerifier = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const hashed = await crypto.subtle.digest("SHA-256", Buffer.from(codeVerifier));

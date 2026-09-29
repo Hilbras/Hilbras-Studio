@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Loader2, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { fetchWithTimeout } from "@/lib/http";
 
 /**
  * Publish everything that is due right now.
@@ -23,7 +24,7 @@ export function PublishDueButton() {
     setRunning(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/cron/publish-scheduled", {
+      const response = await fetchWithTimeout("/api/cron/publish-scheduled", {
         method: "POST",
       });
       const result = (await response.json()) as {

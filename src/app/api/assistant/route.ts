@@ -117,10 +117,10 @@ export async function POST(req: NextRequest) {
   const chat = await ensureSession(session.id, sessionId, message);
   if (!chat) return errorJson("Chat not found.", "FORBIDDEN", 403);
 
-  await appendMessage(sessionId, "user", message);
+  await appendMessage(session.id, sessionId, "user", message);
 
   // ── Context: recent turns verbatim, older ones summarized ──
-  const all = await loadMessages(sessionId);
+  const all = await loadMessages(session.id, sessionId);
   let summary = chat.summary ?? "";
   let summaryUpTo = chat.summaryUpTo ?? 0;
 
@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
         // Oldest text falls off the front so the block stays bounded.
         summary = `${summary ? `${summary}\n\n` : ""}${add}`.slice(-4000);
         summaryUpTo = olderCount;
-        await saveSummary(sessionId, summary, summaryUpTo);
+        await saveSummary(session.id, sessionId, summary, summaryUpTo);
       }
     } catch {
       // summarization is best-effort — fall back to a shorter window
@@ -201,8 +201,8 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        await appendMessage(sessionId, "assistant", full.trim());
-        await touchSession(sessionId);
+        await appendMessage(session.id, sessionId, "assistant", full.trim());
+        await touchSession(session.id, sessionId);
         await memoryTask;
       } catch {
         // persistence failures must not break an already-delivered reply

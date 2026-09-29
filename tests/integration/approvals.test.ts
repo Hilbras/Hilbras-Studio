@@ -62,6 +62,7 @@ let testDb: ReturnType<typeof drizzle<typeof schema>>;
 let dbModule: typeof import("../../src/db");
 let goalService: typeof import("../../src/lib/goals/service");
 let runtimeService: typeof import("../../src/lib/runtime/service");
+let runtimeQueries: typeof import("../../src/lib/runtime/queries");
 let approvalStore: typeof import("../../src/lib/runtime/approval-store");
 let executor: typeof import("../../src/lib/runtime/executor");
 let originalDatabaseUrl: string | undefined;
@@ -85,6 +86,9 @@ beforeAll(async () => {
   runtimeService = await importForContainer<
     typeof import("../../src/lib/runtime/service")
   >("src/lib/runtime/service");
+  runtimeQueries = await importForContainer<
+    typeof import("../../src/lib/runtime/queries")
+  >("src/lib/runtime/queries");
   approvalStore = await importForContainer<
     typeof import("../../src/lib/runtime/approval-store")
   >("src/lib/runtime/approval-store");
@@ -953,6 +957,140 @@ describe("the window closing", () => {
     expect((await eventsOf(runId)).map((e) => e.event)).not.toContain(
       "step.claim_released",
     );
+  });
+
+  it("does not let a second invocation take a step that is still running", async () => {
+    // The one thing a claim has to be.
+    //
+    // `claimStep` was a compare-and-swap from whatever state the caller *read*,
+    // and the caller reads the live row. So a step observed as `running` could be
+    // "claimed" from `running` to `running` — and the queue is at-least-once, so
+    // a redelivery of the same event lands in a second invocation while the first
+    // is still inside the step body. Both would execute it, and both would
+    // publish. The idempotency key does not save it: that only helps connectors
+    // which implement the receipt cache, and not all of them do.
+    //
+    // v0.8.0 tested "claims a step exactly once" by claiming twice *from
+    // `pending`*. It never claimed from `running`, which is the only state a
+    // concurrent invocation ever observes.
+    const userId = await seedUser("claim_running");
+    const { stepId } = await seedPublishRun(userId);
+
+    expect(await runtimeService.claimStep(stepId, "pending")).toBe(true);
+    // A second invocation reading the live row sees `running`, and asks to claim
+    // from `running`. It must be refused.
+    expect(await runtimeService.claimStep(stepId, "running")).toBe(false);
+  });
+
+  it("reclaims a step whose worker never came back", async () => {
+    // The other half of the same rule, and the reason the refusal above is not
+    // simply "a running step is forever". `releaseStepClaim` runs in a `catch`,
+    // which a worker killed outright never reaches — so a claim needs a lease,
+    // not just a flag. Without one, refusing a `running` step would convert a
+    // double-execution bug into a permanently stuck run.
+    const userId = await seedUser("claim_lease");
+    const { stepId } = await seedPublishRun(userId);
+
+    const claimedAt = new Date("2026-09-29T10:00:00Z");
+    expect(await runtimeService.claimStep(stepId, "pending", claimedAt)).toBe(true);
+
+    // Just inside the lease: the holder is presumed alive.
+    const justInside = new Date(claimedAt.getTime() + runtimeService.STEP_CLAIM_LEASE_MS - 1);
+    expect(await runtimeService.claimStep(stepId, "running", justInside)).toBe(false);
+
+    // Past it: the worker is presumed gone, and the step is recoverable.
+    const justOutside = new Date(claimedAt.getTime() + runtimeService.STEP_CLAIM_LEASE_MS + 1);
+    expect(await runtimeService.claimStep(stepId, "running", justOutside)).toBe(true);
+  });
+
+  it("does not treat a non-running step as having a stale claim", async () => {
+    // The lease applies to `running` and nothing else. A `pending` step whose
+    // `startedAt` is old is not stale — it has never been claimed — and must stay
+    // claimable, or a long-old plan could never run.
+    const userId = await seedUser("claim_not_running");
+    const { stepId } = await seedPublishRun(userId);
+
+    const longAgo = new Date("2020-01-01T00:00:00Z");
+    expect(await runtimeService.claimStep(stepId, "pending", longAgo)).toBe(true);
+  });
+});
+
+/**
+ * v0.9.5 (Phase 8): `runs.error_summary` was declared in v0.5.0, selected by
+ * `queries.ts`, typed in two DTOs, and rendered in a panel on the run detail
+ * page — and nothing ever wrote it. A failed run showed an empty error box.
+ *
+ * The reason was that the `fail` event carried no reason: `transitionRun` knows
+ * only *that* a run failed, while the code that fails it knows why. So the reason
+ * is now carried on the event, which is the only place both can meet.
+ */
+describe("why a run failed", () => {
+  it("records the reason the caller supplied", async () => {
+    const userId = await seedUser("error_summary_set");
+    const { runId } = await seedPublishRun(userId);
+
+    await runtimeService.transitionRun(runId, { type: "start" });
+    await runtimeService.transitionRun(runId, {
+      type: "fail",
+      summary: "X rejected the post: duplicate content",
+    });
+
+    const [row] = await testDb.select().from(runs).where(eq(runs.id, runId));
+    expect(row!.errorSummary).toBe("X rejected the post: duplicate content");
+    expect(row!.state).toBe("failed");
+  });
+
+  it("leaves it null when the caller has nothing to add", async () => {
+    // Two of the three failure sites genuinely have no prose to offer, and a
+    // manufactured message would be worse than an honest blank.
+    const userId = await seedUser("error_summary_absent");
+    const { runId } = await seedPublishRun(userId);
+
+    await runtimeService.transitionRun(runId, { type: "start" });
+    await runtimeService.transitionRun(runId, { type: "fail" });
+
+    const [row] = await testDb.select().from(runs).where(eq(runs.id, runId));
+    expect(row!.errorSummary).toBeNull();
+  });
+
+  it("leaves it null on a run that succeeded", async () => {
+    // The summary describes how a run ended. A run that ended well did not fail,
+    // so a `succeed` must not clear or invent one.
+    const userId = await seedUser("error_summary_success");
+    const { runId } = await seedPublishRun(userId);
+
+    await runtimeService.transitionRun(runId, { type: "start" });
+    await runtimeService.transitionRun(runId, { type: "succeed" });
+
+    const [row] = await testDb.select().from(runs).where(eq(runs.id, runId));
+    expect(row!.errorSummary).toBeNull();
+    expect(row!.state).toBe("completed");
+  });
+
+  it("reaches the run detail screen", async () => {
+    // The end of the chain. Asserted through the owner-scoped read layer rather
+    // than straight from the table, because that layer is what the page uses and
+    // a column that is written but not selected is still an empty panel.
+    const userId = await seedUser("error_summary_query");
+    const { runId } = await seedPublishRun(userId);
+
+    await runtimeService.transitionRun(runId, { type: "start" });
+    await runtimeService.transitionRun(runId, {
+      type: "fail",
+      summary: "Threads rejected the post: media already published",
+    });
+
+    const detail = await runtimeQueries.getRunDetail(userId, runId);
+    expect(detail?.run.errorSummary).toBe(
+      "Threads rejected the post: media already published",
+    );
+
+    // And it is scoped like everything else in that module (ADR-008). The
+    // contract is "no row for you" rather than an error — an owner-scoped read
+    // that threw would let a caller distinguish *exists but not yours* from
+    // *does not exist*, which is a slow way to confirm an id is real.
+    const otherUser = await seedUser("error_summary_other");
+    expect(await runtimeQueries.getRunDetail(otherUser, runId)).toBeNull();
   });
 });
 

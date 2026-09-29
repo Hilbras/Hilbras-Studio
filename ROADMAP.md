@@ -556,6 +556,71 @@ scenario, end-to-end, and security tests.
 `connectors`, `capabilities`, `scheduling`, `security`, `permissions`,
 `deployment`, `development`, `ai/*`.
 
+### v0.9.5 — shipped ✅
+
+A hardening phase is mostly the phase where you find out what the earlier ones
+were wrong about. Three of the fixes below are for defects introduced *by* shipped
+releases, which is the honest reason to expect more from this phase the longer
+the product exists.
+
+**Two bugs the tests were written not to catch.** `claimStep` was a
+compare-and-swap from the state the caller *read*, so `claimStep(stepId,
+"running")` succeeded — and the queue is at-least-once, so a redelivery executed
+the same step twice in parallel and published twice. The v0.8.0 test claimed twice
+from `pending`, which passes and proves nothing, because `pending` is not the
+state a concurrent invocation ever observes. `runs.error_summary` existed since
+v0.5.0, was selected, typed, and rendered in a panel — and nothing ever wrote it,
+so every failed run showed an empty error box.
+
+**Two lists that had drifted.** Phase 7 added four routes to `PROTECTED` and not
+to the middleware `matcher`, so `/runtime`, `/runs`, `/goals` and `/approvals` —
+the four screens that release was about — never reached the middleware at all.
+Nothing failed, because every page checks its own session; the only symptom was
+the edge redirect and the auth throttle silently not applying. The matcher has to
+be a literal (Next.js statically parses it — the derived form was tried and the
+build rejects it), so `src/proxy.test.ts` is what holds the two together. The
+lesson generalises: `AUTH_SECRET` was likewise read through two copies of the
+same function, and is now one module.
+
+**Security.** The OAuth `state` was unsigned base64url JSON, so the only defence
+against an account-link CSRF was knowing a victim's user id (ADR-011). Both
+secrets were checked for presence and not for length, so `ENCRYPTION_KEY=a` was a
+valid production configuration that encrypted every token in the database with
+something derived from one character. `lib/crypto.ts` — the foundation of every
+stored secret — had **zero tests**; writing them immediately found a second bug,
+where an empty secret could be encrypted but never decrypted back. No outbound
+request had a timeout, and publishing is sequential within a run, so one hung call
+was a run that never settled (ADR-012). `lib/chat.ts` scoped its queries by
+nothing but a client-supplied session id (ADR-010).
+
+**Deliberately deferred**, each with a reason in [`docs/security.md`](docs/security.md) §4
+and [`docs/runtime.md`](docs/runtime.md): the audit log, `kid` in the ciphertext
+so `ENCRYPTION_KEY` can be rotated, outbound token revocation, graceful shutdown,
+and gating manual/scheduled publishes on `execution_policies`. The last one is
+the only decision that changes what an existing setting means, so it is called out
+in the changelog rather than left for someone to discover.
+
+### Phase 8 checklist
+
+- [x] Fix the claim double-execution hole; claims are leases (ADR-009).
+- [x] Fix the middleware matcher/`PROTECTED` drift, and test it.
+- [x] Write `runs.error_summary` from the failure that knows why.
+- [x] Sign and expire the OAuth `state` (ADR-011).
+- [x] Validate secret *strength*, not just presence; one module reads `AUTH_SECRET`.
+- [x] Test `lib/crypto.ts`; fix the empty-secret round trip it found.
+- [x] A deadline on every outbound request, and a test that keeps it (ADR-012).
+- [x] Owner-scope the chat queries (ADR-010).
+- [x] Fix the unencoded access token in the Instagram inbox URL.
+- [x] Remove the unused plaintext-secret getter from the credentials action.
+- [x] `docs/development.md` — the one genuinely missing doc.
+- [x] `scripts/mutate-phase8.sh`.
+- [ ] An audit log for security events. Needs a table, a migration, six writers
+      and a screen; half of it is worse than none.
+- [ ] `kid` in the ciphertext, so `ENCRYPTION_KEY` becomes rotatable.
+- [ ] Graceful shutdown, and a stale-`running` sweep.
+- [ ] Inngest `concurrency` / `throttle` / `maxEvents`.
+- [ ] Tests for `runtime/inngest/functions.ts` (crash recovery, retry, resume).
+
 ---
 
 ## Phase 9 — v1.0.0

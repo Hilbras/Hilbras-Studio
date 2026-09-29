@@ -6,6 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { getSecretKey } from "@/lib/secret-key";
 
 /**
  * Stateless JWT sessions stored in httpOnly cookies.
@@ -20,16 +21,6 @@ import { eq } from "drizzle-orm";
 
 const SESSION_COOKIE = "hilbras_session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
-
-function getSecretKey(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("AUTH_SECRET must be set in production");
-  }
-  return new TextEncoder().encode(
-    secret ?? "dev-only-insecure-secret-do-not-use-in-prod"
-  );
-}
 
 export interface SessionUser {
   id: string;

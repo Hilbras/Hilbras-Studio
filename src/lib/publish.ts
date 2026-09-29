@@ -2,6 +2,7 @@ import "server-only";
 
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "@/db";
+import { fetchWithTimeout } from "./http";
 import { accounts, connections } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { getPublishingCapability, PLATFORM_REGISTRY } from "@/lib/platforms";
@@ -64,7 +65,7 @@ export async function telegramApi<T>(
   payload: Record<string, unknown>
 ): Promise<TelegramApiResult<T>> {
   try {
-    const res = await fetch(`${TELEGRAM_API}/bot${token}/${method}`, {
+    const res = await fetchWithTimeout(`${TELEGRAM_API}/bot${token}/${method}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -300,7 +301,7 @@ async function containerReady(
 ): Promise<"ready" | "failed" | "unknown"> {
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${GRAPH_INSTAGRAM}/${containerId}?fields=status_code&access_token=${encodeURIComponent(token)}`
       );
       if (res.ok) {
@@ -326,7 +327,7 @@ async function instagramPermalink(
   token: string
 ): Promise<string | undefined> {
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${GRAPH_INSTAGRAM}/${mediaId}?fields=permalink&access_token=${encodeURIComponent(token)}`
     );
     if (!res.ok) return undefined;
@@ -460,7 +461,7 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
 
   try {
     // Step 1: create the media container.
-    const containerRes = await fetch(`${GRAPH_INSTAGRAM}/${igUserId}/media`, {
+    const containerRes = await fetchWithTimeout(`${GRAPH_INSTAGRAM}/${igUserId}/media`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -495,7 +496,7 @@ async function publishToInstagram(userId: string, text: string, imageUrl?: strin
     }
 
     // Step 3: publish the container.
-    const publishRes = await fetch(`${GRAPH_INSTAGRAM}/${igUserId}/media_publish`, {
+    const publishRes = await fetchWithTimeout(`${GRAPH_INSTAGRAM}/${igUserId}/media_publish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -537,7 +538,7 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
 
   try {
     // Get user's pages
-    const pagesRes = await fetch(
+    const pagesRes = await fetchWithTimeout(
       `${GRAPH_FACEBOOK}/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(token)}`
     );
     if (!pagesRes.ok) {
@@ -565,7 +566,7 @@ async function publishToFacebook(userId: string, text: string, imageUrl?: string
       body.url = imageUrl;
     }
 
-    const publishRes = await fetch(
+    const publishRes = await fetchWithTimeout(
       `${GRAPH_FACEBOOK}/${page.id}/feed`,
       {
         method: "POST",
@@ -606,7 +607,7 @@ async function publishToX(userId: string, text: string, accountKey?: string): Pr
   }
 
   try {
-    const res = await fetch("https://api.x.com/2/tweets", {
+    const res = await fetchWithTimeout("https://api.x.com/2/tweets", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${account.accessToken}`,
@@ -686,7 +687,7 @@ async function threadsContainerReady(
 
   for (;;) {
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${GRAPH_THREADS}/${containerId}?fields=status,error_message&access_token=${encodeURIComponent(token)}`
       );
       if (res.ok) {
@@ -717,7 +718,7 @@ async function threadsPermalink(
   token: string
 ): Promise<string | undefined> {
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${GRAPH_THREADS}/${mediaId}?fields=permalink&access_token=${encodeURIComponent(token)}`
     );
     if (!res.ok) return undefined;
@@ -767,7 +768,7 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string,
     if (imageUrl && mediaType === "IMAGE") containerParams.image_url = imageUrl;
     if (imageUrl && mediaType === "VIDEO") containerParams.video_url = imageUrl;
 
-    const containerRes = await fetch(`${GRAPH_THREADS}/${threadsUserId}/threads`, {
+    const containerRes = await fetchWithTimeout(`${GRAPH_THREADS}/${threadsUserId}/threads`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(containerParams).toString(),
@@ -806,7 +807,7 @@ async function publishToThreads(userId: string, text: string, imageUrl?: string,
     }
 
     // Step 3: publish the container.
-    const publishRes = await fetch(`${GRAPH_THREADS}/${threadsUserId}/threads_publish`, {
+    const publishRes = await fetchWithTimeout(`${GRAPH_THREADS}/${threadsUserId}/threads_publish`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

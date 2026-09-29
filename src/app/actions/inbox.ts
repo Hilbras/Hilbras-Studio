@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { listGrants } from "@/lib/accounts/store";
 import { getSessionUser } from "@/lib/session";
+import { fetchWithTimeout } from "@/lib/http";
 import { decryptSecret } from "@/lib/crypto";
 
 export interface InboxMessage {
@@ -44,7 +45,7 @@ function relativeTime(dateStr: string): string {
 
 async function fetchXMessages(accessToken: string): Promise<InboxMessage[]> {
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       "https://api.twitter.com/2/users/me/mentions?max_results=10&tweet.fields=created_at,text,author_id&user.fields=name,username",
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
@@ -77,9 +78,17 @@ async function fetchInstagramMessages(
   accessToken: string
 ): Promise<InboxMessage[]> {
   try {
-    const res = await fetch(
-      `https://graph.instagram.com/v25.0/me/conversations?fields=messages{message,from,created_time}&access_token=${accessToken}`
-    );
+    // Built with `URLSearchParams` rather than by interpolating the token into a
+    // template. Instagram access tokens routinely contain `&`, `=`, `+` and `/`,
+    // and an unencoded one silently truncates the request at the first `&` — a
+    // message list that comes back empty with a 200, which reads as "no new
+    // messages" rather than as a bug. It also keeps the token out of the request
+    // line, where it would otherwise be the most obvious thing in any proxy log.
+    const url = new URL("https://graph.instagram.com/v25.0/me/conversations");
+    url.searchParams.set("fields", "messages{message,from,created_time}");
+    url.searchParams.set("access_token", accessToken);
+
+    const res = await fetchWithTimeout(url);
     if (!res.ok) return [];
     const data = await res.json();
     if (!data.data) return [];
@@ -178,7 +187,7 @@ export async function sendReply(
 
   try {
     if (parsed.data.platform === "x") {
-      const res = await fetch("https://api.twitter.com/2/tweets", {
+      const res = await fetchWithTimeout("https://api.twitter.com/2/tweets", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,

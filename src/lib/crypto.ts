@@ -15,15 +15,38 @@ const ALGORITHM = "aes-256-gcm";
 const IV_BYTES = 12;
 const KEY_BYTES = 32;
 
+/**
+ * The shortest key accepted in production.
+ *
+ * `openssl rand -hex 32` produces 64 hex characters and is what the README tells
+ * an operator to run. A passphrase is still accepted and stretched with scrypt,
+ * but it has to be long enough to be worth stretching: `ENCRYPTION_KEY=a` used
+ * to produce a perfectly working 32-byte key, and that is the worst outcome
+ * available — the deployment starts, encrypts every OAuth token in the database
+ * with something derived from one character, and nothing anywhere reports a
+ * problem. Presence was checked; strength was not.
+ */
+const MIN_KEY_CHARS = 32;
+
+/** Used only when `NODE_ENV` is not production, so a checkout runs unconfigured. */
+const DEV_FALLBACK = "dev-only-insecure-encryption-key-change-before-production";
+
 function getMasterKey(): Buffer {
   const raw = process.env.ENCRYPTION_KEY;
+  const isProduction = process.env.NODE_ENV === "production";
 
-  if (!raw && process.env.NODE_ENV === "production") {
+  if (!raw && isProduction) {
     throw new Error("ENCRYPTION_KEY must be set in production");
   }
 
-  const effective =
-    raw ?? "dev-only-insecure-encryption-key-change-before-production";
+  const effective = raw ?? DEV_FALLBACK;
+
+  if (isProduction && effective.length < MIN_KEY_CHARS) {
+    throw new Error(
+      `ENCRYPTION_KEY must be at least ${MIN_KEY_CHARS} characters in production. ` +
+        "Generate one with: openssl rand -hex 32",
+    );
+  }
 
   // Prefer a raw 32-byte hex key (openssl rand -hex 32);
   // fall back to deriving one deterministically from any passphrase.
@@ -54,7 +77,11 @@ export function encryptSecret(plaintext: string): string {
 /** Decrypt a payload produced by encryptSecret. Throws if tampered or wrong key. */
 export function decryptSecret(payload: string): string {
   const [ivPart, tagPart, dataPart] = payload.split(".");
-  if (!ivPart || !tagPart || !dataPart) {
+  // `undefined` rather than falsy, because an *empty* secret encrypts to an empty
+  // ciphertext and `base64url("")` is `""`. A truthiness check here made
+  // `decryptSecret(encryptSecret(""))` throw "malformed" on a payload this
+  // module had itself just written — found by the round-trip test in v0.9.5.
+  if (ivPart === undefined || tagPart === undefined || dataPart === undefined) {
     throw new Error("Malformed encrypted payload");
   }
 

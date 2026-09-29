@@ -9,8 +9,18 @@ import { chatSessions, chatMessages, memories } from "@/db/schema";
  * Assistant persistence: sessions, their messages, and long-term memory.
  *
  * The session id is minted client-side so the client can render optimistically
- * before the first token arrives; `ensureSession` owns the "does it exist and
- * is it yours" check, and a collision with someone else's id is rejected.
+ * before the first token arrives; `ensureSession` mints or fetches a session and
+ * rejects a collision with someone else's id.
+ *
+ * **Every function below also takes `userId` and puts it in its own `WHERE`
+ * clause.** `ensureSession` used to be the only thing standing between one user's
+ * session id and another user's messages, which made the guarantee a property of
+ * every call site rather than of this module — and call sites are exactly what
+ * gets written by someone who has not read this comment. This is the same rule
+ * ADR-008 set for the Runtime read layer, applied here for the same reason. The
+ * two checks are not redundant: `ensureSession` decides whether a *new* session
+ * may be minted for this user, and these decide whether an *existing* row is
+ * this user's to read or write.
  */
 
 /** Turns kept verbatim in the model's context; older ones get summarized. */
@@ -53,38 +63,60 @@ export async function ensureSession(
 }
 
 export async function appendMessage(
+  userId: string,
   sessionId: string,
   role: "user" | "assistant",
   content: string
 ): Promise<void> {
   if (!content.trim()) return;
+  // Checked here rather than trusted from the caller, because the alternative is
+  // that the only thing stopping a write into another user's transcript is
+  // someone remembering to check. Throws rather than returning quietly: a
+  // missing row here means a session id that is not this user's, and silently
+  // dropping the user's message would look like a bug in the assistant.
+  await assertOwnedSession(userId, sessionId);
   await db.insert(chatMessages).values({
     id: randomUUID(),
     sessionId,
     role,
     content,
   });
-  await touchSession(sessionId);
+  await touchSession(userId, sessionId);
 }
 
-export async function touchSession(sessionId: string): Promise<void> {
+export async function touchSession(
+  userId: string,
+  sessionId: string
+): Promise<void> {
   await db
     .update(chatSessions)
     .set({ updatedAt: new Date() })
-    .where(eq(chatSessions.id, sessionId));
+    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, userId)));
 }
 
-/** All turns of a session, oldest first. */
-export async function loadMessages(sessionId: string): Promise<MessageRow[]> {
+/**
+ * All turns of a session, oldest first.
+ *
+ * Scoped by joining to the session's owner rather than filtering messages
+ * directly, because `chat_messages` has no `user_id` of its own — the owner
+ * lives one join away, and that join is the authorization.
+ */
+export async function loadMessages(
+  userId: string,
+  sessionId: string
+): Promise<MessageRow[]> {
   return db
-    .select()
+    .select({ row: chatMessages })
     .from(chatMessages)
-    .where(eq(chatMessages.sessionId, sessionId))
+    .innerJoin(chatSessions, eq(chatMessages.sessionId, chatSessions.id))
+    .where(and(eq(chatMessages.sessionId, sessionId), eq(chatSessions.userId, userId)))
     .orderBy(asc(chatMessages.createdAt))
-    .limit(MAX_RELOAD_MESSAGES);
+    .limit(MAX_RELOAD_MESSAGES)
+    .then((rows) => rows.map((r) => r.row));
 }
 
 export async function saveSummary(
+  userId: string,
   sessionId: string,
   summary: string,
   summaryUpTo: number
@@ -92,7 +124,17 @@ export async function saveSummary(
   await db
     .update(chatSessions)
     .set({ summary, summaryUpTo })
-    .where(eq(chatSessions.id, sessionId));
+    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, userId)));
+}
+
+/** The session, if it exists and belongs to `userId`. */
+async function assertOwnedSession(userId: string, sessionId: string): Promise<void> {
+  const [row] = await db
+    .select({ id: chatSessions.id })
+    .from(chatSessions)
+    .where(and(eq(chatSessions.id, sessionId), eq(chatSessions.userId, userId)))
+    .limit(1);
+  if (!row) throw new Error(`Chat session ${sessionId} is not available`);
 }
 
 /* ── Sessions (user-facing) ─────────────────────────────────── */

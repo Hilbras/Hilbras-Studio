@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
+import { getSecretKey } from "@/lib/secret-key";
+
 const SESSION_COOKIE = "hilbras_session";
 
 /**
@@ -35,19 +37,13 @@ const PROTECTED = [
 const AUTH_PAGES = ["/login", "/signup"];
 
 /**
- * Same rule as getSecretKey in lib/session.ts: production must never fall
- * back to a shared hardcoded key — a forgotten AUTH_SECRET fails loudly
- * instead of minting sessions anyone can forge.
+ * Exported for `proxy.test.ts` only.
+ *
+ * The matcher below has to be a literal, so these lists cannot be derived from
+ * it and it cannot be derived from them. The test is the only thing standing
+ * between them, and it can only stand between them if it can read both.
  */
-function getSecretKey(): Uint8Array {
-  const secret = process.env.AUTH_SECRET;
-  if (!secret && process.env.NODE_ENV === "production") {
-    throw new Error("AUTH_SECRET must be set in production");
-  }
-  return new TextEncoder().encode(
-    secret ?? "dev-only-insecure-secret-do-not-use-in-prod"
-  );
-}
+export const ROUTE_GUARDS = { PROTECTED, AUTH_PAGES };
 
 /**
  * Best-effort burst throttle for auth form posts (server-action submissions
@@ -187,8 +183,29 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
+  /**
+   * **Must be written out literally.** Next.js statically parses this field and
+   * rejects anything it cannot resolve to static strings, so it cannot be
+   * derived from `PROTECTED` — tried, and the build fails.
+   *
+   * That leaves two lists to keep in step, and they had drifted: Phase 7 added
+   * `/runtime`, `/runs`, `/goals`, and `/approvals` to `PROTECTED` and not
+   * here, so the middleware never ran for the four screens the release was
+   * about. Nothing failed — each page checks the session itself, so the only
+   * symptom was the edge redirect and the auth throttle silently not applying,
+   * on the newest routes. A list that must be edited in two places is a list
+   * that will be edited in one place.
+   *
+   * `src/proxy.test.ts` is what holds them together: it fails if any entry of
+   * `PROTECTED` or `AUTH_PAGES` is missing from here. The literal is the
+   * framework's requirement; the test is the invariant.
+   */
   matcher: [
     "/dashboard/:path*",
+    "/runtime/:path*",
+    "/runs/:path*",
+    "/goals/:path*",
+    "/approvals/:path*",
     "/assistant/:path*",
     "/accounts/:path*",
     "/composer/:path*",

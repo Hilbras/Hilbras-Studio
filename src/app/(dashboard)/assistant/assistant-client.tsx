@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
+
+import { fetchWithTimeout } from "@/lib/http";
 import {
   Card,
   CardContent,
@@ -163,7 +165,7 @@ export function AssistantClient({
     if (isNew) setActiveTitle(msg.replace(/\s+/g, " ").slice(0, 60));
 
     try {
-      const res = await fetch("/api/assistant", {
+      const res = await fetchWithTimeout("/api/assistant", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: id, message: msg }),

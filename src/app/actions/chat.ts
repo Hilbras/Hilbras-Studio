@@ -69,7 +69,7 @@ export async function loadChatSession(
   const row = await getSessionOwned(session.id, parsed.data);
   if (!row) return null;
 
-  const messages = await loadMessages(id);
+  const messages = await loadMessages(session.id, parsed.data);
   return {
     title: row.title,
     messages: messages.map((m) => ({ id: m.id, role: m.role, content: m.content })),

@@ -13,6 +13,146 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.9.5] — 2026-09-29
+
+v1.0 hardening. A hardening phase is mostly the phase where you find out what the
+earlier ones were wrong about, and two of the fixes below are for defects
+introduced *by* shipped releases.
+
+### Fixed
+
+- **A step could be executed twice, concurrently.** `claimStep` was a
+  compare-and-swap from whatever state the caller *read* — which is the live
+  state — so `claimStep(stepId, "running")` **succeeded**. The queue is
+  at-least-once, so a redelivery of the same event started a second invocation
+  while the first was still inside the step body; both executed it, and both
+  published. The step's idempotency key did not save it: that only helps
+  connectors which implement the receipt cache, and not all of them do. The
+  v0.8.0 test claimed twice *from `pending`*, which passes and proves nothing,
+  because `pending` is not the state a concurrent invocation ever observes.
+  Claims are now leases (ADR-009).
+- **The middleware did not run on the four screens v0.9.0 was about.** Phase 7
+  added `/runtime`, `/runs`, `/goals` and `/approvals` to the `PROTECTED` list in
+  `src/proxy.ts` and not to the `config.matcher`, so the edge redirect and the
+  auth-POST throttle silently did not apply to them. Nothing failed — every page
+  checks its own session — which is why nothing caught it. `src/proxy.test.ts`
+  now holds the two lists together.
+- **`runs.error_summary` was never written.** The column existed since v0.5.0,
+  was selected by `queries.ts`, typed in two DTOs, and rendered in a panel on the
+  run detail page. A failed run showed an empty error box, permanently. The `fail`
+  event now carries a `summary`, supplied by the code that knows the reason —
+  `planRun`'s refusal, the `no_steps` backstop, or the first failing step's
+  connector error.
+- **An empty secret could be encrypted but never decrypted back.**
+  `decryptSecret` guarded its three payload parts with a truthiness check, and
+  `encryptSecret("")` writes a zero-length ciphertext whose `base64url` is `""` —
+  so the module refused a payload it had just written. Found by writing
+  `src/lib/crypto.test.ts`, which did not exist until this release.
+- **The Instagram inbox request truncated itself.** The access token was
+  interpolated raw into a query string. Tokens routinely contain `&`, `=`, `+` and
+  `/`, so a token containing `&` silently cut the request short and returned an
+  empty message list with a `200` — which reads as "no new messages", not as a
+  bug. Built with `URLSearchParams` now.
+- Removed `getCredentialValue` from the credentials action: an exported
+  plaintext-secret getter in a `"use server"` module with no callers.
+- Corrected two comments that described systems which do not exist — a
+  "run-timeout sweep" in `runtime/state.ts`, and a claim comment that described
+  the lease as an unbounded hold.
+
+### Security
+
+- **The OAuth `state` was unsigned and unexpiring.** It was
+  `base64url(JSON.stringify({ userId, returnUrl }))` — the same encoding a client
+  uses — and the callback's only check was `state.userId === session.id`. The
+  entire defence against an account-link CSRF was *knowing a victim's user id*:
+  an attacker took a code returned to their own callback and walked a victim
+  through a callback URL naming them, linking the attacker's social account to
+  the victim's. `state` is now signed with `AUTH_SECRET` and verified **before**
+  the parse (ADR-011).
+  - It is deliberately **not** single-use. Replaying a captured genuine state
+    still needs a `code` issued for that flow, and the exchange sends the
+    `code_verifier` held only in an httpOnly cookie. **Signing closes the forgery;
+    PKCE closes the replay.** A nonce store would defend against a threat PKCE
+    already forecloses, at the cost of a table and a write on every connect.
+- **Both secrets were checked for presence and not for length.** `ENCRYPTION_KEY=a`
+  and `AUTH_SECRET=x` were valid production configurations: the deployment
+  started, encrypted every stored token and signed every session cookie with
+  something derived from one character, and nothing reported a problem. Both now
+  require 32 characters in production and fail startup with the command to
+  generate a proper one.
+- **`AUTH_SECRET` was read through two copies of the same function** — one in
+  `src/proxy.ts`, one in `src/lib/session.ts` — so a fix to one would not have
+  reached the other. Now one module, `src/lib/secret-key.ts`.
+- **No outbound request had a timeout.** `fetch` waits forever by default, and
+  publishing is *sequential within a run* — Instagram creates a container, polls
+  it, then publishes it — so one platform that accepted the connection and stopped
+  answering left the run holding a claimed step and never settling. All 27
+  outbound calls now go through `fetchWithTimeout` with a 15-second default, and
+  a source-scanning test fails if any module calls `fetch` directly (ADR-012).
+- **The assistant's transcript queries were scoped by nothing but a
+  client-supplied session id.** `loadMessages`, `appendMessage`, `saveSummary` and
+  `touchSession` each took a bare `sessionId`. `ensureSession` did check
+  ownership, so nothing was exploitable — but the guarantee was a property of
+  every *call site* rather than of the module, and session ids are minted
+  client-side. All four now take a `userId` and scope in their own `WHERE` clause
+  (ADR-010).
+- `HttpTimeoutError` reports the **host**, not the URL. Outbound URLs carry
+  `?access_token=…`, and a timeout is exactly the error a user pastes into a
+  support ticket.
+
+### Added
+
+- `docs/development.md` — the one document the roadmap named and the repository
+  did not have. The invariants a change must not break, the enforced checks, the
+  three drift guards, the mutation-harness rules, and the two reasons the harness
+  can lie.
+- `src/lib/secret-key.ts` — one reader for `AUTH_SECRET`, shared by the Edge
+  middleware and the session module, with the production strength rule.
+- `src/lib/http.ts` — outbound HTTP with a deadline. The only place `fetch` is
+  called, enforced by a test.
+- `scripts/mutate-phase8.sh` — 23 mutations, 0 holes.
+
+### Changed
+
+- A claim is a lease: a `running` step is not re-claimable until
+  `STEP_CLAIM_LEASE_MS` (5 minutes) has passed. Five minutes is generous on
+  purpose — a model call is bounded at 30s and a publish is bounded by the
+  connector deadline, so a step still `running` after that long is not slow, it is
+  gone. `releaseStepClaim` still makes a recoverable crash immediate; the lease
+  makes an unrecoverable one eventual.
+- `claimStep(stepId, from, now)` takes the clock as a parameter, so the lease
+  arithmetic is testable without waiting five minutes — the same rule
+  `runtime/view.ts` follows for the approval deadline.
+
+### Not changed, on purpose
+
+- **`execution_policies` still do not gate manual or scheduled publishes.** They
+  are consulted before the Runtime runs a step, so they govern AI-planned runs
+  only. Gating the composer and the scheduler would mean a manual publish stops
+  working for anyone holding a `disabled` policy — a visible regression in
+  exchange for a guarantee about a code path the policy was never designed to
+  govern. If you set a platform to `disabled`, a post you schedule by hand will
+  still publish. This is the one change in this release that alters what an
+  existing setting means, which is why it is here rather than in the code.
+- **No audit log.** Logins, failed logins, connects, disconnects, credential
+  changes and policy changes are still unrecorded. It is a table, a migration,
+  six writers and a screen; an audit log that misses the event you are
+  investigating is worse than knowing there is not one.
+- **No `kid` in the ciphertext**, so `ENCRYPTION_KEY` cannot be rotated. Adding
+  one changes the stored format of every secret and needs a migration, and a
+  migration that is wrong is unrecoverable in a way that a missing feature is not.
+- **No graceful shutdown, no stale-`running` sweep, no Inngest
+  `concurrency`/`throttle`/`maxEvents`, no outbound token revocation.** All
+  recorded with reasons in `docs/runtime.md` and `docs/security.md`.
+- **No tests for `runtime/inngest/functions.ts`** (crash recovery, retry,
+  concurrency, resume). The largest remaining gap, and the reason two of the bugs
+  above went unnoticed for a release.
+
+### Test counts
+
+Unit 421 (from 371) · integration 168 (from 151) · lint 31 warnings, 0 errors
+(baseline held) · `scripts/mutate-phase8.sh` 23 mutations, 0 holes.
+
 ## [0.9.0] — 2026-09-28
 
 Studio UI 2.0. The Runtime has been complete since v0.8.0 and none of it was

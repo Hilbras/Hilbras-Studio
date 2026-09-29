@@ -230,8 +230,11 @@ recorded in [`runtime/approvals.md`](./runtime/approvals.md#why-a-decision-resum
 ## Claiming a step, and giving the claim back
 
 ```sql
-UPDATE run_steps SET state = 'running'
- WHERE id = $1 AND state = $2          -- the state it was expected to be in
+UPDATE run_steps SET state = 'running', started_at = $3
+ WHERE id = $1
+   AND state = $2                      -- the state it was expected to be in
+   -- and, only when $2 = 'running':
+   AND started_at < $3 - INTERVAL '5 minutes'
 ```
 
 v0.8.0 added a second trigger alongside the scheduler's, so two invocations can
@@ -241,26 +244,73 @@ the gap between the two is wide enough for both to see `awaiting_approval` and
 both to act. The step's idempotency key does not save it either, because that
 only helps connectors which implement the cache, and not all of them do.
 
+### A claim is a lease, not a flag (v0.9.5)
+
+The compare-and-swap above was the whole of the protection until v0.9.5, and it
+was not enough. `$2` is the state the caller *read*, which is the live state — so
+`claimStep(stepId, "running")` **succeeded**, and a redelivery of the same event
+started a second invocation while the first was still inside the step body. Both
+executed it, and both published.
+
+So a step observed in `running` is now claimable only once its claim is older than
+`STEP_CLAIM_LEASE_MS` (5 minutes), checked in the same `WHERE` clause so the
+refusal is atomic with the claim. The queue is at-least-once, so a redelivery is
+normal operation rather than an edge case.
+
+Five minutes is generous on purpose. A model call is bounded at 30s and a publish
+is bounded by the connector deadline, so a step still `running` after that long is
+not slow, it is gone. It is also the approval sweeper's cadence, so a reclaimed
+step is noticed on the same tick a lapsed approval is.
+
+`claimStep(stepId, from, now)` takes the clock as a parameter, so the lease
+arithmetic is testable without waiting five minutes — the same rule
+[`view.ts`](runtime/view.ts) follows for the approval deadline.
+
 A claim is also a *reservation*, so a step that cannot be executed even to
 completion hands it back — to the state it was in, not to `failed`. A step left
 `failed` would be skipped as terminal on the retry, and the run would report
 success having published nothing.
 
+**Both recovery paths are needed.** `releaseStepClaim` covers a crash a `catch`
+can reach, and makes the retry immediate. The lease covers a worker killed
+outright, which never runs a `catch` — without it, refusing `running` outright
+would trade a double-execution bug for a permanently stuck run.
+
+Nothing sweeps a stale claim proactively; a step recovers when the queue
+redelivers the run on its next retry. See ADR-009.
+
 ---
 
 ## Not yet implemented
 
-- **The approval interface.** The system shipped in Phase 6 (v0.8.0) — policies,
-  questions, approve/reject/edit, the window, resumption. The screen to use them
-  is Phase 7, so today a user can configure nothing and answer nothing; a policy
-  set programmatically takes effect immediately.
+Named here so their absence reads as a decision rather than an oversight.
+
+- **Graceful shutdown.** There is no `process.on` handler anywhere. What an
+  in-flight publish should do when the process is asked to stop is an open
+  question — aborting mid-publish risks a half-sent post that the platform has
+  already accepted.
+- **Stale-`running` reclamation.** The claim lease (ADR-009) bounds how long a
+  stuck step blocks a run, and a step recovers on the next queue redelivery, but
+  nothing proactively sweeps a run whose invocation is gone. A sweeper needs a
+  definition of "gone" that does not fight a legitimately slow step.
+- **Inngest queue configuration.** Only `retries` is set. There is no
+  `concurrency`, no `throttle`, and no `maxEvents`, so a platform outage
+  translates directly into a retry storm.
+- **Per-run and per-step timeouts inside the executor.** The connector deadline
+  (ADR-012) bounds each individual HTTP call, and the lease bounds the step, but
+  the run itself has no deadline.
+- **`execution_policies` do not gate manual or scheduled publishes.** They are
+  consulted before the Runtime runs a step, so they govern AI-planned runs only.
+  See [`security.md`](security.md) §3 for why that is deliberate.
 
 The **planner** and the **scheduler** shipped in Phase 5 (v0.7.0) and Phase 4
-(v0.6.0) respectively — see [`runtime/planning.md`](./runtime/planning.md) and
-[`scheduling.md`](./scheduling.md).
+(v0.6.0) respectively; the **approval system and its interface** shipped in
+Phase 6 (v0.8.0) and Phase 7 (v0.9.0) — see [`runtime/planning.md`](./runtime/planning.md),
+[`scheduling.md`](./scheduling.md), and [`runtime/approvals.md`](./runtime/approvals.md).
 
 `run.no_steps` remains in `executeGoalRun` as a backstop. It was the honest
 failure for a goal that fired with nothing to do; now that the planner writes the
 steps, reaching it means the planner was bypassed, and that is still worth a loud
-failure rather than a green one.
+failure rather than a green one. v0.9.5 gives it an `errorSummary` so the run
+detail screen says *why* rather than showing an empty error panel.
 

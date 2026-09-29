@@ -2,6 +2,8 @@
 
 import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
+
+import { fetchWithTimeout } from "@/lib/http";
 import {
   Sparkles,
   Send,
@@ -131,7 +133,15 @@ export default function ComposerPage() {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/media", { method: "POST", body: fd });
+      const res = await fetchWithTimeout(
+        "/api/media",
+        { method: "POST", body: fd },
+        // Longer than the default. The payload is capped at 4 MB, which is
+        // small, but the default 15s is sized for a metadata call to a social
+        // platform — a user on a hotel connection should not be told their
+        // upload failed when it was merely slow.
+        60_000,
+      );
       const body = (await res.json().catch(() => ({}))) as {
         url?: string;
         error?: string;

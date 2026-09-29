@@ -1,0 +1,245 @@
+# Development
+
+How to work on Hilbras Studio: the commands, the invariants a change must not
+break, and the checks that are enforced rather than remembered.
+
+If you are here to *release*, see [`releasing.md`](releasing.md). If you are here
+to understand why the code is shaped the way it is, see
+[`architecture.md`](architecture.md).
+
+---
+
+## 1. Setup
+
+```bash
+pnpm install
+cp .env.example .env.local   # database URL, and a key pair — see §6
+npx drizzle-kit push        # apply the schema
+pnpm dev
+```
+
+Requires Node 22+ and Postgres 16. Integration tests start their **own**
+Postgres container, so a local database is only needed for `pnpm dev`.
+
+### The commands
+
+| Command | What it does | When |
+|---|---|---|
+| `pnpm dev` | Next dev server | |
+| `pnpm build` | Production build | Before pushing |
+| `pnpm lint` | ESLint | Before pushing |
+| `pnpm typecheck` | `tsc --noEmit` | Before pushing |
+| `pnpm test` | Unit tests (`src/**/*.test.ts`) | Before pushing |
+| `pnpm test:integration` | Integration tests (Testcontainers) | Before pushing |
+| `pnpm test:integration <path>` | One integration file | While iterating |
+| `pnpm release:check` | The pre-tag gate | Only when releasing |
+
+`pnpm test:integration` starts one `postgres:16-alpine` container **per test
+file** and runs the real migrations, so it takes 40–80 seconds for the full
+suite. Pass the path directly — `pnpm test:integration tests/integration/foo.test.ts`.
+The `--` form (`pnpm test:integration -- <path>`) is silently ignored by the
+script and will run everything.
+
+Integration tests are **transpiled, not typechecked**. A test can therefore
+reference a helper it never imported and fail at runtime with a
+`ReferenceError` rather than a type error. See §5.
+
+---
+
+## 2. The invariants
+
+These are the rules the codebase is built around. A change that violates one is
+a defect even if it passes every check, because the checks do not all cover
+these.
+
+### Execution state is server-authoritative (ADR-003)
+
+A transition is computed from the current state and an event, and applied in
+`runtime/service.ts` alongside the event it records — so the history can never
+disagree with the state. There is no client-side state machine. `runtime/state.ts`
+holds the transition table and nothing else; it is pure, which is why it has the
+densest unit tests in the repo.
+
+**Never** write `runs.state` or `run_steps.state` from anywhere else.
+
+### A claim is a lease, not a flag (v0.9.5)
+
+`claimStep` is a compare-and-swap from the state the caller *read*, and the queue
+is at-least-once. So a step observed as `running` can be "claimed" from
+`running` to `running`, and a redelivery would execute the same step twice in
+parallel. `claimStep` therefore refuses a `running` step until its claim is older
+than `STEP_CLAIM_LEASE_MS` (5 minutes), which is also what recovers a step whose
+worker was killed outright. `releaseStepClaim` covers the crash a `catch` can
+reach; the lease covers the one it cannot.
+
+### Reads are scoped in the query, not by the caller (ADR-008)
+
+`runtime/queries.ts` is the only module UI code may read user data through, and
+every function there puts `userId` in the `WHERE` clause. `getRun`,
+`listRunSteps` and `listRunEvents` in `runtime/service.ts` stay deliberately
+unscoped — they are used by the executor, which has already established
+ownership — and they are unreachable from pages.
+
+The same rule now applies to `lib/chat.ts`: `loadMessages`, `appendMessage`,
+`saveSummary` and `touchSession` all take a `userId` and scope in their own
+`WHERE` clause. Session ids are minted client-side, so they are attacker-supplied.
+
+### A tool's capability is not a permission (Phase 6)
+
+A capability says what a tool *can* do. A policy says whether it may, unattended.
+`ToolSpec.sideEffect` is the discriminator: an approvable side effect requires a
+decision, `deny` fails without asking, and everything else runs. The two are
+separate settings on purpose — see [`runtime/permissions.md`](runtime/permissions.md)
+and [`runtime/policies.md`](runtime/policies.md).
+
+### A vocabulary is one place, `Record`-keyed
+
+`runtime/view.ts` maps state to label, tone and meaning as
+`Record<ExecutionState | ApprovalState | GoalStatus, StatusMeta>`. Adding a state
+is a compile error rather than a blank badge, and `approvalDeadlineView` calls
+`isOverdue` so the screen and the server cannot disagree about a deadline. The
+clock is a parameter, never `Date.now()` read inside.
+
+Follow that pattern. A `Partial<Record<…>>` or a `Record<string, …>` gives up the
+only property that makes it worth having.
+
+---
+
+## 3. What is enforced, and how
+
+### `pnpm release:check` — nine checks before a tag exists
+
+Fails if the version in `package.json` and `docs/architecture.md` disagree, the
+changelog entry is missing or undated, `[Unreleased]` still holds work, the tree
+is dirty, the tag already exists, `HEAD` is already pushed, or a `.env`/`.db`
+file is tracked. See [`releasing.md`](releasing.md).
+
+### Drift guards — tests that fail when two things disagree
+
+Three lists in this codebase must agree with something else, and a list that must
+be edited in two places will be edited in one place. Each has a test:
+
+| What | Guard | Why it cannot be derived |
+|---|---|---|
+| `PROTECTED` routes ↔ `config.matcher` | `src/proxy.test.ts` | Next.js statically parses `matcher` and rejects anything that is not a literal string array. Tried; the build fails. |
+| Outbound `fetch(` calls | `src/lib/http.test.ts` | Nothing forces a 20-site mechanical change to be applied everywhere. |
+| `getSecretKey` | one module, [``lib/secret-key.ts`](../src/lib/secret-key.ts)`] | It was written out twice — in `proxy.ts` and `lib/session.ts` — and a fix to one did not reach the other. |
+
+The third is the lesson behind the first two: **when a fix has to be applied in
+more than one place, move it somewhere it only has to be applied once.**
+
+### Baselines
+
+- **Lint: 31 warnings, 0 errors.** Warnings are a held baseline, not a backlog. A
+  change that adds one should fix one; a change that removes one is fine but
+  should be mentioned in the changelog.
+- **Unit: 421 tests. Integration: 164 tests.** Both must go up, not sideways, for
+  a release.
+- `exactOptionalPropertyTypes` is on. An optional field cannot be assigned an
+  explicit `undefined`; omit the key instead.
+
+### The mutation harness
+
+`scripts/mutate-phase*.sh` proves the tests are load-bearing by breaking the code
+on purpose and asserting the suite notices. Run it before trusting a new test.
+
+```bash
+bash scripts/mutate-phase7.sh
+```
+
+Two rules learned the hard way, both of which produce **false passes**:
+
+1. **Every `sed` expression must be type-valid.** The integration suite is
+   transpiled, not typechecked, so a mutation that references a helper it did not
+   import dies of a `ReferenceError` and the script reports "ok" for a test that
+   never exercised anything.
+2. **Do not nest `s///` inside a range address.** Use the `{ /pat/d }` block form.
+   The script's `cmp` guard only catches no-match patterns, so a silently
+   malformed mutation reads as a passing mutation.
+
+---
+
+## 4. Layout
+
+```
+src/
+  app/
+    (dashboard)/        Authenticated screens. Layout holds the session check.
+    actions/            "use server" — every one is an authorization boundary.
+    api/                Route handlers: cron, webhooks, OAuth callbacks.
+    docs/               The user guide rendered in-app.
+  db/
+    schema.ts           The single schema. Drizzle.
+  lib/
+    runtime/            The execution engine. state → plan → executor → approval.
+    connectors/         One module per platform, behind a capability contract.
+    chat.ts             Assistant persistence, owner-scoped per ADR-008.
+    crypto.ts           AES-256-GCM for every stored secret.
+    http.ts             Outbound HTTP with a deadline. The only `fetch` allowed.
+    secret-key.ts       `AUTH_SECRET` reading, for both runtimes.
+    oauth-state.ts      Signed, expiring OAuth `state`.
+  proxy.ts              Edge middleware: session check, auth-POST throttle.
+tests/
+  integration/          Real Postgres, real migrations, one container per file.
+```
+
+**`"use server"` actions are authorization boundaries.** A server action is
+reachable by anyone who can craft a POST. Every one resolves the session itself
+and scopes every query by `userId`; none trusts a hidden field, a referrer, or
+the fact that the UI would not have shown the button.
+
+---
+
+## 5. Testing conventions
+
+- **Unit tests live next to the code** as `foo.test.ts`, and test `src/**/*.test.ts`
+  only. The vitest config aliases `server-only` to a mock, so a `server-only`
+  module is unit-testable; use that rather than moving logic to make it testable.
+- **Integration tests live in `tests/integration/`** and are named for the
+  property, not the module. `"does not let a second invocation take a step that is
+  still running"` says what broke; `"claimStep"` does not.
+- **Test the property, not the call.** A test that asserts a function was called
+  passes when the function does the wrong thing. The Phase 7 `goals.test.ts` bug
+  was a test that asserted a hardcoded `nextFiringAt` and only passed between
+  midnight and 06:30 Berlin; the fixed test asserts the *property* (06:30 in the
+  schedule's own timezone, and in the future) and is DST-correct.
+- **Prove the guard.** After writing a test that should fail, make it fail. If you
+  cannot describe the mutation that would break it, it may not be testing much.
+
+---
+
+## 6. Secrets
+
+Full runbook: [`security.md`](security.md). The short version:
+
+- Never copy a secret *value* into a ticket, log, plan, document, or commit.
+  Refer to secrets by **name only**.
+- `ENCRYPTION_KEY` must be **identical in every environment sharing a database**.
+  Rotating it invalidates every stored token for every user; there is no
+  re-encryption path. Generate with `openssl rand -hex 32`.
+- `AUTH_SECRET` may differ between environments. Rotating it re-logs everyone in.
+- Both are checked for **presence and strength** in production. A short secret
+  now fails startup rather than silently producing a working deployment that
+  signs or encrypts with something guessable.
+- Outbound URLs carry `?access_token=…`. Never build an error message, a log line,
+  or a support-facing string from a full URL — `HttpTimeoutError` reports the
+  host only, for this reason.
+
+---
+
+## 7. Adding a platform or a tool
+
+- **A platform** implements the connector contract and declares its capabilities.
+  See [`connectors.md`](connectors.md) and
+  [`platform-development.md`](platform-development.md). The registry entry, not
+  the call site, decides whether a platform needs an authorize step, uses PKCE, or
+  collects credentials manually.
+- **A tool** declares `sideEffect`, which is what makes it approvable. A tool
+  that reaches the network on the user's behalf and is *not* marked as a side
+  effect will publish unattended, and nothing in the type system will complain.
+  See [`ai/tools.md`](ai/tools.md) and [`runtime/permissions.md`](runtime/permissions.md).
+
+Every outbound request goes through `fetchWithTimeout`. A bare `fetch(` fails
+`src/lib/http.test.ts`, which is the point: `fetch` waits forever by default, and
+publishing is sequential within a run, so one hung call is a run that never
+settles.

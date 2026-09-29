@@ -61,9 +61,14 @@ export const TERMINAL_STATES: ReadonlySet<ExecutionState> = new Set([
 /**
  * States in which the run is neither finished nor holding a lease.
  *
- * The scheduler's claim logic and the run-timeout sweep both key off this: a
- * suspended run must not be reclaimed as stale, and must not be reported as
- * actively executing.
+ * A suspended run must not be reclaimed as stale and must not be reported as
+ * actively executing. This is what `claimStep` consults indirectly — a step in
+ * one of these states is not `running`, so the lease never applies to it and the
+ * question is answered by the row instead.
+ *
+ * `awaiting_approval` is deliberately not stale-recoverable. The sweeper in
+ * `approval-store.ts` is what ends a suspension, and it does so by the deadline
+ * rather than by a timeout, because a window is a window.
  */
 export const SUSPENDED_STATES: ReadonlySet<ExecutionState> = new Set([
   "awaiting_approval",
@@ -81,8 +86,20 @@ export function isSuspended(state: ExecutionState): boolean {
 export type ExecutionEvent =
   | { type: "start" }
   | { type: "succeed" }
-  /** Terminal for this attempt. Whether another is allowed is `shouldRetry`. */
-  | { type: "fail" }
+  /**
+   * Terminal for this attempt. Whether another is allowed is `shouldRetry`.
+   *
+   * `summary` is what the run detail screen shows when a run fails, and it is
+   * carried on the event rather than derived at read time because the reason
+   * lives with the code that knows it — a planner refusal, an empty plan, a
+   * connector error. `runs.error_summary` existed from v0.5.0 and was rendered
+   * on the run page, but nothing ever wrote it, so the panel was always empty.
+   *
+   * Optional because `transition` decides state, not prose: two call sites
+   * genuinely have nothing to add beyond "it failed", and inventing a message
+   * for them would be worse than leaving the column null.
+   */
+  | { type: "fail"; summary?: string }
   /** A side-effecting step needs a human decision. */
   | { type: "request_approval" }
   /** The human approved, or the timeout policy resolved to auto-approve. */

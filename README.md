@@ -26,15 +26,18 @@ Goal-Driven AI Runtime. Releases follow a phase-by-phase plan from **v0.1.0** to
 | v0.6.0 | Goal Engine |
 | v0.7.0 | AI Planning |
 | v0.8.0 | Human-in-the-Loop |
-| **v0.9.0** | **Current — Studio UI 2.0** |
-| v0.9.5 | Release Candidate |
+| v0.9.0 | Studio UI 2.0 |
+| **v0.9.5** | **Current — v1.0 Hardening** |
 | **v1.0.0** | **Goal-Driven AI Runtime** |
 
 See [`ROADMAP.md`](ROADMAP.md) for the full plan and
 [`docs/architecture.md`](docs/architecture.md) for the layer contracts and
 architecture decisions. [`CHANGELOG.md`](CHANGELOG.md) records every release.
+[`docs/development.md`](docs/development.md) is the guide to working on this
+codebase, and [`docs/security.md`](docs/security.md) is the secret-handling
+runbook.
 
-## Today's capabilities (v0.9.0)
+## Today's capabilities (v0.9.5)
 
 - **AI Content Generation** — Connect any OpenAI-compatible or Anthropic-compatible
   provider (OpenRouter, Groq, Together, etc.), or use the built-in Hilbras AI model.

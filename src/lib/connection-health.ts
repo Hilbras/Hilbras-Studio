@@ -2,6 +2,8 @@ import "server-only";
 
 import { desc, eq } from "drizzle-orm";
 
+import { fetchWithTimeout } from "./http";
+
 import { listGrants } from "@/lib/accounts/store";
 import { decryptSecret } from "@/lib/crypto";
 import {
@@ -118,7 +120,7 @@ async function threadsConnectionState(encrypted: string): Promise<ThreadsState> 
   }
 
   try {
-    const res = await fetch(`${GRAPH_THREADS}/me?fields=id`, {
+    const res = await fetchWithTimeout(`${GRAPH_THREADS}/me?fields=id`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       cache: "no-store",

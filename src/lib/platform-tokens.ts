@@ -14,6 +14,8 @@
  *   Facebook   GET https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token
  */
 
+import { fetchWithTimeout } from "./http";
+
 export interface LongLivedToken {
   accessToken: string;
   /** Seconds until expiry, as reported by the platform. */
@@ -188,7 +190,7 @@ async function fetchToken(
   url: string
 ): Promise<LongLivedToken | null> {
   try {
-    const res = await fetch(url, { method: "GET" });
+    const res = await fetchWithTimeout(url, { method: "GET" });
     const body = (await res.json().catch(() => ({}))) as MetaTokenResponse;
 
     if (!res.ok || !body.access_token) {

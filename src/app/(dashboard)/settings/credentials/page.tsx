@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState, useCallback } from "react";
+import { fetchWithTimeout } from "@/lib/http";
 import {
   Card,
   CardContent,
@@ -172,7 +173,7 @@ export default function CredentialsPage() {
       Promise.all(platforms.map(async (p) => ({ id: p.id, exists: await checkCredentialsExist(p.id) }))),
       (async () => {
         try {
-          const res = await fetch("/api/check-connections");
+          const res = await fetchWithTimeout("/api/check-connections");
           if (res.ok) {
             return await res.json() as {
               connected: string[];

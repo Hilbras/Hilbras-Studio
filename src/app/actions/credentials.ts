@@ -7,10 +7,7 @@ import { db } from "@/db";
 import { storedCredentials } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
 import { decryptSecret, maskSecret } from "@/lib/crypto";
-import {
-  getUserCredentialValue,
-  upsertUserCredential,
-} from "@/lib/credential-store";
+import { upsertUserCredential } from "@/lib/credential-store";
 
 export interface CredentialItem {
   keyName: string;
@@ -98,17 +95,4 @@ export async function getCredentialsAction(): Promise<{ credentials: CredentialI
   });
 
   return { credentials };
-}
-
-/**
- * Get a decrypted credential value for the current session.
- *
- * Keep user-scoped access in the server-only credential store. This function
- * exists only for trusted server callers and never returns a value to a client
- * DTO or action result.
- */
-export async function getCredentialValue(keyName: string): Promise<string | null> {
-  const session = await getSessionUser();
-  if (!session) return null;
-  return getUserCredentialValue(session.id, keyName);
 }

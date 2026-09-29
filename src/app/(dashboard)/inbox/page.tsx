@@ -5,7 +5,7 @@ import { getInboxMessages } from "@/app/actions/inbox";
 import { InboxClient } from "./inbox-client";
 
 export default async function InboxPage() {
-  const messages = await getInboxMessages();
+  const { messages, errors } = await getInboxMessages();
 
   return (
     <div className="space-y-6 relative">
@@ -25,7 +25,7 @@ export default async function InboxPage() {
         </div>
 
         <div className="mt-6">
-          <InboxClient initialMessages={messages} />
+          <InboxClient initialMessages={messages} initialErrors={errors} />
         </div>
       </div>
     </div>

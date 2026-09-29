@@ -16,6 +16,35 @@ export interface InboxMessage {
   unread: boolean;
 }
 
+/**
+ * A provider fetch that failed, named so the UI can say "X is erroring"
+ * instead of showing an empty inbox that reads as "nothing new"
+ * (remediation Task 14: provider errors are distinct from an empty inbox).
+ */
+export interface InboxPlatformError {
+  platform: string;
+  error: string;
+}
+
+/** Best-effort human message from a provider error body. */
+async function providerErrorText(
+  res: Response,
+  fallback: string
+): Promise<string> {
+  try {
+    const body = (await res.json()) as {
+      detail?: unknown;
+      title?: unknown;
+      error?: { message?: unknown };
+    };
+    const detail =
+      body.detail ?? body.error?.message ?? body.title ?? fallback;
+    return typeof detail === "string" ? detail : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const replyInput = z.object({
   platform: z.string().regex(/^[a-z][a-z0-9_-]{0,29}$/),
   messageId: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "Invalid message"),
@@ -43,15 +72,19 @@ function relativeTime(dateStr: string): string {
   return `${diffDays}d`;
 }
 
-async function fetchXMessages(accessToken: string): Promise<InboxMessage[]> {
+async function fetchXMessages(
+  accessToken: string
+): Promise<{ messages: InboxMessage[]; error?: string }> {
   try {
     const res = await fetchWithTimeout(
       "https://api.twitter.com/2/users/me/mentions?max_results=10&tweet.fields=created_at,text,author_id&user.fields=name,username",
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    if (!res.ok) return [];
+    if (!res.ok) {
+      return { messages: [], error: await providerErrorText(res, `X request failed (${res.status})`) };
+    }
     const data = await res.json();
-    if (!data.data) return [];
+    if (!data.data) return { messages: [] };
 
     const usersMap: Record<string, { name: string; username: string }> = {};
     if (data.includes?.users) {
@@ -70,13 +103,13 @@ async function fetchXMessages(accessToken: string): Promise<InboxMessage[]> {
       unread: true,
     }));
   } catch {
-    return [];
+    return { messages: [], error: "Could not reach X — the request timed out or failed." };
   }
 }
 
 async function fetchInstagramMessages(
   accessToken: string
-): Promise<InboxMessage[]> {
+): Promise<{ messages: InboxMessage[]; error?: string }> {
   try {
     // Built with `URLSearchParams` rather than by interpolating the token into a
     // template. Instagram access tokens routinely contain `&`, `=`, `+` and `/`,
@@ -89,9 +122,14 @@ async function fetchInstagramMessages(
     url.searchParams.set("access_token", accessToken);
 
     const res = await fetchWithTimeout(url);
-    if (!res.ok) return [];
+    if (!res.ok) {
+      return {
+        messages: [],
+        error: await providerErrorText(res, `Instagram request failed (${res.status})`),
+      };
+    }
     const data = await res.json();
-    if (!data.data) return [];
+    if (!data.data) return { messages: [] };
 
     const messages: InboxMessage[] = [];
     for (const conv of data.data.slice(0, 10)) {
@@ -108,15 +146,21 @@ async function fetchInstagramMessages(
         });
       }
     }
-    return messages;
+    return { messages };
   } catch {
-    return [];
+    return {
+      messages: [],
+      error: "Could not reach Instagram — the request timed out or failed.",
+    };
   }
 }
 
-export async function getInboxMessages(): Promise<InboxMessage[]> {
+export async function getInboxMessages(): Promise<{
+  messages: InboxMessage[];
+  errors: InboxPlatformError[];
+}> {
   const session = await getSessionUser();
-  if (!session) return [];
+  if (!session) return { messages: [], errors: [] };
 
   // Grants, not connections: the inbox needs a token, and several accounts can
   // share one grant. Deduplicated because a grant behind three accounts would
@@ -129,6 +173,7 @@ export async function getInboxMessages(): Promise<InboxMessage[]> {
   });
 
   const allMessages: InboxMessage[] = [];
+  const errors: InboxPlatformError[] = [];
 
   for (const account of accounts) {
     if (!account.accessTokenEnc) continue;
@@ -141,11 +186,13 @@ export async function getInboxMessages(): Promise<InboxMessage[]> {
     }
 
     if (account.platform === "x") {
-      const msgs = await fetchXMessages(accessToken);
-      allMessages.push(...msgs);
+      const { messages, error } = await fetchXMessages(accessToken);
+      allMessages.push(...messages);
+      if (error) errors.push({ platform: "x", error });
     } else if (account.platform === "instagram") {
-      const msgs = await fetchInstagramMessages(accessToken);
-      allMessages.push(...msgs);
+      const { messages, error } = await fetchInstagramMessages(accessToken);
+      allMessages.push(...messages);
+      if (error) errors.push({ platform: "instagram", error });
     }
   }
 
@@ -154,7 +201,7 @@ export async function getInboxMessages(): Promise<InboxMessage[]> {
     return 0;
   });
 
-  return allMessages.slice(0, 20);
+  return { messages: allMessages.slice(0, 20), errors };
 }
 
 export async function sendReply(

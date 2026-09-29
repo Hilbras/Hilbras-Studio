@@ -16,15 +16,18 @@ import { PlatformIcon } from "@/components/platform-icon";
 import { BlurFade } from "@/components/motion/blur-fade";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { Sparkles, Send, Wand2, Loader2 } from "lucide-react";
-import { sendReply, type InboxMessage } from "@/app/actions/inbox";
+import { sendReply, type InboxMessage, type InboxPlatformError } from "@/app/actions/inbox";
 import { processAssistantMessage } from "@/app/actions/ai";
 
 export function InboxClient({
   initialMessages,
+  initialErrors,
 }: {
   initialMessages: InboxMessage[];
+  initialErrors: InboxPlatformError[];
 }) {
   const [messages] = React.useState<InboxMessage[]>(initialMessages);
+  const [errors] = React.useState<InboxPlatformError[]>(initialErrors);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [reply, setReply] = React.useState("");
   const [sending, setSending] = React.useState(false);
@@ -99,6 +102,16 @@ export function InboxClient({
             </div>
           </CardHeader>
           <CardContent className="space-y-1 p-2 pt-0">
+            {errors.length > 0 && (
+              <div className="mb-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3 space-y-1">
+                {errors.map((e) => (
+                  <p key={e.platform} className="text-xs text-destructive">
+                    {e.platform === "x" ? "X" : e.platform.charAt(0).toUpperCase() + e.platform.slice(1)}:{" "}
+                    {e.error}
+                  </p>
+                ))}
+              </div>
+            )}
             {messages.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <Sparkles className="size-8 mx-auto mb-3 text-gold-500/50" />

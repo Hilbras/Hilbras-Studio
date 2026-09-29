@@ -1,39 +1,29 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 
 import { db } from "@/db";
 import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
-import { encryptSecret, decryptSecret, maskSecret } from "@/lib/crypto";
+import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import { BUILTIN_PROVIDER_ID, getBuiltinProviderConfig } from "@/lib/ai";
 import { formatProviderHttpError } from "@/lib/ai-sdk";
 import { assertPublicProviderUrl } from "@/lib/net-guard";
 import { fetchPinnedProvider } from "@/lib/pinned-provider-fetch";
 import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
 
-export interface AiProviderItem {
-  id: string;
-  name: string;
-  baseUrl: string;
-  apiKeyMasked: string;
-  apiFormat: string;
-  /** Empty for the built-in model — its real model id never reaches the UI. */
-  modelId: string;
-  isDefault: boolean;
-  /** The built-in model: visible but locked — never editable or removable. */
-  isSystem?: boolean;
-  /** Built-in model with no server-side key configured. */
-  unavailable?: boolean;
-  createdAt: string;
-}
+// The DTO types and the read path live in the server-only service
+// (`@/lib/ai-providers`); this module stays the thin, browser-facing adapter
+// (remediation Task 17).
+import {
+  listUserAiProviders,
+  type AiProviderFormState,
+  type AiProviderItem,
+} from "@/lib/ai-providers";
 
-export interface AiProviderFormState {
-  error?: string;
-  success?: string;
-}
+export type { AiProviderFormState, AiProviderItem };
 
 const providerSchema = z.object({
   name: z.string().min(1, "Name is required").max(100),
@@ -165,58 +155,9 @@ export async function deleteAiProviderAction(
   return { ok: true };
 }
 
-/** List the current user's AI providers, built-in first. */
+/** Thin adapter: the list read lives in the server-only service. */
 export async function listAiProviders(): Promise<AiProviderItem[]> {
-  const session = await getSessionUser();
-  if (!session) return [];
-
-  const rows = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, session.id))
-    .orderBy(desc(aiProviders.isDefault), desc(aiProviders.updatedAt));
-
-  const active = rows.find((row) => row.isDefault);
-
-  const builtin = getBuiltinProviderConfig();
-  const items: AiProviderItem[] = [
-    {
-      id: BUILTIN_PROVIDER_ID,
-      name: "Hilbras AI",
-      baseUrl: builtin?.baseUrl ?? "",
-      apiKeyMasked: builtin ? "Server-managed" : "Not configured",
-      apiFormat: builtin?.apiFormat ?? "openai",
-      // The real model id is deliberately withheld from the UI.
-      modelId: "",
-      // Built-in is active while no user provider is selected.
-      isDefault: !active,
-      isSystem: true,
-      unavailable: !builtin,
-      createdAt: "",
-    },
-  ];
-
-  for (const row of rows) {
-    let apiKeyMasked = "••••••••••••";
-    try {
-      apiKeyMasked = maskSecret(decryptSecret(row.apiKeyEnc));
-    } catch {
-      // keep default masked
-    }
-
-    items.push({
-      id: row.id,
-      name: row.name,
-      baseUrl: row.baseUrl,
-      apiKeyMasked,
-      apiFormat: row.apiFormat,
-      modelId: row.modelId,
-      isDefault: row.isDefault,
-      createdAt: row.createdAt.toISOString(),
-    });
-  }
-
-  return items;
+  return listUserAiProviders();
 }
 
 /**

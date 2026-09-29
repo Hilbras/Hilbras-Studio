@@ -1,5 +1,5 @@
 import { requireSessionUser } from "@/lib/session";
-import { listAiProviders } from "@/app/actions/ai-providers";
+import { listUserAiProviders } from "@/lib/ai-providers";
 import { listAssistantMemories } from "@/app/actions/chat";
 import { SettingsClient } from "./settings-client";
 
@@ -7,7 +7,7 @@ export default async function SettingsPage() {
   const user = await requireSessionUser();
 
   // AI providers — built-in model first, then the user's own
-  const providers = await listAiProviders();
+  const providers = await listUserAiProviders();
 
   // Long-term facts the Assistant remembers across chats
   const memories = await listAssistantMemories();

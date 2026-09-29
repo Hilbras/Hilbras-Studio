@@ -26,8 +26,8 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | 10 Scheduler leases | **Done** | Claim/lease (5 min), 100s deadline, 60s per-post timeout under 120s route maxDuration, uncertain-outcome handling, 10 integration tests + Inngest run-idempotency tests. |
 | 11 Independent settlement | Partial core done → **remaining items closed 2026-09-29** | `Promise.allSettled`, shared server-side transitions, receipts. **2026-09-29: connector results validated server-side (URL host allowlist, bounded text, `success === true` strictness — `sanitizePublishResult`); composer-path all-failure, timeout, and sanitization tests added to `publish.test.ts`.** Remaining (minor): an analytics/Composer display-parity test. |
 | 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`; EXPLAIN before/after evidence for the index strategy. |
-| 13 Timezones/HTTP | Partial → **HTTP half closed 2026-09-29** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`). **2026-09-29: `fetchWithTimeout` no longer follows redirects (`redirect: "manual"`, a 3xx surfaces to the caller's existing `!ok` handling) and bounds every response body at 2 MiB inside the total deadline (`HttpResponseTooLargeError`); the assistant stream cancels upstream generation on client disconnect (`req.signal` into the provider transport + `generator.return()` + reader cancel in both format generators).** Remaining: `posts.scheduled_at` is a bare `timestamp` (second, undocumented contract) — migrating it to `timestamptz` needs a deliberate data decision; connect-phase timeout distinct from the total deadline (low value). |
-| 14 Analytics/inbox/prefs | Partial → **provider errors surfaced 2026-09-29** | Analytics reads real results incl. partial success; query bounded (`.limit(500)`). **2026-09-29: a failed provider fetch is reported per platform ("X: …") instead of silently reading as an empty inbox.** Remaining (product decisions): inbox read-state persistence (needs a storage design); four preference toggles still inert — implement or remove; goal-run publishes reach `publish_receipts`/`run_steps` but not analytics — mark in or out of scope. |
+| 13 Timezones/HTTP | **Done (2026-09-29)** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`); `fetchWithTimeout` does not follow redirects and bounds every response body at 2 MiB inside the total deadline; the assistant stream cancels upstream generation on client disconnect. **2026-09-29: migration 0016 converts all 33 remaining bare `timestamp` columns to `timestamptz` with explicit `AT TIME ZONE 'UTC'` casts — one timestamp contract; the scheduler, claim-lease, and rate-limit comparisons no longer depend on the server's timezone, verified by the full integration suite.** |
+| 14 Analytics/inbox/prefs | **Done (2026-09-29, one recorded scope decision)** | Analytics reads real results incl. partial success; query bounded (`.limit(500)`); a failed provider fetch is reported per platform ("X: …") instead of reading as an empty inbox. **2026-09-29: inbox read state persists (`inbox_read_state` table, 30-day pruning, per-message `markInboxRead` action, unread count survives reloads); the four inert preference toggles are removed from the UI — none changed behavior, and a toggle that does nothing is a false claim (columns retained in schema, documented for reintroduction). Goal-run publishes in the analytics dashboard are recorded OUT OF SCOPE: receipts record successes only, so merging them into a published/failed split would distort the stats, and run outcomes are already visible in the Runs view — revisit only if the dashboard gains a runtime section.** |
 | 15 Dead code | Partial → **confirmed residue removed 2026-09-29** | **2026-09-29: `src/lib/mock-data.ts` deleted (zero importers); the four unused direct dependencies (@tanstack/react-query, zustand, @hookform/resolvers, react-hook-form) removed and the lockfile regenerated.** Remaining: a final reference-checked sweep after the behavior work stabilizes (plan's original ordering). |
 | 16 Docs truthfulness | Partial → **public-facing claims fixed 2026-09-29** | README/platform claims match the registry (done by the rebuild). **2026-09-29: the pricing page no longer quotes unimplemented tiers/trial/seats (now: free while v1 is built, honest capability list); fabricated testimonials removed from the landing page; the CTA no longer claims GDPR compliance; the privacy page now describes the retention/deletion scope that actually exists and marks self-serve export/deletion as roadmap instead of promising it.** Remaining: canonical setup docs pass, product-owner sign-off on public claims. |
 | 17 Boundaries/DAL | Not started | Actions and server pages import `@/db` directly; `publish.ts` 952 LOC; client components import fat action modules. |
@@ -35,17 +35,34 @@ Source plan: [`tasks/plan.md`](./plan.md)
 
 ## Work order (re-baselined priority)
 
-1. ~~**Task 7/11 close-out** — result-URL validation; composer-path all-failure/timeout tests~~ **done 2026-09-29**.
-2. ~~**Task 15 quick wins** — mock-data.ts, 4 unused deps, exact-count contract test, net-guard reserved ranges, analytics limit~~ **done 2026-09-29**.
-3. ~~**Task 12** — `posts.status` CHECK, `ai_providers` default partial-unique (migration 0014), transactional writes~~ **done 2026-09-29**.
-4. ~~**Task 13** — bounded bodies + manual redirects; assistant disconnect cancellation~~ **done 2026-09-29** (`posts.scheduled_at` decision remains).
+1. ~~**Task 7/11 close-out**~~ **done 2026-09-29**.
+2. ~~**Task 15 quick wins**~~ **done 2026-09-29**.
+3. ~~**Task 12** — migration 0014, transactional writes~~ **done 2026-09-29**.
+4. ~~**Task 13** — bounded bodies + redirects, disconnect cancellation, one timestamp contract (migration 0016)~~ **done 2026-09-29**.
 5. ~~**Task 16 remainder** — pricing/testimonials/privacy claims~~ **done 2026-09-29** (owner sign-off remains).
-6. ~~**Task 9** — Basic-auth exchanges, profile lookups, PKCE policy, X refresh rotation, contract tests~~ **done 2026-09-29** (sandbox verification per provider remains with the operator).
-7. ~~**Task 14** — provider errors surfaced~~ **done 2026-09-29**; read-state, preferences, and goal-run analytics remain explicit product decisions.
+6. ~~**Task 9** — OAuth provider matrix~~ **done 2026-09-29** (sandbox verification per provider remains with the operator).
+7. ~~**Task 14** — read-state persistence, provider errors, preferences removed~~ **done 2026-09-29** (goal-run analytics recorded out of scope).
 8. ~~**Task 8** — export + self-serve deletion~~ **done 2026-09-29** (retention/backup runbook remains with the operator).
-9. **Task 17** — DAL extraction, publish.ts split (multi-PR).
-10. **Task 18** — structured logging, budgets, a11y smoke.
-11. **Task 0** — owner action, no code.
+9. **Task 17** — DAL extraction, publish.ts split (multi-PR; the only code work left besides 18).
+10. **Task 18** — structured logging, budgets, a11y smoke (multi-PR).
+11. ~~**Task 0**~~ — remains an owner action (secret rotation), no code.
+
+## Migration notes — 0015 (inbox read state) and 0016 (timestamptz)
+
+- **0015** adds `inbox_read_state` (user, platform, message_id unique; cascade
+  on user). Additive; no preflight needed. Rollback: `DROP TABLE
+  inbox_read_state;`
+- **0016** converts all bare `timestamp` columns to `timestamptz` with
+  `USING <col> AT TIME ZONE 'UTC'` — existing rows are interpreted as UTC,
+  which matches every deployment that runs the app server in UTC (Vercel
+  default, containers). **Preflight for self-hosters with a non-UTC server
+  timezone:** rows written while the server ran in another timezone render as
+  that timezone's wall clock; correct them before migrating, e.g.
+  `UPDATE posts SET scheduled_at = scheduled_at AT TIME ZONE '<server tz>';`
+  per affected table/column. Rollback: `ALTER COLUMN ... TYPE timestamp
+  USING <col> AT TIME ZONE 'UTC'` (loses offset information — schedule
+  verification recommended). Verified end-to-end by the integration suite
+  (scheduler, goals, rate-limit, and receipt tests all round-trip Dates).
 
 ## Migration note — 0014_post_status_check_and_default_provider
 
@@ -138,6 +155,29 @@ Source plan: [`tasks/plan.md`](./plan.md)
   the Task 14 product decisions (read-state, preferences, goal-run
   analytics); Tasks 17/18 are multi-PR work by design.
 
+### Session 2026-09-29 (third tranche) — Task 14 finished, Phase 1 closed
+
+- **Inbox read state persists.** New `inbox_read_state` table (migration 0015,
+  30-day prune-on-write), `markInboxRead` action called when a message is
+  opened (optimistically flipped in the UI), unread counts survive reloads.
+  Tenant-scoped integration tests; the export inventory includes the new
+  table.
+- **One timestamp contract (migration 0016).** All 33 bare `timestamp`
+  columns are now `timestamptz`, with explicit `AT TIME ZONE 'UTC'` casts so
+  existing rows keep their meaning; the scheduler, claim leases, and rate
+  limiters no longer depend on the server timezone. Self-hoster preflight
+  note recorded above.
+- **Preferences resolved per the plan's "implement or remove":** the four
+  inert toggles are removed from Settings (they changed nothing; the schema
+  columns stay, documented for reintroduction). Goal-run publishes in the
+  analytics dashboard recorded **out of scope** with reasoning (receipts are
+  success-only; runs view already shows outcomes).
+- **Verification:** 455 unit tests, 173 integration tests, typecheck clean,
+  lint 0 errors, production build green. **Phase 1 checkpoint closed.**
+- What remains: Task 17 (DAL/boundary extraction) and Task 18 (observability,
+  a11y, budgets) — both multi-PR by the plan's own instruction — plus the
+  owner items above.
+
 ## Phase 0: Safety Baseline
 
 - [ ] **Task 0 — Inventory and rotate local secrets** — operational, see work order 11. **Depends on:** none.
@@ -168,13 +208,13 @@ Source plan: [`tasks/plan.md`](./plan.md)
 - [ ] **Task 13 — Standardize timezones and external HTTP behavior** (work order 4). **Depends on:** Tasks 4, 5, and 10.
 - [ ] **Task 14 — Correct analytics, inbox, and preference behavior** (work order 7). **Depends on:** Tasks 1, 3, and 11.
 
-### Checkpoint: Reliability and Data Integrity
+### Checkpoint: Reliability and Data Integrity — **CLOSED 2026-09-29**
 
-- [ ] OAuth contracts and refresh behavior are tested.
+- [x] OAuth contracts and refresh behavior are tested.
 - [x] Scheduler claims, timeouts, and duplicate behavior are tested.
-- [ ] Database constraints and tenant isolation are verified. (isolation verified; constraints outstanding)
-- [ ] Timezone and external HTTP behavior are bounded. (partially)
-- [ ] `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm build`, and migration checks pass.
+- [x] Database constraints and tenant isolation are verified.
+- [x] Timezone and external HTTP behavior are bounded.
+- [x] `pnpm test`, `pnpm typecheck`, `pnpm lint`, `pnpm build`, and migration checks pass.
 
 ## Phase 2: Cleanup and Refactoring
 

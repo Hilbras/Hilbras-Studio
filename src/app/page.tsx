@@ -346,73 +346,6 @@ function HowItWorks() {
   );
 }
 
-/* ── Testimonials ───────────────────────────────────────────── */
-
-const TESTIMONIALS = [
-  {
-    name: "Sara Kim",
-    role: "Founder, Lumen Labs",
-    text: "I replaced four tools and my whole posting workflow with one sentence to Hilbras. It's absurd how much time this saves.",
-  },
-  {
-    name: "Marcus Reed",
-    role: "Marketing Lead, Vantage",
-    text: "The per-platform adaptation is scary good. Same announcement, perfectly rewritten for X, LinkedIn and Instagram.",
-  },
-  {
-    name: "Amina Farouk",
-    role: "Solo Creator, 180K followers",
-    text: "The unified inbox alone is worth it. Comments from five platforms in one place, with reply suggestions.",
-  },
-];
-
-function Testimonials() {
-  return (
-    <section className="py-24">
-      <div className="mx-auto max-w-6xl px-4">
-        <BlurFade>
-          <div className="text-center mb-14">
-            <Badge variant="gold" className="mb-4">Loved by creators</Badge>
-            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
-              Teams ship{" "}
-              <span className="bg-gradient-to-r from-gold-400 to-gold-600 bg-clip-text text-transparent">
-                10x more content
-              </span>
-            </h2>
-          </div>
-        </BlurFade>
-
-        <StaggerChildren className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {TESTIMONIALS.map((t) => (
-            <motion.div key={t.name} variants={staggerItem}>
-              <motion.div
-                whileHover={{ y: -6, rotate: -0.5 }}
-                className="h-full rounded-2xl border border-border bg-card p-6 hover:border-gold-500/30 hover:shadow-xl hover:shadow-gold-500/5 transition-colors flex flex-col"
-              >
-                <div className="flex gap-1 mb-4">
-                  {[...Array(5)].map((_, i) => (
-                    <Sparkles key={i} className="size-3.5 fill-gold-400 text-gold-400" />
-                  ))}
-                </div>
-                <p className="text-sm leading-relaxed flex-1">&quot;{t.text}&quot;</p>
-                <div className="mt-6 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gold-400 to-gold-600 flex items-center justify-center text-white text-sm font-bold">
-                    {t.name[0]}
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold">{t.name}</p>
-                    <p className="text-xs text-muted-foreground">{t.role}</p>
-                  </div>
-                </div>
-              </motion.div>
-            </motion.div>
-          ))}
-        </StaggerChildren>
-      </div>
-    </section>
-  );
-}
-
 /* ── CTA ────────────────────────────────────────────────────── */
 
 function FinalCta() {
@@ -443,7 +376,7 @@ function FinalCta() {
               </div>
               <p className="mt-4 text-xs text-muted-foreground flex items-center justify-center gap-1.5">
                 <ShieldCheck className="size-3.5 text-gold-500" />
-                Official platform APIs · GDPR compliant · Cancel anytime
+                Official platform APIs · Encrypted credential storage
               </p>
             </div>
           </div>
@@ -499,7 +432,6 @@ export default function LandingPage() {
         <Hero />
         <Features />
         <HowItWorks />
-        <Testimonials />
         <FinalCta />
       </main>
       <Footer />

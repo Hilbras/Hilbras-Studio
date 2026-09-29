@@ -13,6 +13,109 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.10.0] — 2026-09-29
+
+A stabilization tranche, and the first release that is not a roadmap phase. It
+carries the security and data-integrity work tracked in
+[`tasks/todo.md`](./tasks/todo.md) — fifteen commits that had never been
+released, including outbound-request and OAuth fixes, three migrations, and
+self-serve account export and deletion.
+
+### Security
+
+- **A publish result URL from a connector is no longer trusted.** Every
+  permalink is now validated server-side (`src/lib/result-url.ts` — `https`
+  only, host restricted to the platform that was published to) at all five
+  permalink construction sites and at both result funnels. A connector that
+  returns `javascript:…`, an internal host, or a lookalike domain no longer has
+  it rendered as a link.
+- **Reserved network ranges are now refused, not just private ones.**
+  `net-guard.ts` blocks TEST-NET-1/2/3, `192.0.0.0/24`, and multicast/broadcast in
+  addition to loopback, private, link-local, metadata, and CGNAT — v4 and v6.
+- **Outbound requests no longer follow redirects, and response bodies are
+  bounded.** `fetchWithTimeout` uses `redirect: "manual"` (a 3xx surfaces to the
+  caller's existing `!ok` handling rather than being followed somewhere else) and
+  caps every body at 2 MiB inside the total deadline. The assistant stream now
+  cancels upstream generation when the client disconnects.
+- **OAuth `state` is signed and expired**, so it cannot be forged with a
+  victim's `userId`, and X and Reddit exchange their codes with HTTP Basic
+  credentials — the client secret never appears in a request body.
+- **An unresolvable OAuth profile fails the connect.** Six non-Meta platforms now
+  resolve real account ids through documented profile endpoints; one that cannot
+  be resolved returns `profile_unavailable` instead of storing a colliding
+  `"unknown"` id that would merge two people's accounts.
+
+### Data integrity
+
+- **Migration 0014** adds a CHECK on `posts.status` (five terminal states) and a
+  partial unique index allowing only one default AI provider per user. Connection
+  registration, provider selection, and the provider save path are now
+  transactional.
+- **Migration 0016 converts every bare `timestamp` to `timestamptz`** (33 columns
+  across 19 tables), so no stored instant depends on the timezone of whoever reads
+  it. This **reverses a deferral recorded twice** in the task ledger, and its
+  safety rests on one precondition: `AT TIME ZONE 'UTC'` asserts the stored
+  wall-clock *was* UTC. True on Vercel Postgres; on a self-hosted database with a
+  non-UTC server it would shift every timestamp by the offset. Run
+  `SHOW timezone;` before applying. There is no safe rollback.
+- **Migration 0015** adds `inbox_read_state` so a message stays read across
+  fetches, pruned on a 30-day window.
+
+### Added
+
+- **Self-serve account export and deletion.** `src/lib/account-lifecycle.ts` is
+  the tenant boundary: `/api/account/export` streams the caller's complete data
+  inventory as JSON with every secret reduced to a presence flag, and
+  password-confirmed deletion removes the user plus the `rate_limits` rows its id
+  keys, in one transaction. Two-tenant integration tests prove one user's
+  export and deletion cannot touch the other's.
+- **Inbox read state**, per message, scoped to the user and platform.
+- Contract tests for the OAuth provider matrix, and for X's rotating refresh
+  token being maintained by the cron.
+
+### Changed
+
+- A failed inbox provider fetch is now reported per platform ("X: …") instead of
+  rendering as an empty inbox, which read as "nothing new".
+- The four preference toggles that changed no behavior are removed from the UI.
+  A toggle that does nothing is a false claim; the columns are retained and
+  documented for reintroduction.
+- The analytics query is bounded at 500 rows, and counts partial success.
+- Goal-run publishes in the analytics dashboard are recorded **out of scope**:
+  receipts record successes only, so merging them into a published/failed split
+  would distort the statistics. Run outcomes remain visible in the Runs view.
+
+### Truthfulness
+
+The pricing page no longer quotes unimplemented tiers, trials, or seats;
+fabricated testimonials are removed from the landing page; the GDPR compliance
+claim is dropped; and the privacy policy now describes the retention, export, and
+deletion behavior that actually exists.
+
+### Removed
+
+- `src/lib/mock-data.ts` (zero importers) and four unused direct dependencies
+  (`@tanstack/react-query`, `zustand`, `@hookform/resolvers`, `react-hook-form`).
+
+### Tests
+
+- **Migration 0016 is now actually tested.** The task ledger recorded it as
+  "verified by the full integration suite", which was not true — the suite
+  *applied* 0016 as part of the migration chain and asserted nothing about it.
+  `tests/integration/timestamptz-migration.test.ts` stages the journal at 0015,
+  writes a row through the pre-0016 schema, applies the real 0016, and asserts
+  that a bare timestamp *did* resolve to different instants per session, that the
+  instant is unchanged afterwards, that a `NULL` stays `NULL`, and that the
+  already-correct `goals.next_firing_at` is left alone. Two drift guards read the
+  migration file itself; both were confirmed to fail against a deliberately wrong
+  zone.
+- Migration notes for 0014, 0015, and 0016 — preflight, repair, and rollback —
+  now live in `tasks/todo.md`, which the task ledger's own definition of done
+  requires for any database change.
+
+**Verification:** 455 unit tests, 179 integration tests across 15 files, clean
+typecheck, lint 0 errors / 29 warnings, green production build.
+
 ## [0.9.5] — 2026-09-29
 
 v1.0 hardening. A hardening phase is mostly the phase where you find out what the
@@ -1335,7 +1438,15 @@ Goal-Driven AI Runtime roadmap builds on.
 - GitHub Actions pipeline running lint, typecheck, unit tests, integration
   tests, production build, migration validation, and a dependency audit.
 
-[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.9.5...v0.10.0
+[0.9.5]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.9.0...v0.9.5
+[0.9.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Hilbras/Hilbras-Studio/compare/v0.2.0...v0.3.0

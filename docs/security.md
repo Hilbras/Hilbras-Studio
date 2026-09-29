@@ -38,7 +38,7 @@ Names only. Grouped by what breaks when the value changes.
 > no key identifier. `base64url(iv).base64url(authTag).base64url(ciphertext)`
 > says nothing about which key made it, so a reader holding two keys has nothing
 > to try and cannot tell a rotation from tampering. Adding a `kid` and a dual-key
-> read path is the fix and is deliberately **not** in v0.9.5: it changes the
+> read path is the fix and is deliberately **not** built yet: it changes the
 > format of every stored secret, needs a migration, and a bug in the migration is
 > unrecoverable in a way that a missing feature is not.
 >
@@ -201,7 +201,7 @@ govern. Recorded here and in the v0.9.5 changelog rather than left implicit.
 
 Named, so their absence is a decision on the record rather than an oversight.
 
-| Gap | Why it is not in v0.9.5 |
+| Gap | Why it is not built |
 |---|---|
 | **No audit log.** Logins, failed logins, connects, disconnects, credential changes and policy changes are unrecorded. | It is a table, a migration, and writers in six places, plus a screen to read it. Half of that is worse than none: an audit log that misses the event you are investigating is worse than knowing there isn't one. |
 | **No `kid` in the ciphertext**, so `ENCRYPTION_KEY` cannot be rotated. | See §1. Changes the stored format of every secret; the migration is unrecoverable if it is wrong. |

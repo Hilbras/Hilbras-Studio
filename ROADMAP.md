@@ -31,11 +31,13 @@ v0.6.0 — Goal Engine
    ▼
 v0.7.0 — AI Planning
    ▼
-v0.8.0  (current) — Human-in-the-Loop
+v0.8.0 — Human-in-the-Loop
    ▼
 v0.9.0 — Studio 2.0
    ▼
-v0.9.5 — Release Candidate
+v0.9.5 — v1.0 Hardening
+   ▼
+v0.10.0 (current) — Stabilization: security, migrations, account data
    ▼
 🚀 v1.0.0 — Goal-Driven AI Runtime
 ```
@@ -620,6 +622,29 @@ in the changelog rather than left for someone to discover.
 - [ ] Graceful shutdown, and a stale-`running` sweep.
 - [ ] Inngest `concurrency` / `throttle` / `maxEvents`.
 - [ ] Tests for `runtime/inngest/functions.ts` (crash recovery, retry, resume).
+
+---
+
+## Between Phase 8 and Phase 9 — v0.10.0
+
+Not a roadmap phase. Fifteen commits of security and data-integrity work tracked
+in [`tasks/todo.md`](./tasks/todo.md) landed after v0.9.5 and had never been
+released, so they were released together as v0.10.0 before Phase 9 began.
+
+Why this sits here rather than inside a phase: the v1.0.0 requirement that Phase 9
+has to satisfy is **"Release candidate is validated"**, and an RC cannot honestly
+be validated on top of an unreleased security tranche and an in-flight
+schema-wide migration. A `1.0.0` is a promise of stability, and unreviewed
+security and migration work does not belong inside the release that makes that
+promise.
+
+What shipped: server-side result-URL validation, reserved-range SSRF coverage,
+no-redirect bounded outbound HTTP, assistant-disconnect cancellation, the signed
+and Basic-auth OAuth fixes, migrations 0014/0015/0016, self-serve account export
+and deletion, inbox read state, and the public-claims corrections. Details in
+[`CHANGELOG.md`](./CHANGELOG.md).
+
+The Phase 8 deferrals above are still open and are Phase 9's first work.
 
 ---
 

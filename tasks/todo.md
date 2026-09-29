@@ -21,13 +21,13 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | 5 SSRF hardening | **Done** | `net-guard.ts` blocks private/metadata/CGNAT ranges (v4+v6); DNS-pinned transport, manual redirects, 1 MiB cap; dev bypass was removed entirely (plan's "gate it" wording is obsolete). **2026-09-29: TEST-NET-1/2/3, 192.0.0.0/24, multicast/broadcast ranges added with tests.** |
 | 6 Secrets write-only | **Done** | Server-only stores; blank-secret preserves; masked/presence DTOs only; tenant-separation tests. |
 | 7 CSRF-safe publishing | Partial → **URL gap closed 2026-09-29** | Secret-only GET (fails closed), same-origin POST, server-authoritative finalization, full route tests. **2026-09-29: every result URL is now validated server-side (`src/lib/result-url.ts` — https + per-platform host allowlist) at all five permalink construction sites and both result funnels (`publishForUser`, `publishToAllForUser`), with unit tests.** Remaining: an action-level fabricated-outcome test is mitigated by the zod-stripped action inputs, the guarded conditional update (`eq(status, "draft")`), and the funnel sanitization tests; a dedicated integration test would still be nice. |
-| 8 Export & deletion | **Not started** | No export, no self-serve deletion (cascade FKs exist but nothing deletes the user row; `rate_limits` not user-FK'd); Threads deletion callback only; privacy page promises export/"30 days" that don't exist. |
-| 9 OAuth matrix | Partial | Signed state (Phase 8) verified; Facebook GET vs Meta POST separated; Instagram/Threads refresh implemented. Gaps: X/Reddit `tokenAuth:"basic"` is dead metadata; profile failures store `"unknown"` as account ID (six platforms have no profile lookup); `usesPkce` flag dead + verifier omitted on Facebook GET branch; X refresh token stored but never used; no mocked provider contract tests. |
+| 8 Export & deletion | **Done (self-serve, 2026-09-29)** | `src/lib/account-lifecycle.ts` enumerates every table the user id reaches; export route `/api/account/export` produces one JSON document with secrets reduced to presence flags; `deleteAccountAction` (password-confirmed) deletes the `rate_limits` rows keyed with the user id plus the user row — cascades remove the rest — in one transaction. Settings → Data & account exposes both. Two-tenant export/deletion integration tests; privacy page updated to match. Remaining (operator): Threads-only Meta deletion callback unchanged; retention/backup runbook is a deployment decision. |
+| 9 OAuth matrix | **Done (2026-09-29)** | Signed state verified; Facebook GET vs Meta POST separated; Instagram/Threads refresh implemented. **2026-09-29: X and Reddit exchange via HTTP Basic (secret never in the body); profile lookups for X/Reddit/LinkedIn/TikTok/YouTube/Pinterest with per-provider contract tests — an unresolvable profile fails the connect (`profile_unavailable`) instead of storing a colliding `"unknown"` id; PKCE issued for every flow whose exchange can carry a verifier (Facebook's GET flow gets none, per its documented parameters; the dead `usesPkce` flag was removed and the policy documented); X's rotating refresh token is refreshed by the cron maintainer (rotation contract tested); callback route contract tests pin the exchange/profile shapes.** Remaining (operator): sandbox verification per live provider. |
 | 10 Scheduler leases | **Done** | Claim/lease (5 min), 100s deadline, 60s per-post timeout under 120s route maxDuration, uncertain-outcome handling, 10 integration tests + Inngest run-idempotency tests. |
 | 11 Independent settlement | Partial core done → **remaining items closed 2026-09-29** | `Promise.allSettled`, shared server-side transitions, receipts. **2026-09-29: connector results validated server-side (URL host allowlist, bounded text, `success === true` strictness — `sanitizePublishResult`); composer-path all-failure, timeout, and sanitization tests added to `publish.test.ts`.** Remaining (minor): an analytics/Composer display-parity test. |
 | 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`; EXPLAIN before/after evidence for the index strategy. |
 | 13 Timezones/HTTP | Partial → **HTTP half closed 2026-09-29** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`). **2026-09-29: `fetchWithTimeout` no longer follows redirects (`redirect: "manual"`, a 3xx surfaces to the caller's existing `!ok` handling) and bounds every response body at 2 MiB inside the total deadline (`HttpResponseTooLargeError`); the assistant stream cancels upstream generation on client disconnect (`req.signal` into the provider transport + `generator.return()` + reader cancel in both format generators).** Remaining: `posts.scheduled_at` is a bare `timestamp` (second, undocumented contract) — migrating it to `timestamptz` needs a deliberate data decision; connect-phase timeout distinct from the total deadline (low value). |
-| 14 Analytics/inbox/prefs | Partial | Analytics reads real results incl. partial success. **2026-09-29: analytics query bounded (`.limit(500)`).** Gaps: inbox read-state hardcoded `unread:true`, provider errors swallowed as `[]`; four preference toggles inert; goal-run publishes never reach analytics. |
+| 14 Analytics/inbox/prefs | Partial → **provider errors surfaced 2026-09-29** | Analytics reads real results incl. partial success; query bounded (`.limit(500)`). **2026-09-29: a failed provider fetch is reported per platform ("X: …") instead of silently reading as an empty inbox.** Remaining (product decisions): inbox read-state persistence (needs a storage design); four preference toggles still inert — implement or remove; goal-run publishes reach `publish_receipts`/`run_steps` but not analytics — mark in or out of scope. |
 | 15 Dead code | Partial → **confirmed residue removed 2026-09-29** | **2026-09-29: `src/lib/mock-data.ts` deleted (zero importers); the four unused direct dependencies (@tanstack/react-query, zustand, @hookform/resolvers, react-hook-form) removed and the lockfile regenerated.** Remaining: a final reference-checked sweep after the behavior work stabilizes (plan's original ordering). |
 | 16 Docs truthfulness | Partial → **public-facing claims fixed 2026-09-29** | README/platform claims match the registry (done by the rebuild). **2026-09-29: the pricing page no longer quotes unimplemented tiers/trial/seats (now: free while v1 is built, honest capability list); fabricated testimonials removed from the landing page; the CTA no longer claims GDPR compliance; the privacy page now describes the retention/deletion scope that actually exists and marks self-serve export/deletion as roadmap instead of promising it.** Remaining: canonical setup docs pass, product-owner sign-off on public claims. |
 | 17 Boundaries/DAL | Not started | Actions and server pages import `@/db` directly; `publish.ts` 952 LOC; client components import fat action modules. |
@@ -40,9 +40,9 @@ Source plan: [`tasks/plan.md`](./plan.md)
 3. ~~**Task 12** — `posts.status` CHECK, `ai_providers` default partial-unique (migration 0014), transactional writes~~ **done 2026-09-29**.
 4. ~~**Task 13** — bounded bodies + manual redirects; assistant disconnect cancellation~~ **done 2026-09-29** (`posts.scheduled_at` decision remains).
 5. ~~**Task 16 remainder** — pricing/testimonials/privacy claims~~ **done 2026-09-29** (owner sign-off remains).
-6. **Task 9** — mocked OAuth contract tests; resolve X/Reddit basic-auth metadata (implement or mark unsupported); stop storing `"unknown"` account IDs.
-7. **Task 14 remainder** — inbox read-state + provider-error surfacing; decide preferences (implement or remove); route goal-run publishes into analytics or mark out of scope.
-8. **Task 8** — export + self-serve deletion (needs the plan's DB design decision: `rate_limits` keying, retention/backup documentation).
+6. ~~**Task 9** — Basic-auth exchanges, profile lookups, PKCE policy, X refresh rotation, contract tests~~ **done 2026-09-29** (sandbox verification per provider remains with the operator).
+7. ~~**Task 14** — provider errors surfaced~~ **done 2026-09-29**; read-state, preferences, and goal-run analytics remain explicit product decisions.
+8. ~~**Task 8** — export + self-serve deletion~~ **done 2026-09-29** (retention/backup runbook remains with the operator).
 9. **Task 17** — DAL extraction, publish.ts split (multi-PR).
 10. **Task 18** — structured logging, budgets, a11y smoke.
 11. **Task 0** — owner action, no code.
@@ -107,6 +107,36 @@ Source plan: [`tasks/plan.md`](./plan.md)
   tests (Task 9, sandbox verification), inbox read-state/preferences (product
   decision), export/deletion (Task 8 design decision), DAL/observability
   (Tasks 17/18, multi-PR).
+
+### Session 2026-09-29 (continued) — work order items 6–8
+
+- **Task 9 complete.** X and Reddit exchange their codes with HTTP Basic
+  credentials (`tokenAuth: "basic"` is now consumed; the secret never appears
+  in a request body). The six non-Meta OAuth platforms resolve real account
+  ids through documented profile endpoints (`src/lib/oauth-profile.ts`), and
+  an unresolvable profile fails the connect with `profile_unavailable`
+  instead of storing a colliding `"unknown"`. PKCE is issued for every flow
+  whose exchange can carry a verifier — Facebook's GET flow, whose documented
+  parameters have none, is issued none (the dead `usesPkce` flag is gone).
+  X's rotating refresh token is renewed by the cron maintainer. Contract
+  tests: `oauth-profile.test.ts`, `platform-tokens.rotation.test.ts`, and
+  callback route tests pinning Basic-auth/profile/no-unknown behavior.
+- **Task 14 increment.** A failing inbox provider fetch is now reported per
+  platform in the UI rather than rendering as an empty inbox.
+- **Task 8 complete.** `src/lib/account-lifecycle.ts` is the tenant data
+  boundary: `/api/account/export` streams the caller's complete inventory as
+  JSON with secrets as presence flags; password-confirmed self-serve deletion
+  removes the user plus the `rate_limits` rows its id keys (no FK — deleted
+  explicitly in the same transaction; UUIDs carry no LIKE wildcards).
+  Settings → Data & account exposes both; two-tenant integration tests prove
+  export scoping, secret-freedom, and that deleting one tenant leaves the
+  other byte-for-byte intact; the privacy policy now describes exactly this.
+- **Verification:** 455 unit tests, 171 integration tests, typecheck clean,
+  lint 0 errors, production build green.
+- **Remaining for the owner (non-code):** Task 0 secret rotation; sandbox
+  verification of each OAuth provider; retention/backup runbook decisions;
+  the Task 14 product decisions (read-state, preferences, goal-run
+  analytics); Tasks 17/18 are multi-PR work by design.
 
 ## Phase 0: Safety Baseline
 

@@ -6,6 +6,7 @@ import { and, asc, eq, isNotNull, isNull, lte, or } from "drizzle-orm";
 import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { publishToAllForUser, type PublishResult } from "@/lib/publish";
+import { log } from "@/lib/logger";
 import { getPostTargets } from "@/lib/posts/targets";
 
 /**
@@ -399,10 +400,14 @@ export async function publishDuePosts(
     outcomes.push({ postId: post.id, userId: post.userId, ok, results });
   }
 
+  const published = outcomes.filter((o) => o.ok).length;
+  const failed = outcomes.length - published;
+  log.info("publish_run_finished", { processed: outcomes.length, published, failed });
+
   return {
     processed: outcomes.length,
-    published: outcomes.filter((o) => o.ok).length,
-    failed: outcomes.filter((o) => !o.ok).length,
+    published,
+    failed,
     outcomes,
   };
 }

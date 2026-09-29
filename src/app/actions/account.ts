@@ -9,6 +9,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { getSessionUser, destroySession } from "@/lib/session";
 import { deleteAccount } from "@/lib/account-lifecycle";
+import { log } from "@/lib/logger";
 
 /**
  * Self-serve account deletion (remediation Task 8).
@@ -51,9 +52,10 @@ export async function deleteAccountAction(
   }
 
   const result = await deleteAccount(session.id);
-  console.info(
-    `[account] deleted user ${session.id} (${result.rateLimitRowsRemoved} rate-limit rows)`
-  );
+  log.info("account_deleted", {
+    userId: session.id,
+    rateLimitRowsRemoved: result.rateLimitRowsRemoved,
+  });
 
   // The user row is gone, so the session JWT can no longer resolve — clear
   // the cookie now rather than letting the next request do it by failing.

@@ -6,6 +6,7 @@ import {
   getGlobalAiBudgetLimit,
   type AiBudgetKind,
 } from "@/lib/ai-limits";
+import { log } from "./logger";
 import { consumeRateLimit, type RateLimitOutcome } from "@/lib/rate-limit";
 
 /**
@@ -24,13 +25,20 @@ export async function consumeAiBudget(
     getAiBudgetLimit(kind),
     AI_BUDGET_WINDOW_SECONDS,
   );
-  if (!userBudget.allowed) return userBudget;
+  if (!userBudget.allowed) {
+    log.warn("ai_budget_denied", { userId, kind, scope: "user" });
+    return userBudget;
+  }
 
-  return consumeRateLimit(
+  const global = await consumeRateLimit(
     "ai:global",
     getGlobalAiBudgetLimit(),
     AI_BUDGET_WINDOW_SECONDS,
   );
+  if (!global.allowed) {
+    log.warn("ai_budget_denied", { userId, kind, scope: "global" });
+  }
+  return global;
 }
 
 export function aiBudgetMessage(outcome: RateLimitOutcome): string {

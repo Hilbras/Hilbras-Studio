@@ -15,6 +15,7 @@
  */
 
 import { fetchWithTimeout } from "./http";
+import { log } from "./logger";
 
 export interface LongLivedToken {
   accessToken: string;
@@ -157,7 +158,7 @@ export async function refreshRotatingToken(
       expires_in?: number;
     };
     if (!res.ok || !body.access_token || !body.refresh_token) {
-      console.warn(`[${platform}] token rotation failed (${res.status})`);
+      log.warn("token_rotation_failed", { platform, status: res.status });
       return null;
     }
     return {
@@ -166,10 +167,10 @@ export async function refreshRotatingToken(
       expiresIn: body.expires_in ?? null,
     };
   } catch (e) {
-    console.warn(
-      `[${platform}] token rotation errored`,
-      e instanceof Error ? e.message : e
-    );
+    log.warn("token_rotation_errored", {
+      platform,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }
@@ -278,20 +279,20 @@ async function fetchToken(
     const body = (await res.json().catch(() => ({}))) as MetaTokenResponse;
 
     if (!res.ok || !body.access_token) {
-      console.warn(
-        `[${platform}] token request failed (${res.status}) ${
-          body.error?.message ?? ""
-        }`.trim()
-      );
+      log.warn("token_request_failed", {
+        platform,
+        status: res.status,
+        detail: body.error?.message,
+      });
       return null;
     }
 
     return { accessToken: body.access_token, expiresIn: body.expires_in ?? null };
   } catch (e) {
-    console.warn(
-      `[${platform}] token request errored`,
-      e instanceof Error ? e.message : e
-    );
+    log.warn("token_request_errored", {
+      platform,
+      error: e instanceof Error ? e.message : String(e),
+    });
     return null;
   }
 }

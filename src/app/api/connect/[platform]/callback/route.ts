@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/session";
-import { db, schema } from "@/db";
 import { registerConnection } from "@/lib/accounts/store";
 import { encryptSecret } from "@/lib/crypto";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
@@ -8,6 +7,7 @@ import { requestOrigin, safeReturnPath } from "@/lib/request-origin";
 import { readPlatformAppCredentials } from "@/lib/platform-credentials";
 import { isThreadsPermissionError } from "@/lib/threads-errors";
 import { verifyState } from "@/lib/oauth-state";
+import { fetchPlatformProfile, hasProfileLookup } from "@/lib/oauth-profile";
 import { getSecretKey } from "@/lib/secret-key";
 import { fetchWithTimeout } from "@/lib/http";
 import {
@@ -100,16 +100,22 @@ export async function GET(
   const { clientId, clientSecret } = credentials;
 
   const codeVerifier = req.cookies.get(verifierCookieName)?.value ?? "";
-  if (!codeVerifier) return fail("missing_pkce_verifier");
+  // PKCE policy: every flow whose token exchange can carry a verifier issues a
+  // challenge in /authorize and must present it here. The one exception is the
+  // GET exchange (Facebook), whose documented parameter list has no
+  // code_verifier — so /authorize issues no challenge for it either.
+  const pkceExpected = platform.auth.tokenMethod !== "get";
+  if (pkceExpected && !codeVerifier) return fail("missing_pkce_verifier");
 
   // Token exchange. Meta documents Facebook's `/oauth/access_token` as a GET
   // with the parameters in the query string (manual-flow + PKCE guides) and no
   // grant_type; Threads and Instagram document the form-encoded POST with
-  // grant_type that is the default below. The PKCE verifier is only required
-  // when no client_secret is sent, so its absence on the Facebook branch is
-  // per the docs, not a dropped safeguard.
+  // grant_type that is the default below. Platforms with `tokenAuth: "basic"`
+  // (X, Reddit) authenticate the exchange with HTTP Basic credentials and must
+  // not send the client secret in the body.
   const redirectUri = `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`;
   const useGet = platform.auth.tokenMethod === "get";
+  const useBasicAuth = platform.auth.tokenAuth === "basic";
 
   const tokenRes = useGet
     ? await fetchWithTimeout(
@@ -127,15 +133,24 @@ export async function GET(
         method: "POST",
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
+          ...(useBasicAuth
+            ? {
+                Authorization: `Basic ${Buffer.from(
+                  `${clientId}:${clientSecret}`,
+                ).toString("base64")}`,
+              }
+            : {}),
           ...platform.auth.extraHeaders,
         },
         body: new URLSearchParams({
-          client_id: clientId,
-          client_secret: clientSecret,
+          // The Basic header carries the app credentials where they would be
+          // rejected in the body (X: "Client authentication failed" when the
+          // secret is posted; Reddit likewise authenticates via Basic only).
+          ...(useBasicAuth ? {} : { client_id: clientId, client_secret: clientSecret }),
           grant_type: "authorization_code",
           code,
           redirect_uri: redirectUri,
-          code_verifier: codeVerifier,
+          ...(pkceExpected ? { code_verifier: codeVerifier } : {}),
         }).toString(),
       });
 
@@ -252,6 +267,23 @@ export async function GET(
       platformAccountId = profile.id;
       profileUsername = profile.name;
     }
+  } else if (hasProfileLookup(platformIdStr)) {
+    // X, Reddit, LinkedIn, TikTok, YouTube, Pinterest: one documented
+    // /me-shaped endpoint each, resolved with the freshly minted token.
+    const profile = await fetchPlatformProfile(platformIdStr, accessToken);
+    if (profile) {
+      platformAccountId = profile.id;
+      profileUsername = profile.handle ?? undefined;
+    }
+  }
+
+  // A connect without a platform account id cannot be keyed, repointed on
+  // reconnect, or addressed by anything downstream. It used to be stored as
+  // `"unknown"`, which silently collapsed every identity on the platform onto
+  // one row — so an unresolvable profile now fails the connect with an error
+  // the user can act on (retry, or fix the app configuration).
+  if (!platformAccountId) {
+    return fail("profile_unavailable");
   }
 
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null;
@@ -270,7 +302,7 @@ export async function GET(
     tokenExpiresAt: expiresAt,
     accounts: [
       {
-        platformAccountId: platformAccountId ?? tokenData.user_id ?? "unknown",
+        platformAccountId,
         handle: profileUsername ?? tokenData.username ?? null,
       },
     ],

@@ -5,11 +5,16 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, connections } from "@/db/schema";
 import { decryptSecret, encryptSecret } from "@/lib/crypto";
+import { readPlatformAppCredentials } from "@/lib/platform-credentials";
+import type { PlatformId } from "@/lib/platforms";
 import {
   DEFAULT_TOKEN_LIFETIME_SECONDS,
   effectiveTokenExpiry,
   refreshablePlatforms,
   refreshLongLivedToken,
+  refreshRotatingToken,
+  rotatingRefreshPlatforms,
+  supportsTokenRotation,
   TOKEN_REFRESH_WINDOW_MS,
 } from "@/lib/platform-tokens";
 
@@ -50,7 +55,12 @@ export interface TokenRefreshSummary {
  */
 export async function refreshExpiringTokens(userId?: string): Promise<TokenRefreshSummary> {
   const summary: TokenRefreshSummary = { scanned: 0, refreshed: 0, failed: 0, expired: 0 };
-  const refreshable = refreshablePlatforms();
+  // Both refresh kinds are scanned: Meta's in-place long-lived refresh and the
+  // rotating refresh tokens (X), whose short lifetime makes the cron the only
+  // thing keeping those connections alive.
+  const refreshable = [
+    ...new Set([...refreshablePlatforms(), ...rotatingRefreshPlatforms()]),
+  ];
   if (refreshable.length === 0) return summary;
 
   // Grants, not accounts (ADR-006): the token lives on the connection, and
@@ -61,7 +71,9 @@ export async function refreshExpiringTokens(userId?: string): Promise<TokenRefre
     .select({
       id: connections.id,
       platform: connections.platform,
+      userId: connections.userId,
       accessTokenEnc: connections.accessTokenEnc,
+      refreshTokenEnc: connections.refreshTokenEnc,
       tokenExpiresAt: connections.tokenExpiresAt,
       connectedAt: connections.connectedAt,
     })
@@ -97,6 +109,49 @@ export async function refreshExpiringTokens(userId?: string): Promise<TokenRefre
     } catch {
       // An undecryptable token says nothing about the platform — leave it to
       // the health probe rather than counting it as a failed refresh.
+      continue;
+    }
+
+    // Rotating refresh (X): short-lived access token, app-authenticated call,
+    // and a replacement refresh token that must be persisted together with the
+    // new access token.
+    if (supportsTokenRotation(row.platform)) {
+      if (!row.refreshTokenEnc) continue; // grant without offline access — nothing to rotate
+      const credentials = await readPlatformAppCredentials(
+        row.userId,
+        row.platform as PlatformId
+      );
+      if (!credentials) {
+        summary.failed++;
+        continue;
+      }
+      let refreshToken: string;
+      try {
+        refreshToken = decryptSecret(row.refreshTokenEnc);
+      } catch {
+        continue;
+      }
+      const rotated = await refreshRotatingToken(
+        row.platform,
+        refreshToken,
+        credentials.clientId,
+        credentials.clientSecret
+      );
+      if (!rotated) {
+        summary.failed++;
+        continue;
+      }
+      await db
+        .update(connections)
+        .set({
+          accessTokenEnc: encryptSecret(rotated.accessToken),
+          refreshTokenEnc: encryptSecret(rotated.refreshToken),
+          tokenExpiresAt: new Date(
+            now + (rotated.expiresIn ?? DEFAULT_TOKEN_LIFETIME_SECONDS) * 1000
+          ),
+        })
+        .where(eq(connections.id, row.id));
+      summary.refreshed++;
       continue;
     }
 

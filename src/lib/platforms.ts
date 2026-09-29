@@ -47,8 +47,11 @@ export interface PlatformSpec {
     authorizeUrl: string;
     tokenUrl: string;
     scopes: string[];
-    /** X uses PKCE; Reddit authenticates the token call with HTTP Basic. */
-    usesPkce?: boolean;
+    /**
+     * How the token endpoint authenticates the app. `"body"` (default) sends
+     * client_id/client_secret as parameters; `"basic"` (X, Reddit) requires
+     * HTTP Basic credentials and must not carry the secret in the body.
+     */
     tokenAuth?: "body" | "basic";
     /**
      * HTTP method for the authorization-code exchange. Meta documents Facebook's
@@ -292,7 +295,6 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformSpec> = {
       authorizeUrl: "https://x.com/i/oauth2/authorize",
       tokenUrl: "https://api.x.com/2/oauth2/token",
       scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
-      usesPkce: true,
       tokenAuth: "basic",
     },
     content: {

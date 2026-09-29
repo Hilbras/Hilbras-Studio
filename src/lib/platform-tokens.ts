@@ -90,6 +90,90 @@ export function supportsTokenRefresh(platform: string): boolean {
   return Boolean(REFRESH_ENDPOINTS[platform]);
 }
 
+/**
+ * Rotating refresh tokens: platforms whose access token is short-lived and
+ * whose refresh token is replaced on every use.
+ *
+ * X issues a 2-hour access token; `offline.access` (declared in its scopes)
+ * is what makes a refresh token come back at all, and each refresh returns a
+ * **new** refresh token — the stored one must be replaced, or the next refresh
+ * fails. Unlike Meta's in-place refresh this call authenticates the *app* with
+ * HTTP Basic credentials, which is why it takes the client pair and why the
+ * maintainer needs the user's credential row, not just the connection.
+ *
+ * Docs: POST https://api.x.com/2/oauth2/token (grant_type=refresh_token)
+ */
+const ROTATING_REFRESH_ENDPOINTS: Partial<Record<string, { url: string }>> = {
+  x: { url: "https://api.x.com/2/oauth2/token" },
+};
+
+/** Whether this platform refreshes by rotating its refresh token. */
+export function supportsTokenRotation(platform: string): boolean {
+  return Boolean(ROTATING_REFRESH_ENDPOINTS[platform]);
+}
+
+/** Platform ids the token maintainer must scan (both refresh kinds). */
+export function rotatingRefreshPlatforms(): string[] {
+  return Object.keys(ROTATING_REFRESH_ENDPOINTS);
+}
+
+export interface RotatedToken {
+  accessToken: string;
+  /** The replacement refresh token — the caller must persist it. */
+  refreshToken: string;
+  expiresIn: number | null;
+}
+
+/**
+ * Refresh a rotating token. Fails (null) unless the platform answers with
+ * both a new access token and its replacement refresh token — persisting a
+ * partial result would leave the stored refresh token already-used.
+ */
+export async function refreshRotatingToken(
+  platform: string,
+  refreshToken: string,
+  clientId: string,
+  clientSecret: string
+): Promise<RotatedToken | null> {
+  const endpoint = ROTATING_REFRESH_ENDPOINTS[platform];
+  if (!endpoint) return null;
+
+  try {
+    const res = await fetchWithTimeout(endpoint.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+      }).toString(),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!res.ok || !body.access_token || !body.refresh_token) {
+      console.warn(`[${platform}] token rotation failed (${res.status})`);
+      return null;
+    }
+    return {
+      accessToken: body.access_token,
+      refreshToken: body.refresh_token,
+      expiresIn: body.expires_in ?? null,
+    };
+  } catch (e) {
+    console.warn(
+      `[${platform}] token rotation errored`,
+      e instanceof Error ? e.message : e
+    );
+    return null;
+  }
+}
+
 /** Platform ids `refreshLongLivedToken` can act on — what the maintainer scans. */
 export function refreshablePlatforms(): string[] {
   return Object.keys(REFRESH_ENDPOINTS);

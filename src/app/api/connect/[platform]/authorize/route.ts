@@ -69,23 +69,36 @@ export async function GET(
   // the forgery and PKCE is what closes the replay.
   const state = signState({ userId: session.id, returnUrl }, getSecretKey());
 
-  const codeVerifier = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
-  const hashed = await crypto.subtle.digest("SHA-256", Buffer.from(codeVerifier));
-  const codeChallenge = Buffer.from(hashed).toString("base64url").replace(/=/g, "");
+  // PKCE policy (Task 9): every flow whose token exchange can carry a verifier
+  // gets a challenge, unconditionally — X mandates it, the others accept it.
+  // The GET exchange (Facebook) documents no code_verifier parameter, so a
+  // challenge issued there could never be redeemed; it gets none.
+  const pkceApplies = platform.auth.tokenMethod !== "get";
+  const codeVerifier = pkceApplies
+    ? Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url")
+    : "";
+  const hashed = pkceApplies
+    ? await crypto.subtle.digest("SHA-256", Buffer.from(codeVerifier))
+    : null;
+  const codeChallenge = hashed
+    ? Buffer.from(new Uint8Array(hashed)).toString("base64url").replace(/=/g, "")
+    : "";
 
   const verifierCookieName = `pkce_${platformIdStr}`;
   const redirectUri = `${requestOrigin(req)}/api/connect/${platformIdStr}/callback`;
   const response = NextResponse.redirect(
-    `${platform.auth.authorizeUrl}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(platform.auth.scopes.join(" "))}&state=${encodeURIComponent(state)}&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256`
+    `${platform.auth.authorizeUrl}?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(platform.auth.scopes.join(" "))}&state=${encodeURIComponent(state)}${codeChallenge ? `&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256` : ""}`
   );
 
-  response.cookies.set(verifierCookieName, codeVerifier, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 60 * 10,
-    path: "/",
-  });
+  if (codeVerifier) {
+    response.cookies.set(verifierCookieName, codeVerifier, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 10,
+      path: "/",
+    });
+  }
 
   return response;
 }

@@ -96,13 +96,17 @@ export async function getAnalyticsData() {
     };
   }
 
+  // Bounded so a long-lived deployment cannot make this query unbounded; the
+  // page aggregates stats and shows five recent posts, 500 published rows is
+  // far past either need (remediation Task 14: no unbounded result queries).
   const publishedPosts = await db
     .select()
     .from(posts)
     .where(
       and(eq(posts.userId, session.id), eq(posts.status, "published"))
     )
-    .orderBy(desc(posts.publishedAt));
+    .orderBy(desc(posts.publishedAt))
+    .limit(500);
 
   // One query for the whole page rather than one per post.
   const targets = await getPostTargets(publishedPosts.map((p) => p.id));

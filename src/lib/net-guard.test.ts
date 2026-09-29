@@ -19,16 +19,28 @@ describe("provider network guard", () => {
     }
   });
 
+  it("blocks reserved documentation, protocol, multicast, and broadcast ranges", () => {
+    for (const address of [
+      "192.0.0.1", // IETF protocol assignments
+      "192.0.2.1", // TEST-NET-1
+      "198.51.100.7", // TEST-NET-2
+      "203.0.113.9", // TEST-NET-3
+      "224.0.0.1", // multicast
+      "240.0.0.1", // reserved
+      "255.255.255.255", // broadcast
+    ]) {
+      expect(isBlockedAddress(address)).toBe(true);
+    }
+  });
+
   it("allows a public literal address in production", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("ALLOW_PRIVATE_AI_URLS", "");
 
     await expect(assertPublicProviderUrl("https://8.8.8.8/v1")).resolves.toBeUndefined();
   });
 
   it("rejects private literals and unsupported URL schemes", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("ALLOW_PRIVATE_AI_URLS", "");
 
     await expect(assertPublicProviderUrl("http://127.0.0.1/v1")).rejects.toThrow(
       /private network|host is not allowed/,

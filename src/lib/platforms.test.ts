@@ -46,6 +46,31 @@ describe("platform registry invariants", () => {
     expect(getPublishingCapability("not-a-platform")).toBeNull();
   });
 
+  it("publishes with exactly five platforms and leaves exactly five connect-only", () => {
+    // The contract the UI, README, and docs all quote: five implemented
+    // publishers, five OAuth-capable platforms with no publisher yet. Adding a
+    // sixth publisher or flipping a connect-only platform is a product change
+    // and must update this test, the capability notes, and the docs together.
+    const publishable = PLATFORM_IDS.filter((id) => platformSupports(id, "publish_post"));
+    const connectOnly = PLATFORM_IDS.filter((id) => !platformSupports(id, "publish_post"));
+
+    expect(publishable).toEqual(["instagram", "facebook", "threads", "x", "telegram"]);
+    expect(connectOnly).toEqual([
+      "linkedin",
+      "tiktok",
+      "youtube",
+      "pinterest",
+      "reddit",
+    ]);
+    for (const id of connectOnly) {
+      expect(capabilitiesForPlatform(id)).toEqual([]);
+      // Omitted `connection` means "oauth"; every connect-only platform must
+      // still be OAuth-connectable with real app credentials declared.
+      expect(PLATFORM_REGISTRY[id].connection).not.toBe("manual");
+      expect(PLATFORM_REGISTRY[id].auth).toBeDefined();
+    }
+  });
+
   it("reports capabilities per platform rather than a publish/not-publish flag", () => {
     // The five working publishers share one set today.
     for (const id of ["instagram", "facebook", "threads", "x", "telegram"] as const) {

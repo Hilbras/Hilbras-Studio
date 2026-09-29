@@ -42,13 +42,17 @@ export function isBlockedAddress(address: string): boolean {
   ) {
     return true; // not a parsable address → refuse
   }
-  const [a, b] = octets;
+  const [a, b, c] = octets;
   if (a === 0 || a === 10 || a === 127) return true; // "this", private, loopback
   if (a === 169 && b === 254) return true; // link-local — cloud metadata
   if (a === 172 && b >= 16 && b <= 31) return true; // private
   if (a === 192 && b === 168) return true; // private
   if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64/10
   if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // IETF protocol assignments + TEST-NET-1
+  if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+  if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
+  if (a >= 224) return true; // multicast 224/4 and reserved 240/4 (incl. broadcast)
   return false;
 }
 

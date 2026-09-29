@@ -1,10 +1,4 @@
-import { eq, and, desc } from "drizzle-orm";
-import { db } from "@/db";
-import { aiProviders } from "@/db/schema";
 import { getSessionUser } from "@/lib/session";
-import { aiBudgetMessage, consumeAiBudget } from "@/lib/ai-budget";
-import type { AiBudgetKind } from "@/lib/ai-limits";
-import { decryptSecret } from "@/lib/crypto";
 import { listMemories } from "@/lib/chat";
 import { PLATFORM_REGISTRY, type PlatformId } from "@/lib/platforms";
 import {
@@ -13,151 +7,41 @@ import {
   getWeeklyChartData,
   getConnectedAccountsWithDetails,
 } from "@/app/actions/dashboard";
-import {
-  chatCompletion as sdkChat,
-  streamChat as sdkStream,
-  generatePost as sdkGenerate,
-  type ProviderConfig,
-  type ChatMessage,
-} from "@/lib/ai-sdk";
+import { SYSTEM_PROMPT } from "./ai-chat";
 
 /**
- * Hilbras AI Service
+ * Hilbras AI — public surface.
  *
- * Loads provider config from the DB (per-user) or falls back to env vars.
- * Uses the lightweight ai-sdk — no vendor SDK dependencies.
+ * The implementation is split by concern (remediation Task 17): provider
+ * resolution in `ai-provider-config.ts`, the chat wrappers in `ai-chat.ts`,
+ * background memory/summary work in `ai-memory.ts`, and the Assistant's
+ * context builder here. This module re-exports the public API so every
+ * consumer keeps importing `@/lib/ai`.
+ *
+ * The context builder still reads the dashboard through the UI-layer action
+ * module — the one remaining cross-layer import in this file, recorded as
+ * remaining work in tasks/todo.md.
  */
 
 export type { ChatMessage } from "@/lib/ai-sdk";
-
-async function consumeBackgroundAiBudget(
-  userId: string,
-  kind: AiBudgetKind,
-): Promise<void> {
-  const budget = await consumeAiBudget(userId, kind);
-  if (!budget.allowed) throw new Error(aiBudgetMessage(budget));
-}
-
-const SYSTEM_PROMPT = `You are Hilbras Studio's AI social media assistant.
-You help users create, adapt, and schedule content across social platforms.
-Be concise, creative, and platform-aware.
-When asked to create posts, adapt tone per platform rules.`;
-
-/* ── Built-in default model ─────────────────────────────────── */
-
-/**
- * Stable id of the built-in "Hilbras AI" model.
- * Not a DB row — it always exists, and users can neither edit nor remove it.
- * It is active whenever no user-added provider is selected.
- */
-export const BUILTIN_PROVIDER_ID = "builtin";
-
-/**
- * Config for the built-in model. Server-side only: the key lives in env vars
- * and is never sent to the client.
- *
- * `HILBRAS_AI_*` wins; otherwise it falls back to the legacy
- * `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` pair.
- * Returns null when the server has no key configured.
- */
-export function getBuiltinProviderConfig(): ProviderConfig | null {
-  const legacyAnthropic =
-    !!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY;
-
-  const apiKey =
-    process.env.HILBRAS_AI_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-
-  const formatOverride = process.env.HILBRAS_AI_API_FORMAT;
-  const apiFormat: ProviderConfig["apiFormat"] =
-    formatOverride === "anthropic" || formatOverride === "openai"
-      ? formatOverride
-      : process.env.HILBRAS_AI_BASE_URL || !legacyAnthropic
-        ? "openai"
-        : "anthropic";
-
-  const baseUrl =
-    process.env.HILBRAS_AI_BASE_URL ??
-    (apiFormat === "anthropic"
-      ? "https://api.anthropic.com/v1"
-      : "https://api.openai.com/v1");
-
-  const modelId =
-    process.env.HILBRAS_AI_MODEL_ID ??
-    (apiFormat === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o-mini");
-
-  return { name: "Hilbras AI", baseUrl, apiKey, apiFormat, modelId };
-}
-
-/* ── Provider resolution ────────────────────────────────────── */
-
-function rowToConfig(row: {
-  name: string;
-  baseUrl: string;
-  apiKeyEnc: string;
-  apiFormat: string;
-  modelId: string;
-}): ProviderConfig {
-  return {
-    name: row.name,
-    baseUrl: row.baseUrl,
-    apiKey: decryptSecret(row.apiKeyEnc),
-    apiFormat: row.apiFormat as ProviderConfig["apiFormat"],
-    modelId: row.modelId,
-  };
-}
-
-/**
- * Resolve the active AI provider for a user.
- *
- * Active selection lives on `ai_providers.is_default`:
- * - a row is default  → that provider is active;
- * - no row is default → the built-in model is active (the initial state).
- *
- * Falls back further when the built-in model has no server key.
- */
-async function resolveForUser(userId: string): Promise<ProviderConfig | null> {
-  // 1. A provider the user explicitly selected
-  const [active] = await db
-    .select()
-    .from(aiProviders)
-    .where(and(eq(aiProviders.userId, userId), eq(aiProviders.isDefault, true)))
-    .limit(1);
-  if (active) return rowToConfig(active);
-
-  // 2. Built-in default model
-  const builtin = getBuiltinProviderConfig();
-  if (builtin) return builtin;
-
-  // 3. Built-in unavailable → any provider the user added
-  const [anyRow] = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, userId))
-    .orderBy(desc(aiProviders.updatedAt))
-    .limit(1);
-  if (anyRow) return rowToConfig(anyRow);
-
-  return null;
-}
-
-/** Resolve the active provider for the current session. */
-export async function resolveProvider(): Promise<ProviderConfig | null> {
-  const user = await getSessionUser();
-  if (!user) return null;
-  return resolveForUser(user.id);
-}
-
-/**
- * Resolve provider without session (for server actions that pass context).
- */
-export async function resolveProviderForUser(userId: string): Promise<ProviderConfig | null> {
-  return resolveForUser(userId);
-}
-
-/* ── Assistant context ──────────────────────────────────────── */
+export {
+  BUILTIN_PROVIDER_ID,
+  getActiveModelInfo,
+  getAvailableModels,
+  getBuiltinProviderConfig,
+  getProviderStatus,
+  resolveProvider,
+  resolveProviderForUser,
+  type ActiveModelInfo,
+} from "./ai-provider-config";
+export {
+  chatCompletion,
+  completeWithSystem,
+  generatePost,
+  streamChat,
+  SYSTEM_PROMPT,
+} from "./ai-chat";
+export { extractMemories, summarizeSegment } from "./ai-memory";
 
 /** Display name for a platform id: "threads" → "Threads". */
 function platformName(id: string): string {
@@ -244,167 +128,4 @@ Rules:
 
   const body = blocks.length ? `\n\n${blocks.join("\n\n")}` : "";
   return `${SYSTEM_PROMPT}${body}${RULES}`;
-}
-
-/* ── Memory extraction / summarization ──────────────────────── */
-
-const MEMORY_SYSTEM = `You extract durable facts from a single chat message and store them in the user's long-term memory.
-A durable fact is about their brand, business, audience, products, voice, workflow, or an explicit preference — something that will still be true next week.
-Output strictly:
-- One fact per line, as a plain third-person statement ("The user's brand voice is casual and playful.").
-- No numbering, no bullets, no quotes, no commentary.
-- If the message contains nothing durable, output exactly: NONE`;
-
-/** Pull durable facts out of a user message — `[]` when there are none. */
-export async function extractMemories(
-  message: string,
-  userId: string,
-): Promise<string[]> {
-  await consumeBackgroundAiBudget(userId, "memory");
-  const raw = await completeWithSystem(MEMORY_SYSTEM, message.slice(0, 4000));
-  const lines = raw
-    .split("\n")
-    .map((l) => l.replace(/^[-*•]\s*|^\d+[.)]\s*/, "").trim())
-    .filter((l) => l.length > 3 && !/^none\.?$/i.test(l))
-    .slice(0, 5);
-  return lines;
-}
-
-const SUMMARY_SYSTEM = `You summarize a segment of an ongoing chat so the conversation can continue without the earlier turns.
-Cover: facts about the user, decisions made, drafts written, and open threads.
-Output ONLY the summary, at most 180 words, no preamble or labels.`;
-
-/** Compress old turns into text that can stand in for them in context. */
-export async function summarizeSegment(
-  segment: string,
-  userId: string,
-): Promise<string> {
-  await consumeBackgroundAiBudget(userId, "summary");
-  const raw = await completeWithSystem(SUMMARY_SYSTEM, segment.slice(0, 12000));
-  return raw.trim();
-}
-
-/** Which model the Assistant will answer with — safe to send to the client. */
-export interface ActiveModelInfo {
-  name: string;
-  /** Empty for the built-in model — its real model id never reaches the UI. */
-  modelId: string;
-  configured: boolean;
-}
-
-export async function getActiveModelInfo(userId: string): Promise<ActiveModelInfo> {
-  // 1. A provider the user explicitly selected
-  const [active] = await db
-    .select()
-    .from(aiProviders)
-    .where(and(eq(aiProviders.userId, userId), eq(aiProviders.isDefault, true)))
-    .limit(1);
-  if (active) {
-    return { name: active.name, modelId: active.modelId, configured: true };
-  }
-
-  // 2. Built-in model — its name is shown, but not the model it runs
-  const builtin = getBuiltinProviderConfig();
-  if (builtin) {
-    return { name: builtin.name, modelId: "", configured: true };
-  }
-
-  // 3. Built-in unavailable → most recent user provider (mirrors resolveForUser)
-  const [anyRow] = await db
-    .select()
-    .from(aiProviders)
-    .where(eq(aiProviders.userId, userId))
-    .orderBy(desc(aiProviders.updatedAt))
-    .limit(1);
-  if (anyRow) {
-    return { name: anyRow.name, modelId: anyRow.modelId, configured: true };
-  }
-
-  return { name: "No model", modelId: "—", configured: false };
-}
-
-/* ── Public API ─────────────────────────────────────────────── */
-
-/**
- * Chat with the AI — returns full response text.
- */
-export async function chatCompletion(
-  messages: ChatMessage[],
-  opts?: { model?: string }
-): Promise<string> {
-  const provider = await resolveProvider();
-  if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
-
-  const fullMessages: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...messages,
-  ];
-
-  return sdkChat(provider, fullMessages);
-}
-
-/**
- * Streaming chat — yields chunks as they arrive.
- */
-export async function* streamChat(
-  messages: ChatMessage[],
-  opts?: { model?: string }
-): AsyncGenerator<string> {
-  const provider = await resolveProvider();
-  if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
-
-  const fullMessages: ChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    ...messages,
-  ];
-
-  yield* sdkStream(provider, fullMessages);
-}
-
-/**
- * Generate a short post based on a prompt and target platform.
- */
-export async function generatePost(prompt: string, platform?: string): Promise<string> {
-  const provider = await resolveProvider();
-  if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
-
-  return sdkGenerate(provider, prompt, platform);
-}
-
-/**
- * Single-shot completion with a caller-supplied system prompt.
- *
- * Used by the Composer's rewrite tools: they must answer with content only,
- * never with the Assistant's conversational persona.
- */
-export async function completeWithSystem(system: string, user: string): Promise<string> {
-  const provider = await resolveProvider();
-  if (!provider) throw new Error("No AI provider configured. Add one in Settings → AI Provider.");
-
-  return sdkChat(provider, [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ]);
-}
-
-/**
- * Get available models from configured providers.
- */
-export function getAvailableModels(): { id: string; name: string; provider: string }[] {
-  return [
-    { id: "gpt-4o", name: "GPT-4o (Latest)", provider: "openai" },
-    { id: "gpt-4o-mini", name: "GPT-4o Mini (Fast)", provider: "openai" },
-    { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", provider: "anthropic" },
-    { id: "claude-haiku-4-20250414", name: "Claude Haiku 4", provider: "anthropic" },
-  ];
-}
-
-/**
- * Check which providers have credentials configured.
- */
-export async function getProviderStatus(): Promise<{ openai: boolean; anthropic: boolean }> {
-  return {
-    openai: !!process.env.OPENAI_API_KEY,
-    anthropic: !!process.env.ANTHROPIC_API_KEY,
-  };
 }

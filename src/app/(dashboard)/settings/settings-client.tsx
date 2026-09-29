@@ -12,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -40,7 +39,6 @@ import { StaggerChildren, staggerItem } from "@/components/motion/stagger-childr
 import {
   updateProfileAction,
   changePasswordAction,
-  updatePreferencesAction,
 } from "@/app/actions/settings";
 import {
   saveAiProviderAction,
@@ -58,19 +56,11 @@ import {
 } from "@/app/actions/chat";
 import { deleteAccountAction } from "@/app/actions/account";
 
-type Prefs = {
-  autoHashtags: boolean;
-  adaptTone: boolean;
-  autoSchedule: boolean;
-  engagementNotifications: boolean;
-};
-
-const PREF_META: Record<keyof Prefs, { label: string; desc: string }> = {
-  autoHashtags: { label: "Auto-generate hashtags", desc: "AI adds relevant hashtags per platform" },
-  adaptTone: { label: "Adapt tone per platform", desc: "Adjusts writing style for X vs LinkedIn vs Instagram" },
-  autoSchedule: { label: "Auto-schedule posts", desc: "AI picks the optimal posting time" },
-  engagementNotifications: { label: "Engagement notifications", desc: "Notify when posts get significant engagement" },
-};
+// The four `user_preferences` columns (autoHashtags, adaptTone, autoSchedule,
+// engagementNotifications) are deliberately absent from this UI: none of them
+// changes any behavior yet, and a toggle that does nothing is a false claim
+// (remediation Task 14 — implement or remove). The schema keeps the columns;
+// reintroduce them wired to real behavior, one feature at a time.
 
 function FormMessage({ state }: { state: { error?: string; success?: string } }) {
   if (!state.error && !state.success) return null;
@@ -113,9 +103,8 @@ function StubbornInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return <Input ref={ref} autoComplete="off" readOnly onFocus={handleFocus} onBlur={handleBlur} {...props} className={props.className} />;
 }
 
-export function SettingsClient({ user, preferences, providers = [], memories = [] }: {
+export function SettingsClient({ user, providers = [], memories = [] }: {
   user: { name: string; email: string; username: string };
-  preferences: Prefs;
   providers?: AiProviderItem[];
   memories?: MemoryItem[];
 }) {
@@ -123,7 +112,6 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
   const [passwordState, passwordAction, passwordPending] = useActionState(changePasswordAction, {});
   const [deleteState, deleteAction, deletePending] = useActionState(deleteAccountAction, {});
   const [localProviders, setLocalProviders] = useState<AiProviderItem[]>(providers);
-  const [prefs, setPrefs] = useState<Prefs>(preferences);
   // The provider form calls the action directly (it needs to refresh the list
   // on success), so its result lives here — not in useActionState, whose
   // dispatcher is never invoked and whose state would never update.
@@ -159,7 +147,6 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
       setActivatingProvider(null);
     }
   };
-  const handlePrefToggle = (key: keyof Prefs) => { const v = !prefs[key]; setPrefs((p) => ({ ...p, [key]: v })); updatePreferencesAction({ ...prefs, [key]: v }); };
   const handlePing = async (id: string) => { setPinging(id); const r = await testPingProviderAction(id); setPingResult((prev) => ({ ...prev, [id]: r })); setPinging(null); };
   const forgetMemory = async (id: string) => {
     await deleteAssistantMemory(id);
@@ -401,26 +388,6 @@ export function SettingsClient({ user, preferences, providers = [], memories = [
                         </div>
                       )}
                       <p className="text-[10px] text-muted-foreground">Keys encrypted with AES-256-GCM.</p>
-                    </CardContent>
-                  </Card>
-                </Ripple></BlurFade>
-              </motion.div>
-
-              {/* AI Preferences */}
-              <motion.div variants={staggerItem}>
-                <BlurFade delay={0.03}><Ripple className="rounded-xl h-full">
-                  <Card className="h-full">
-                    <CardHeader><SectionHeader icon={Brain} title="AI Preferences" desc="Saved to your account." /></CardHeader>
-                    <CardContent className="space-y-0">
-                      {(Object.keys(PREF_META) as (keyof Prefs)[]).map((key) => (
-                        <div key={key} className="flex items-center justify-between py-3 border-b border-border last:border-0">
-                          <div>
-                            <p className="text-sm font-medium">{PREF_META[key].label}</p>
-                            <p className="text-xs text-muted-foreground">{PREF_META[key].desc}</p>
-                          </div>
-                          <Switch checked={prefs[key]} onCheckedChange={() => handlePrefToggle(key)} />
-                        </div>
-                      ))}
                     </CardContent>
                   </Card>
                 </Ripple></BlurFade>

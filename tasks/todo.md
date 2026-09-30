@@ -1009,6 +1009,24 @@ locally and in one CI run before the next layer surfaced. What finally worked wa
 stopping and probing what the page was actually doing — the animation API returning
 nothing was visible in ten seconds of inspection and invisible in six CI rounds.
 
+**Two further dead ends inside that fix, both worth recording because each looked
+obviously right:**
+
+- **Reading `getComputedStyle` waits forever.** `opacity` and `filter` are
+  *inherited*, so a child of an animating parent reads as mid-flight even after its
+  own animation finished — 40 elements that way on the landing page. The wait never
+  returned.
+- **Reading the element's own inline style over-waits.** Ten 3px decorative dots run
+  an opacity loop that never ends, and nothing about them is ever going to settle.
+
+**What actually works** is narrower than either: contrast is a property of rendered
+*text*, so the wait asks whether any element **containing text** is mid-flight. A
+decorative dot has none, and axe never reports one. Verified by probing rather than
+by a passing run — the guard settles on the real page, rejects a text element at
+`opacity: 0.5; filter: blur(4px)`, and ignores a mid-flight dot. The suite also got
+faster (1.6m against 1.5–9m), which is the expected shape when a wait stops
+over-waiting.
+
 ### Verification for the series
 
 540 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·

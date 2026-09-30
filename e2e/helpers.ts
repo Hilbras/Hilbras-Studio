@@ -111,14 +111,36 @@ export async function waitForStyles(page: Page): Promise<void> {
   // waiting on — an animation can start after the first sample, so a single
   // clear reading is not a settled one. The window is short enough to add nothing
   // to a warm run and long enough to span one frame at 60Hz.
+  // Only elements that *carry text* need to have settled.
+  //
+  // Two dead ends came first, and both are worth naming because each looked
+  // obviously right. Reading `getComputedStyle` waits forever: opacity and filter
+  // are inherited, so a child of an animating parent reads as mid-flight even
+  // after its own animation finished — 40 elements that way on this page.
+  // Reading the element's own inline style then over-waits: ten 3px decorative
+  // dots run an opacity loop forever, and nothing about them is ever going to
+  // settle.
+  //
+  // Contrast is a property of rendered *text*, so the question worth asking is
+  // whether any element containing text is mid-flight. A decorative dot has none,
+  // and axe never reports it. That makes this both correct and short.
+  //
+  // The inline style is read rather than the computed one because framer-motion
+  // writes it directly: `opacity: 0` while animating, and removed once finished.
   await page.waitForFunction(
     () => {
-      const changing = document.querySelectorAll<HTMLElement>("[style*='opacity'], [style*='filter']");
-      for (const el of changing) {
-        const cs = getComputedStyle(el);
-        const midOpacity = Number(cs.opacity) > 0.05 && Number(cs.opacity) < 0.995;
-        const midFilter = cs.filter !== "none" && !/blur\(0(px)?\)/.test(cs.filter);
-        if (midOpacity || midFilter) return false;
+      const hasText = (el: Element) =>
+        (el.textContent ?? "").trim().length > 0 &&
+        Array.from(el.childNodes).some((n) => n.nodeType === Node.TEXT_NODE);
+
+      for (const el of document.querySelectorAll<HTMLElement>("[style*='opacity'], [style*='filter']")) {
+        if (!hasText(el)) continue;
+
+        const inline = el.getAttribute("style") ?? "";
+        const opacity = /opacity:\s*([\d.]+)/.exec(inline);
+        if (opacity && Number(opacity[1]) > 0.05 && Number(opacity[1]) < 0.995) return false;
+        const filter = /filter:\s*blur\(([\d.]+)px\)/.exec(inline);
+        if (filter && Number(filter[1]) > 0.05) return false;
       }
       return true;
     },

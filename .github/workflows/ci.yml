@@ -56,6 +56,12 @@ jobs:
         env:
           NEXT_TELEMETRY_DISABLED: "1"
 
+      # After the build, because it measures the build's own output. Reads the
+      # chunks each prerendered page references, so the numbers are per route
+      # (remediation Task 18: bundle budget).
+      - name: Client bundle budget
+        run: node scripts/bundle-budget.mjs
+
       - name: Validate migrations
         run: pnpm exec drizzle-kit check --config=drizzle.config.ts
 

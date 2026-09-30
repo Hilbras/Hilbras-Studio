@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "typecheck": "tsc --noEmit --incremental false",
+    "bundle:budget": "node scripts/bundle-budget.mjs",
     "release:check": "node scripts/release-check.mjs"
   },
   "dependencies": {

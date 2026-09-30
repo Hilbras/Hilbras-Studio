@@ -971,6 +971,44 @@ reason: nothing looked. The file's own docstring says the point is that a new
 violation fails in CI; this is the first time that claim applied to a category the
 file did not cover.
 
+### (19th) The animation wait that was never waiting
+
+A sixth CI failure, on a single element this time: one `color-contrast` on a
+`text-muted-foreground` paragraph inside a landing-page feature card, a pair that
+measures **6.10:1** settled. Every previous failure had been the same *shape* —
+axe measuring a page before it had settled — so the fix followed the shape, and the
+shape was wrong.
+
+**The wait added for the fourth failure had never done anything.** It used
+`document.getAnimations()`, and a probe of a live page showed why that cannot work
+here: framer-motion drives its animations by **writing inline styles every frame**,
+not through the Web Animations API. Three animations were registered, all of them
+the infinite `spin` ones, while a card mid-stagger had `filter: blur(4px)` applied
+to it. Every element was already settled by the time the check ran, so it returned
+true immediately — correctly, and for the wrong reason.
+
+**The fix observes the computed value instead.** `[style*='opacity']` and
+`[style*='filter']` selects what framer is driving, and `getComputedStyle` reports
+what is actually on screen whether the change came from WAAPI or from a library
+writing styles in a rAF loop. `opacity` and `filter` are the two properties that
+change composited colour; a `y` transform is excluded because it moves an element
+without altering its colour, and including it would make the wait block on
+transforms that legitimately never end.
+
+**`filter` is in the list because of the `staggerItem` variants** — the feature
+cards animate `filter: blur(4px) → blur(0px)`, and a blur changes the composited
+colour of the text beneath it. That is the entire cause of this failure.
+
+*Verified directly,* rather than by a run that passes: the guard was probed against a
+synthetic mid-animation element and rejects `opacity: 0.5`, rejects `filter: blur(4px)`,
+and accepts a settled one — so it discriminates, rather than passing vacuously.
+
+**The general shape of this whole sequence, now that it is six deep:** each fix
+addressed the *observed symptom* rather than the mechanism, and each was green
+locally and in one CI run before the next layer surfaced. What finally worked was
+stopping and probing what the page was actually doing — the animation API returning
+nothing was visible in ten seconds of inspection and invisible in six CI rounds.
+
 ### Verification for the series
 
 540 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·

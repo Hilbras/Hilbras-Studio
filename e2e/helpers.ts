@@ -92,29 +92,47 @@ export async function waitForStyles(page: Page): Promise<void> {
   // once settled — on the same element, on every run, and never locally, because a
   // warm server finishes the animation before the first assertion.
   //
-  // The web-animations API is used rather than a fixed sleep: it waits on the
-  // animations that actually exist and returns as soon as they finish, so warm runs
-  // pay nothing. `opacity` animations only — a transform or filter animation does
-  // not change composited colours.
-  await page.evaluate(async () => {
-    const running = () =>
-      document.getAnimations().filter((a) => {
-        // KeyframeEffect only — a CSS animation's effect may be null, and a
-        // ScrollTimeline-driven one has no target property to inspect.
-        const effect = a.effect;
-        if (!effect || !("targetProperty" in effect)) return false;
-        // `targetProperty` is not in this TS lib's DOM types yet, though it is
-        // standard (CSS Animations 2) and present in every browser this runs on.
-        const property = (effect as { targetProperty?: unknown }).targetProperty;
-        return a.playState === "running" && String(property).includes("opacity");
-      });
-    // Two passes: an animation can start another, and a single pass would miss it.
-    for (let pass = 0; pass < 2 && running().length > 0; pass += 1) {
-      await Promise.all(
-        running().map((a) => a.finished.catch(() => undefined)),
-      );
-    }
-  });
+  // Wait for colour-changing animations to settle.
+  //
+  // This went through three versions, and the one that works is not the obvious
+  // one. The obvious one is `document.getAnimations()`: it reports *nothing* for
+  // these animations, because framer-motion drives them by writing inline styles
+  // on every frame rather than through the Web Animations API. Probing a live page
+  // showed exactly three registered animations, all of them the infinite `spin`
+  // ones, while a card mid-stagger had `filter: blur(4px)` applied.
+  //
+  // So the condition is on the element's *computed* value, which is true whether
+  // the animation came from WAAPI or from a library writing styles in a rAF loop.
+  // `opacity` and `filter` are the two properties that change composited colour;
+  // a `y` transform moves an element without altering its colour, and would make
+  // this wait for transforms that legitimately never end.
+  //
+  // Stability, rather than "no animation is running", is the property worth
+  // waiting on — an animation can start after the first sample, so a single
+  // clear reading is not a settled one. The window is short enough to add nothing
+  // to a warm run and long enough to span one frame at 60Hz.
+  await page.waitForFunction(
+    () => {
+      const changing = document.querySelectorAll<HTMLElement>("[style*='opacity'], [style*='filter']");
+      for (const el of changing) {
+        const cs = getComputedStyle(el);
+        const midOpacity = Number(cs.opacity) > 0.05 && Number(cs.opacity) < 0.995;
+        const midFilter = cs.filter !== "none" && !/blur\(0(px)?\)/.test(cs.filter);
+        if (midOpacity || midFilter) return false;
+      }
+      return true;
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+
+  // One more frame so the settled paint is committed before axe reads it.
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => done())),
+      ),
+  );
 }
 
 /** Severities that block a release. `minor`/`moderate` are reported, not failed. */

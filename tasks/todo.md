@@ -622,6 +622,48 @@ rewritten each tranche while the earlier summary lines are not revisited. A
 stale "remaining" line is worse than none — it sends the next session looking for
 work that is already finished.
 
+### (14th) Auditing the Release Readiness checkpoint against the code
+
+The checkpoint's five gates were all unchecked while most of the underlying work
+was demonstrably done — the same drift as the Task 18 summary, one level up.
+`HILBRAS_STUDIO_AUDIT_REPORT.md` is the source of record for severity (4 P0 /46
+P1 /47 P2 across AUD-001…033), so I checked the code rather than the task list.
+
+**All 13 high-severity findings (AUD-001…013) verified closed**, one command per
+finding. Two needed real inspection rather than a keyword match:
+
+- **AUD-006** (a server action returned decrypted client secrets to the browser)
+  is the one I would not have closed on a grep. `src/app/actions/platform.ts`
+  *does* still call `getUserCredentialValue(..._client_secret)` — so the keyword
+  search is positive, which reads as "still vulnerable". The finding is closed
+  because line 29 returns `toPlatformCredentialStatus(...)`, defined in
+  `src/lib/credential-status.ts` as `{ clientId, hasClientSecret: Boolean(x) }` —
+  a boolean. The secret is read and immediately reduced to a flag. A check that
+  stopped at "does this file mention clientSecret" would have reported this
+  security finding as open.
+- **AUD-020** (four stored preferences nothing consumes) is closed by *removal
+  from the UI* with the rationale in place at
+  `settings-client.tsx:56` — "a toggle that does nothing is a false claim". The
+  schema keeps the columns. That is the honest resolution of a capability-drift
+  finding: not shipping the switch beats shipping a dead one.
+
+**Two of my own checks were wrong before they were right,** and both would have
+been false claims in the ledger:
+
+- The OAuth env vars (`X_CLIENT_ID`, `LINKEDIN_CLIENT_ID`, …) looked unreferenced
+  because they are never written as `process.env.X` — they are named as strings in
+  `src/lib/platforms.ts` (`clientIdEnv`) and resolved through the registry. I
+  nearly recorded "documented but unused env vars" on a search artifact.
+- `.env.example` appeared to be missing the three `HILBRAS_AI_*` overrides. They
+  are present, commented out as optional. My parser only matched uncommented
+  `KEY=` lines. `NODE_ENV` is the one real absence and it is correct: the framework
+  sets it.
+
+So the environment, migrations, and deployment configuration **do** agree. Two
+checkpoint gates are now checked on evidence; the P2 gate stays open because
+AUD-014…033 need owners and dates, and dating twenty findings is not a judgement
+call I should make unprompted.
+
 ### (13th) The guardable half of the external-latency criterion
 
 Task 18's acceptance criteria ask that "external-call latency **have
@@ -758,11 +800,34 @@ than suppressing the rule.
 
 ### Checkpoint: Release Readiness
 
-- [ ] All P1 findings are closed or explicitly accepted.
-- [ ] P2 findings have owners and dates or documented risk acceptance.
-- [ ] Dead-code decisions are recorded.
+Verified 2026-09-30 against the code rather than against the task list — see
+entry (14th). `HILBRAS_STUDIO_AUDIT_REPORT.md` is the source of record for the
+P0/P1/P2 severities (4 / 46 / 47).
+
+- [x] All P1 findings are closed or explicitly accepted. **All 13 high-severity
+  findings (AUD-001…013) verified closed in the code**, 2026-09-30. AUD-006 was
+  the only one needing inspection to confirm: `platform.ts` now returns
+  `toPlatformCredentialStatus(...)`, which yields `hasClientSecret: Boolean(x)` —
+  a boolean, never the value.
+- [ ] P2 findings have owners and dates or documented risk acceptance. **Open,
+  2026-09-30.** The 20 medium findings are AUD-014…033 in the audit report, and
+  several are already resolved by this series (the analytics all-failed counts,
+  the inert-preference toggles, the pricing/testimonial claims, the doc-path rot).
+  What is missing is not the work but the **triage**: which of the remainder are
+  accepted risk, which get an owner and a date, and which are simply out of scope.
+  That is a product call — dating twenty findings and assigning owners is not a
+  judgement I should make unprompted. The list is small enough to walk in one
+  sitting once you want it.
+- [x] Dead-code decisions are recorded. Task 15 closed 2026-09-30; the five
+  modules kept over deletion are listed in `KEPT` in `src/layers.test.ts`, each
+  with the reason it earns its maintenance cost.
 - [ ] Documentation, environment, migrations, and deployment configuration agree.
 - [ ] Clean-checkout test, lint, typecheck, build, migration, audit, and browser gates pass.
+  **All but the browser gate verified green on `main` 2026-09-30** (CI run
+  36745414951): lint, typecheck, 502 unit / 214 integration, build, client bundle
+  budget, `drizzle-kit check`, and dependency audit. The browser gate does not
+  exist — no browser a11y smoke test has ever been written, so it cannot pass or
+  fail. It is listed here as absent, not as failing.
 
 ## Per-Task Completion Checklist
 

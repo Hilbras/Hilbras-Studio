@@ -439,9 +439,45 @@ behaviour.
   allowlist — an entry that is no longer needed is worse than none, since it
   hides the next stale reference that reuses the name.
 
+### (9th) A mutation pattern had been broken since Phase 8
+
+Checking whether this series had invalidated the pre-existing harnesses found
+that one had. `mutate-phase6.sh` asserted that a step claim is a
+compare-and-swap; Phase 8 (`e8d2340`) added the ADR-009 lease clause, which
+reformatted the call onto multiple lines, and the `sed` stopped matching.
+
+The harness's own `cmp` guard reports that as SKIP, which counts as a failure —
+so CI would have gone red. **What was actually lost is the coverage, silently:**
+from Phase 8 onwards, nobody was checking that removing the state predicate
+breaks a test, because the harness could no longer perform the removal. The
+dangerous direction is the opposite one: a pattern that still matches but no
+longer changes behaviour reports "ok" and looks like coverage while checking
+nothing, and the `cmp` guard cannot see that.
+
+- **Repaired**, against the current shape, plus a second mutation for the lease
+  window itself — the guarantee that was untested alongside the one that was
+  nominally covered. `mutate-phase6.sh` now reports **20 covered, 0 holes**,
+  including both.
+- **New `src/mutation-harness.test.ts`** applies every expression in all four
+  harnesses to the file it names, on a temp copy, and requires each to change
+  the file. It is the cheap half that makes the expensive half trustworthy, and
+  it runs in five seconds rather than the twenty minutes a harness takes — so
+  the drift is caught within seconds of landing rather than whenever somebody
+  next remembers to run the harness. A named test asserts the compare-and-swap
+  and lease mutations are still present, so that one reports by name.
+- **Verified by mutation:** restoring the original stale pattern fails the guard
+  with a message naming the script, the mutation and the file.
+- **One test of mine was wrong, and it was instructive.** I had written a
+  "the working tree is clean" assertion to prove the guard did not mutate the
+  repository. It failed — because a mutation harness happened to be running
+  concurrently and had a file mutated at that instant, which is indistinguishable
+  from the test having done it. Removed: such a test is only ever right when no
+  harness is running, so it measures the machine's load rather than the code.
+  Isolation is structural instead, via the temp copies.
+
 ### Verification for the series
 
-496 unit tests (44 files) · 205 integration tests (17 files) · typecheck clean ·
+500 unit tests (45 files) · 205 integration tests (17 files) · typecheck clean ·
 lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into

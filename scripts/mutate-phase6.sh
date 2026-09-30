@@ -142,7 +142,26 @@ mutate "a rejected step cancels the whole run" \
 
 mutate "a step claim is not a compare-and-swap" \
   src/lib/runtime/service.ts \
-  's/^    .where(and(eq(runSteps.id, stepId), eq(runSteps.state, from)))$/    .where(eq(runSteps.id, stepId))/' \
+  '/^        eq(runSteps.id, stepId),$/,/^        eq(runSteps.state, from),$/c\        eq(runSteps.id, stepId),' \
+  $I approvals.test.ts
+
+# The mutation above used to target a single-line
+# `.where(and(eq(runSteps.id, stepId), eq(runSteps.state, from)))`. Phase 8
+# (e8d2340) added the ADR-009 lease clause, which reformatted the call onto
+# multiple lines — and this script was not updated, so the `sed` matched nothing
+# and the harness reported SKIP. SKIP is counted as a failure, so CI would have
+# gone red; what was actually lost is the *coverage*, silently, from Phase 8
+# onwards: nobody was checking that removing the state predicate breaks a test,
+# because the harness could no longer perform the removal.
+#
+# Worth recording because the failure mode is invisible in the other direction
+# too — a pattern that still matches but no longer changes behaviour reports
+# "ok" and looks like coverage. The `cmp` guard only catches a pattern that
+# matched *nothing*.
+
+mutate "a step claim ignores its lease window" \
+  src/lib/runtime/service.ts \
+  's/^          ? lt(runSteps.startedAt, new Date(now.getTime() - STEP_CLAIM_LEASE_MS))$/          ? undefined/' \
   $I approvals.test.ts
 
 mutate "a released claim stays released to everyone" \

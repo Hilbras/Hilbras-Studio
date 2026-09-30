@@ -272,7 +272,7 @@ pnpm dev                        # http://localhost:3000`}</code>
         <li>
           <strong>Icon &amp; color</strong> — SVG + brand color in{" "}
           <code>components/platform-icon.tsx</code>, and the analytics chart
-          color in <code>actions/analytics.ts</code>.
+          color in <code>lib/dashboard/queries.ts</code>.
         </li>
         <li>
           <strong>Publisher</strong> — write <code>publishToX</code>-style

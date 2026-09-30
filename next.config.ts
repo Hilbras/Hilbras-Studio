@@ -51,7 +51,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   serverExternalPackages: ["pg", "bcryptjs"],
   experimental: {
-    optimizePackageImports: ["lucide-react", "@radix-ui/react-icons"],
+    optimizePackageImports: ["lucide-react"],
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

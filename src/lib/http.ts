@@ -76,6 +76,72 @@ export class HttpResponseTooLargeError extends Error {
 }
 
 /**
+ * Cap for an inbound request body, matching `DEFAULT_MAX_RESPONSE_BYTES`.
+ *
+ * A response body is capped because we asked for it. A *request* body is capped
+ * because anyone can send one: an unauthenticated route that calls `req.text()`
+ * will materialise whatever it is handed, so an oversized body is a cheap way to
+ * spend the instance's memory.
+ */
+export const MAX_REQUEST_BYTES = 2_000_000;
+
+/** An inbound request body that blew past its size cap. */
+export class HttpRequestTooLargeError extends Error {
+  readonly maxBytes: number;
+  readonly receivedBytes: number;
+
+  constructor(maxBytes: number, receivedBytes: number) {
+    super(`Request body exceeded ${maxBytes} bytes (${receivedBytes} read).`);
+    this.name = "HttpRequestTooLargeError";
+    this.maxBytes = maxBytes;
+    this.receivedBytes = receivedBytes;
+  }
+}
+
+/**
+ * Read a request body, refusing anything over `MAX_REQUEST_BYTES`.
+ *
+ * Checks `Content-Length` before reading *and* enforces the cap while reading.
+ * Both are needed: the header is a claim by the sender, so trusting it alone
+ * makes the limit decorative, and skipping it means a lying header buys unlimited
+ * memory before the first chunk arrives.
+ *
+ * Throws rather than truncating. This matters for the webhook that uses it: the
+ * HMAC is computed over the body, so a silently truncated body would be
+ * verified against the wrong bytes and the failure would look like a bad
+ * signature rather than a bad request.
+ */
+export async function readRequestBody(
+  req: Request,
+  maxBytes: number = MAX_REQUEST_BYTES,
+): Promise<string> {
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new HttpRequestTooLargeError(maxBytes, declared);
+  }
+
+  if (!req.body) return "";
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      throw new HttpRequestTooLargeError(maxBytes, total);
+    }
+    chunks.push(value);
+  }
+
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
+}
+
+/**
  * The host, and only the host, for an error message.
  *
  * Outbound URLs here carry access tokens in the query string — `/me?fields=x

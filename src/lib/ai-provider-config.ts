@@ -32,22 +32,40 @@ export const BUILTIN_PROVIDER_ID = "builtin";
  * Returns null when the server has no key configured.
  */
 export function getBuiltinProviderConfig(): ProviderConfig | null {
-  const legacyAnthropic =
-    !!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY;
+  const openAiKey = process.env.OPENAI_API_KEY;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
+  // Which key wins, and therefore which format the request must be shaped like.
+  //
+  // Derived from the key rather than from any other variable. This used to be
+  // `HILBRAS_AI_BASE_URL || !legacyAnthropic ? "openai" : "anthropic"`, which
+  // let the base URL outrank the key (AUD-018): a self-hoster with only
+  // `ANTHROPIC_API_KEY` who also set a base URL — to reach a proxy, or just
+  // following the docs — got an Anthropic key with `apiFormat: "openai"`. Every
+  // Assistant request then failed, while every field an operator would plausibly
+  // check looked correct.
+  //
+  // `HILBRAS_AI_API_KEY` is provider-neutral, so on its own there is nothing to
+  // infer from and OpenAI is the documented default. `HILBRAS_AI_API_FORMAT` is
+  // the way to say otherwise, and it is checked first because a person stating
+  // their intent outranks a guess.
+  const formatOverride = process.env.HILBRAS_AI_API_FORMAT;
+
+  let apiFormat: ProviderConfig["apiFormat"];
+  if (formatOverride === "anthropic" || formatOverride === "openai") {
+    apiFormat = formatOverride;
+  } else if (openAiKey) {
+    apiFormat = "openai";
+  } else if (anthropicKey) {
+    apiFormat = "anthropic";
+  } else {
+    // Only `HILBRAS_AI_API_KEY` is set, and it says nothing about the provider.
+    apiFormat = "openai";
+  }
 
   const apiKey =
-    process.env.HILBRAS_AI_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    process.env.ANTHROPIC_API_KEY;
+    process.env.HILBRAS_AI_API_KEY ?? openAiKey ?? anthropicKey;
   if (!apiKey) return null;
-
-  const formatOverride = process.env.HILBRAS_AI_API_FORMAT;
-  const apiFormat: ProviderConfig["apiFormat"] =
-    formatOverride === "anthropic" || formatOverride === "openai"
-      ? formatOverride
-      : process.env.HILBRAS_AI_BASE_URL || !legacyAnthropic
-        ? "openai"
-        : "anthropic";
 
   const baseUrl =
     process.env.HILBRAS_AI_BASE_URL ??

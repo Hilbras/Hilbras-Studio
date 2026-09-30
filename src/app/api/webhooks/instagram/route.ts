@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
+import { HttpRequestTooLargeError, readRequestBody } from "@/lib/http";
+
 /**
  * Instagram webhook endpoint (App Dashboard → Instagram → Configure webhooks).
  *
@@ -54,11 +56,26 @@ export async function GET(req: NextRequest) {
  * signature check; processing (wiring events into the inbox) comes later.
  */
 export async function POST(req: NextRequest) {
-  const body = await req.text().catch(() => "");
   const secret = process.env.INSTAGRAM_CLIENT_SECRET;
 
   if (!secret) {
     return new NextResponse("Webhook secret not configured", { status: 403 });
+  }
+
+  // Read through the bounded reader rather than `req.text()`. This route is
+  // unauthenticated — the signature below is the only thing checking the caller —
+  // so `req.text()` would materialise an arbitrarily large body from anyone
+  // before a single byte had been verified (AUD-033). `content-length` is checked
+  // before reading and the cap is re-checked while reading, because that header
+  // is a claim by the sender.
+  let body: string;
+  try {
+    body = await readRequestBody(req);
+  } catch (error) {
+    if (error instanceof HttpRequestTooLargeError) {
+      return new NextResponse("Payload too large", { status: 413 });
+    }
+    return new NextResponse("Could not read body", { status: 400 });
   }
 
   const signature = req.headers.get("x-hub-signature-256");

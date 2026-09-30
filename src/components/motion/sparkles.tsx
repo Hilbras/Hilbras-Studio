@@ -19,9 +19,11 @@ interface SparklesProps {
   className?: string;
 }
 
+const DEFAULT_COLORS = ["var(--color-gold-400)", "var(--color-gold-500)", "var(--color-gold-300)"];
+
 export function Sparkles({
   count = 6,
-  colors = ["var(--color-gold-400)", "var(--color-gold-500)", "var(--color-gold-300)"],
+  colors = DEFAULT_COLORS,
   className = "",
 }: SparklesProps) {
   const [particles, setParticles] = useState<Particle[]>([]);
@@ -37,7 +39,15 @@ export function Sparkles({
       color: colors[Math.floor(Math.random() * colors.length)] ?? colors[0] ?? "white",
     }));
     setParticles((prev) => [...prev.slice(-count), ...newParticles]);
-  }, [count]);
+    // `colors` was missing from this dependency list. A caller passing a
+    // different palette kept generating the original one, because the callback
+    // was memoised on `count` alone and never rebuilt — the lint warning was
+    // the only thing reporting it.
+    //
+    // The default is a module-level constant rather than an inline literal for
+    // exactly this dependency: an inline default array is a new reference every
+    // render, which would rebuild `spawn` each render and restart the interval.
+  }, [count, colors]);
 
   useEffect(() => {
     const initial = setTimeout(spawn, 0);

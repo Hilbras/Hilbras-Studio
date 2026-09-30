@@ -622,6 +622,56 @@ rewritten each tranche while the earlier summary lines are not revisited. A
 stale "remaining" line is worse than none — it sends the next session looking for
 work that is already finished.
 
+### (15th) Fixing the P2 findings that were still open
+
+AUD-014…033 with the code inspected rather than the status assumed. Four were
+real and got fixed; the rest were already closed or are decisions rather than
+defects, and are recorded as such.
+
+**AUD-018 — the built-in provider could pick the wrong API format. Real bug.**
+```ts
+process.env.HILBRAS_AI_BASE_URL || !legacyAnthropic ? "openai" : "anthropic"
+```
+The base URL outranked the key. A self-hoster with only `ANTHROPIC_API_KEY` who
+also set a base URL — to reach a proxy, or just following the docs — got an
+Anthropic key with `apiFormat: "openai"`. Every Assistant request failed, while
+every field an operator would plausibly check looked correct. The function was
+pure and had **no tests at all**, which is why the whole input space was cheap to
+cover: 13 tests, written first, two of which failed against the old code. The
+format now derives from the key that won; `HILBRAS_AI_API_FORMAT` still overrides,
+because a person stating their intent outranks a guess.
+*Verified by mutation:* restoring the old precedence fails exactly the two
+regression tests and green returns on revert.
+
+**AUD-033 — the Instagram webhook read an unbounded body. Real bug, security.**
+`req.text()` on an **unauthenticated** route, before the HMAC check: anyone could
+make the server materialise an arbitrary body before a byte was verified. New
+`readRequestBody` in `src/lib/http.ts`, capped at 2 MB, checking `content-length`
+before reading *and* re-checking while reading — because that header is a claim by
+the sender, so a check that trusts it alone is a suggestion. 10 tests plus 6 on
+the route itself.
+*Verified by mutation:* removing the incremental check fails 5 tests; reverting
+the route to `req.text()` fails 3. Both directions, restored green.
+Also fixed: the secret check moved ahead of the read, so a misconfigured
+deployment no longer reads a body it will refuse.
+
+**AUD-027 — tooling drift.** `next.config.ts` named `@radix-ui/react-icons` in
+`optimizePackageImports`; the package is neither declared nor imported anywhere,
+so the entry did nothing. Removed. Added `"engines": { "node": ">=24" }` — CI
+already pins 24.x, so the declaration matches reality, and `engine-strict` is
+unset so it warns rather than blocking.
+
+**AUD-032 — the one `exhaustive-deps` warning was a real staleness bug.** The
+sparkles callback closed over `colors` but memoised on `count` alone, so a caller
+passing a different palette kept generating the old one. Fixed, and the default
+palette hoisted to a module constant so depending on it does not rebuild the
+callback every render. **`exhaustive-deps` warnings are now zero** and lint is
+down to 26.
+
+Two of my own errors along the way, both caught before they shipped: a comment
+claimed the dependency list compared `colors` by contents when it did not, and a
+first draft of the reader test used an assignment expression as an argument.
+
 ### (14th) Auditing the Release Readiness checkpoint against the code
 
 The checkpoint's five gates were all unchecked while most of the underlying work
@@ -700,8 +750,8 @@ rename cannot make the rule silently vacuous.
 
 ### Verification for the series
 
-502 unit tests (45 files) · 214 integration tests (18 files) · typecheck clean ·
-lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
+531 unit tests (48 files) · 214 integration tests (18 files) · typecheck clean ·
+lint 0 errors / 26 warnings (zero `exhaustive-deps`; down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into
 the baseline; the six lint *errors* in the first version of the plan test were
@@ -813,7 +863,16 @@ P0/P1/P2 severities (4 / 46 / 47).
   2026-09-30.** The 20 medium findings are AUD-014…033 in the audit report, and
   several are already resolved by this series (the analytics all-failed counts,
   the inert-preference toggles, the pricing/testimonial claims, the doc-path rot).
-  What is missing is not the work but the **triage**: which of the remainder are
+  **Triaged 2026-09-30.** AUD-018, AUD-027, AUD-032 and AUD-033 were real and are
+fixed (entry 15th). Of the rest, AUD-015/016/019/020/024/026 were already closed
+by earlier tranches. What remains needs a decision, not a fix: AUD-014 (capability
+drift — encode media/account differences in the registry vs scope the UI),
+AUD-021 (RLS and transaction boundaries — a design decision with a real cost),
+AUD-022/AUD-037 (public-media quota as an explicit product decision), AUD-028
+(stronger password KDF and session revocation — a breaking change to auth),
+AUD-029/030/031 (deployment-dependent behaviour that cannot be exercised without
+staging). None is a defect I can fix without knowing what you want the product to
+do. What was missing is the **triage**: which of the remainder are
   accepted risk, which get an owner and a date, and which are simply out of scope.
   That is a product call — dating twenty findings and assigning owners is not a
   judgement I should make unprompted. The list is small enough to walk in one

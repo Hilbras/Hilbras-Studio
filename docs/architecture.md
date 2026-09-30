@@ -83,9 +83,10 @@ style preference.
 - **Location:** `src/app/actions/**`, `src/app/api/**`.
 
 > This boundary already exists and is already load-bearing: the credential
-> writer was moved out of `actions/credentials.ts` into the server-only
-> `src/lib/credential-store.ts` so the browser-callable module cannot be used as
-> a privileged path. Keep that pattern.
+> writer was moved out of the (now-deleted) `actions/credentials.ts` into the
+> server-only `src/lib/credential-store.ts` so the browser-callable module
+> cannot be used as a privileged path. The writer is still there, reached now
+> through `actions/platform.ts`. Keep that pattern.
 
 #### Services / Domain
 
@@ -563,7 +564,10 @@ server decides what that means.
 
 **Context.** A browser-callable module is a privileged path by construction.
 `actions/credentials.ts` was found to be one and its writer was relocated to
-`src/lib/credential-store.ts`.
+`src/lib/credential-store.ts`. (That adapter has since been deleted as dead
+code — the per-platform credential path in `actions/platform.ts` superseded it
+— but the writer it was guarding still lives in `credential-store.ts` and is
+still reached through a browser-callable module.)
 
 **Decision.** Server actions and route handlers perform authentication,
 authorization, and validation, then delegate. Anything holding a secret, a state
@@ -689,6 +693,17 @@ another.
 through. Every function in it takes a `userId` and puts it in the `WHERE`
 clause. The unscoped readers in `runtime/service.ts` stay, because the callers
 that need them are correct, and are simply not reachable from a page.
+
+The same rule was later applied to the pre-existing dashboard and analytics
+reads, which now live in `dashboard/queries.ts` for the same reason and under
+the same argument. Those readers took no arguments and resolved the ambient
+session themselves, which made them unusable by any caller that already knew
+whose data it wanted — the Assistant's context builder, which builds a system
+prompt from exactly this data and is handed a `userId` by the authenticated
+request it is serving. Their `app/actions` adapters were deleted once the last
+caller went: the analytics page is a server component that reads the service
+directly, and a `"use server"` module with no importer is an endpoint nothing
+calls.
 
 **Consequences.**
 

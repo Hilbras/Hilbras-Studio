@@ -145,6 +145,7 @@ on purpose and asserting the suite notices. Run it before trusting a new test.
 
 ```bash
 bash scripts/mutate-phase7.sh
+bash scripts/mutate-task17.sh
 ```
 
 Two rules learned the hard way, both of which produce **false passes**:
@@ -156,6 +157,33 @@ Two rules learned the hard way, both of which produce **false passes**:
 2. **Do not nest `s///` inside a range address.** Use the `{ /pat/d }` block form.
    The script's `cmp` guard only catches no-match patterns, so a silently
    malformed mutation reads as a passing mutation.
+
+The same reasoning applies to the static guards in `src/layers.test.ts`: a rule
+that has never failed has not been shown to work. Each one was checked by
+injecting a real violation and requiring the suite to go red — one of them
+(`lib/` must not import `@/app`) passed against a live violation until the
+specifier match was fixed, which is exactly the bug a hand-written tree guard
+hides.
+
+### The bundle budget
+
+`node scripts/bundle-budget.mjs` measures the gzipped first-load JS of every
+prerendered route and fails if one exceeds its limit. It runs in CI after the
+build, because it measures the build's own output.
+
+```bash
+pnpm bundle:budget              # check
+pnpm bundle:budget -- --report  # print the table, never fail
+pnpm bundle:budget -- --update  # re-baseline (read the diff before committing)
+```
+
+Two things to know before changing it. It reads the `<script src>` tags out of
+each route's emitted HTML, **not** the per-route build manifest — Turbopack's
+manifest holds only the shared `rootMainFiles`, which are identical for all 49
+routes, so a budget computed from it would compare one number against itself.
+And `--update` writes the measurement *plus 15%*, because a budget set to
+today's exact size fails on the next byte of ordinary growth, which teaches
+everyone to re-baseline instead of fixing regressions.
 
 ---
 
@@ -172,6 +200,8 @@ src/
     schema.ts           The single schema. Drizzle.
   lib/
     runtime/            The execution engine. state → plan → executor → approval.
+    dashboard/          Read models for the dashboard/analytics screens, ADR-008.
+    inbox/types.ts      Inbox DTOs; there is no inbox table, so no row to infer.
     connectors/         One module per platform, behind a capability contract.
     chat.ts             Assistant persistence, owner-scoped per ADR-008.
     crypto.ts           AES-256-GCM for every stored secret.
@@ -187,6 +217,16 @@ tests/
 reachable by anyone who can craft a POST. Every one resolves the session itself
 and scopes every query by `userId`; none trusts a hidden field, a referrer, or
 the fact that the UI would not have shown the button.
+
+**A `"use server"` module exports RPC endpoints and nothing else.** Every export
+becomes something the browser can invoke, so its contract is async functions. A
+DTO declared in one is a contract in a module that does not describe contracts,
+and it is what makes a client component depend on the transport layer to
+describe a *row*. So: **domain data lives with its service in `lib/`, and the
+action re-exports the type.** An action's own result shape — the type
+`useActionState` holds for it — legitimately stays, because no service returns
+it. `src/layers.test.ts` enforces all of this by scanning the tree, and fails on
+a new violation rather than on a restated list.
 
 ---
 

@@ -220,3 +220,79 @@ describe("documentation points at files that exist", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Environment variables CI sets must be documented somewhere a reader looks.
+ *
+ * ## Why this is here
+ *
+ * The v0.11.0 a11y smoke suite added `TEST_DATABASE_URL`, and nothing documented
+ * it. That is the same rot `docs.test.ts` already exists to catch for *file
+ * paths* — a reference to something real that a reader cannot find — and it went
+ * unnoticed because no tool looked at environment variables at all.
+ *
+ * The scope is deliberately narrow: **variables a CI job sets**, not every
+ * `process.env` read in `src/`. A variable only the application reads has no
+ * reason to appear in a contributor document; a variable a CI job *sets* is one a
+ * contributor will need locally to reproduce the same run.
+ *
+ * Framework- and platform-owned names are excluded, because documenting them would
+ * be noise: `CI`, `HOME`, `PATH` and the `NODE_ENV`/`NEXT_PUBLIC_*` families belong
+ * to Next.js and the runner, not to this project.
+ */
+
+const CI_ENV_ALLOWLIST = new Set([
+  // Set by GitHub Actions itself.
+  "CI",
+  "GITHUB_ACTIONS",
+  "HOME",
+  "PATH",
+  // Set by the pnpm/Node toolchain or by Next.js.
+  "NODE_ENV",
+  "NODE_OPTIONS",
+  "npm_config_cache",
+  "NEXT_TELEMETRY_DISABLED",
+]);
+
+describe("environment variables CI sets are documented", () => {
+  it("finds the workflow to read", () => {
+    expect(existsSync(join(ROOT, ".github/workflows/ci.yml"))).toBe(true);
+  });
+
+  it("has no undocumented variable", () => {
+    const workflow = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
+
+    // `KEY: value` inside the `env:` blocks and `env:` mappings of a step.
+    const declared = new Set<string>();
+    for (const m of workflow.matchAll(/^\s{2,}([A-Z][A-Z0-9_]{2,}):\s*\S/gm)) {
+      declared.add(m[1]);
+    }
+    // Also `- NAME=value` and `NAME=value` passed inline to `run:`.
+    for (const m of workflow.matchAll(/\b([A-Z][A-Z0-9_]{2,})=/g)) {
+      declared.add(m[1]);
+    }
+
+    const docs = readFileSync(join(ROOT, "docs/development.md"), "utf8")
+      + readFileSync(join(ROOT, "README.md"), "utf8")
+      + readFileSync(join(ROOT, ".env.example"), "utf8")
+      + (existsSync(join(ROOT, "docs/DEPLOYMENT.md"))
+        ? readFileSync(join(ROOT, "docs/DEPLOYMENT.md"), "utf8")
+        : "");
+
+    const undocumented = [...declared]
+      .filter((name) => !CI_ENV_ALLOWLIST.has(name))
+      .filter((name) => !docs.includes(name))
+      .sort();
+
+    expect(
+      undocumented,
+      `These environment variables are set by CI but appear in no document a ` +
+        `reader checks — \`.env.example\`, README.md, or docs/development.md.\n` +
+        `A contributor cannot reproduce the failing run without knowing they are ` +
+        `required, and nothing else in the toolchain notices.\n\n` +
+        `Add each to \`.env.example\` (with what it is for) or to ` +
+        `docs/development.md next to the command that needs it.\n\n` +
+        undocumented.map((n) => `  ${n}`).join("\n"),
+    ).toEqual([]);
+  });
+});

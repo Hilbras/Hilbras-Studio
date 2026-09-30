@@ -181,8 +181,32 @@ pass if the tree has changed since. Run the four scripts, then write the date.
 
 `pnpm e2e:smoke` starts a dev server and runs `e2e/a11y.spec.ts` against the
 critical flows: landing, pricing, privacy, login, and signup into the dashboard
-shell. It needs a migrated Postgres — point `TEST_DATABASE_URL` at one, or the run
-fails rather than silently skipping.
+shell. It needs a migrated Postgres:
+
+```sh
+docker run -d --name hilbras-e2e -p 5432:5432 \
+  -e POSTGRES_USER=e2e -e POSTGRES_PASSWORD=e2e -e POSTGRES_DB=e2e \
+  postgres:16-alpine
+
+DATABASE_URL=postgres://e2e:e2e@localhost:5432/e2e \
+ENCRYPTION_KEY=dev-encryption-key \
+AUTH_SECRET=dev-auth-secret-at-least-32-chars-long \
+TEST_DATABASE_URL=postgres://e2e:e2e@localhost:5432/e2e \
+  pnpm exec drizzle-kit migrate
+
+pnpm e2e:smoke
+```
+
+`TEST_DATABASE_URL` is what the dev server under Playwright's control points at; it
+is separate from `DATABASE_URL` so the suite never runs against the database you
+are developing against by accident. The run **fails rather than silently skipping**
+if it cannot reach one, because a smoke test that quietly passes without testing
+anything is worse than no smoke test.
+
+It takes ~3 minutes cold and ~1.5 warm. The difference is `next dev` compiling
+routes and the signup **server action** on first use, which is why the per-test
+budget is sized for the cold case — see the note on `seedUser` in
+`e2e/helpers.ts`.
 
 **Why this is separate from `pnpm lint`.** `eslint-plugin-jsx-a11y` inspects JSX,
 so it catches a `div` doing a button's job. It cannot see anything that only

@@ -932,9 +932,48 @@ and it is written down next to the timeout rather than left for someone to redis
 Verified: 538 unit tests (49 files) · 214 integration · typecheck clean · lint 0/26 ·
 e2e smoke 8/8 against a warm server.
 
+### (18th) Closing the last gate I can close, and the rot it found
+
+**The clean-checkout gate is now checkable**, which it was not before: CI run
+`36781800337` on `b6a3465` is green on both jobs, including **Browser a11y smoke**
+(8/8, from a cold runner). The gate had been recorded as "browser gate absent —
+cannot pass or fail", which was true when written and stopped being true the moment
+the suite landed. It was corrected rather than left, since a gate that describes a
+missing thing reads as an open question to the next reader.
+
+**Checking the remaining config gate found a real gap.** "Documentation,
+environment, migrations, and deployment configuration agree" had never actually
+been checked. It had: the a11y suite added `TEST_DATABASE_URL`, and **no document
+mentioned it**. Not `.env.example`, not the README, nothing — while
+`docs/development.md` *named* it in a sentence telling you to point it at a
+database without showing how. A contributor could read that section and still not
+be able to run the command.
+
+- **`docs/development.md`** now has the runnable example: a `docker run` for
+  Postgres, the four variables with what each is for, the migrate step, and the
+  run. It notes that `TEST_DATABASE_URL` is separate from `DATABASE_URL`
+  deliberately, so the suite cannot run against a developer's working database by
+  accident, and gives the cold/warm timings.
+- **New guard in `src/docs.test.ts`** — a variable CI *sets* must appear in
+  `.env.example`, README, `docs/development.md`, or `docs/DEPLOYMENT.md`. Scope is
+  deliberately narrow: CI-set variables, not every `process.env` read, since a
+  variable only the application reads has no business in a contributor document.
+  Framework-owned names (`CI`, `PATH`, `NODE_ENV`, `NEXT_*`) are allowlisted with
+  the reason.
+
+  *Verified by mutation both ways:* injecting an undocumented variable into the
+  workflow fails it with a message naming where to document it, and reverting my
+  doc fix so `TEST_DATABASE_URL` is undocumented also fails it. Green on restore.
+
+This is the same rot `docs.test.ts` already guards for **file paths** — a reference
+to something real that a reader cannot find — and it went unnoticed for the same
+reason: nothing looked. The file's own docstring says the point is that a new
+violation fails in CI; this is the first time that claim applied to a category the
+file did not cover.
+
 ### Verification for the series
 
-538 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·
+540 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·
 lint 0 errors / 26 warnings (zero `exhaustive-deps`; down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into
@@ -1067,12 +1106,17 @@ do. What was missing is the **triage**: which of the remainder are
   modules kept over deletion are listed in `KEPT` in `src/layers.test.ts`, each
   with the reason it earns its maintenance cost.
 - [ ] Documentation, environment, migrations, and deployment configuration agree.
-- [ ] Clean-checkout test, lint, typecheck, build, migration, audit, and browser gates pass.
-  **All but the browser gate verified green on `main` 2026-09-30** (CI run
-  36745414951): lint, typecheck, 502 unit / 214 integration, build, client bundle
-  budget, `drizzle-kit check`, and dependency audit. The browser gate does not
-  exist — no browser a11y smoke test has ever been written, so it cannot pass or
-  fail. It is listed here as absent, not as failing.
+- [x] Clean-checkout test, lint, typecheck, build, migration, audit, and browser
+  gates pass. **All eight verified green on `main` 2026-09-30**, CI run
+  `36781800337` (commit `b6a3465`), both jobs: Quality gates (lint, typecheck, 538
+  unit / 214 integration, build, client bundle budget, `drizzle-kit check`,
+  dependency audit) and **Browser a11y smoke** (8/8, from a cold runner).
+
+  The browser gate was recorded here as *absent* for most of this series, and
+  listing it that way was correct until it existed. It is worth noting what
+  building it cost: five CI rounds, because every one of the bugs it found was
+  invisible locally. `jsx-a11y` could not see any of them, and neither could a
+  green local run.
 
 ## Per-Task Completion Checklist
 

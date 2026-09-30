@@ -47,43 +47,35 @@ export async function waitForStyles(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
       if (document.styleSheets.length === 0) return false;
-      // Any element whose utility class has produced a colour proves the utility
-      // layer resolved. Text is the safer probe than background: `transparent` is
-      // a legitimate computed background, but a `color` that is a real value on a
-      // `text-muted-foreground` element is not ambiguous.
-      // Prove the `dark:` variant layer specifically, not merely that some
-      // utility resolved. The contrast failures that motivated this all involved
-      // the gold button, whose dark half (`dark:bg-gold-300 dark:text-foreground`)
-      // arrives in the variant layer — a *later* chunk than the base utilities. So
-      // a probe satisfied by `text-muted-foreground` passes while the button is
-      // still unstyled, which is precisely the state axe then measures.
-      //
-      // The check is whether a `dark:` utility's value is actually being applied:
-      // set the class on a detached probe element and see whether the property
-      // changes. If the variant layer has not loaded, it will not.
-      const probe = document.createElement("div");
-      probe.className = "dark:bg-gold-300";
-      probe.style.display = "none";
-      document.body.appendChild(probe);
-      const applied = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-      return applied !== "" && applied !== "rgba(0, 0, 0, 0)";
+
+      // Both layers have to be present, and a check for only one of them misses
+      // exactly the failure it was added to catch. Two successive CI runs proved
+      // it: a canary satisfied by the `dark:` variant let the *base* utilities
+      // load a chunk later, so axe measured the landing nav's
+      // `text-muted-foreground` unstyled and reported 14 contrast failures on a
+      // pair that measures 6.42:1.
+      const resolves = (className: string, property: "color" | "backgroundColor") => {
+        const probe = document.createElement("div");
+        probe.className = className;
+        probe.style.display = "none";
+        document.body.appendChild(probe);
+        const value = getComputedStyle(probe)[property];
+        probe.remove();
+        return value !== "" && value !== "rgba(0, 0, 0, 0)";
+      };
+
+      return (
+        // Base utility layer.
+        resolves("text-muted-foreground", "color") &&
+        // The `dark:` variant layer, which the gold button's colours come from.
+        resolves("dark:bg-gold-300", "backgroundColor")
+      );
     },
     undefined,
     { timeout: 60_000 },
   );
 
-  // Wait for the document to be committed, not merely for a frame to paint.
-  //
-  // A double `requestAnimationFrame` was the first attempt and was not enough:
-  // after signup the app swaps `/dashboard` for `/runtime` client-side, and
-  // axe measured that window and reported `document-title` — a document with no
-  // `<title>`, which is not a state this app is ever actually in. Two frames of
-  // a client-side route change is well under a frame's worth of work.
-  //
-  // The condition is "readyState is complete and the document still has a title",
-  // which is the property the assertion depends on. Waiting for the *absence* of
-  // a violation would be circular; waiting for the thing the rule checks is not.
+  // The document the assertions read must itself be settled.
   await page.waitForFunction(
     () => document.readyState === "complete" && document.title.trim().length > 0,
     undefined,

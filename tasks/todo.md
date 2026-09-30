@@ -840,11 +840,20 @@ the same false-contrast failure reappeared on the pricing page. I raised timeout
 this point, which is treating a symptom: it turned a fast, honest failure into a
 slow, dishonest one.
 
-**The fix that held** — wait for the **variant layer** specifically. Every false
-contrast failure involved the gold button, whose `dark:bg-gold-300 dark:text-foreground`
-arrives in a *later* chunk than the base utilities. The canary now appends a probe
-element carrying a `dark:` class and checks that its property actually resolved. If
-the variant layer has not loaded, it has not.
+**The fix that got signup green** — wait for the **variant layer** specifically.
+Every false contrast failure on the button involved `dark:bg-gold-300
+dark:text-foreground`, which arrives in a *later* chunk than the base utilities.
+
+**And then a second run proved the same mistake one level down.** With the canary
+checking only `dark:`, CI moved past the button and failed on **14 nav links** —
+`text-muted-foreground`, a *base* utility, arriving later still. That pair measures
+6.42:1, so axe was measuring it unstyled. A canary that checks one layer misses
+exactly the failure it was written for: both have to be present, and the check now
+requires a base utility **and** the dark variant before measuring.
+
+Both CI runs are what established this. Locally the suite was 8/8 green throughout,
+and every version of the canary "worked" against a warm server — the whole class of
+bug is invisible without a cold runner.
 
 **Also fixed along the way:**
 - `document-title` was reported on the dashboard, a state the app is never actually
@@ -856,6 +865,9 @@ the variant layer has not loaded, it has not.
   job both said `next dev` — and the CI job had no build step, so that default would
   have failed the job before a single assertion ran. Now `next dev` by default, with
   `E2E_PROD=1` as the opt-in, and the two discarded alternatives documented.
+
+**Signup is fixed.** The variant-layer canary resolved the cold-run timeout: the
+second CI run had signup passing with only the landing page failing.
 
 **Not solved, and recorded in place at the failing line.** On a *cold* dev server the
 signup test has timed out at 120s with no server-side error: the log shows

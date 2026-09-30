@@ -104,7 +104,6 @@ const HISTORICAL_ALLOWLIST = new Set([
   "src/lib/publish/myplatform.ts",
   // Template paths in the same how-to, written with a placeholder extension.
   "src/lib/publish/<platform>.ts",
-  "src/lib/publish/<platform>.test.ts",
   "src/lib/connectors/myplatform/",
   "src/lib/connectors/myplatform",
 ]);

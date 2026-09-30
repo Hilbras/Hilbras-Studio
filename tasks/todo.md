@@ -400,9 +400,48 @@ exists. It is now a test against the real schema.
   rows is not the plan at 10 million. A production
   `EXPLAIN (ANALYZE, BUFFERS)` against real data stays an operator step.
 
+### (8th) Publisher failure modes — the gap the docs sweep exposed
+
+`docs/platform-development.md` tells a new platform author to "handle every
+documented failure" and warns that a publisher which only handles success makes
+every error path report `unknown`, which is non-retryable. That was advice with
+nothing behind it: **no publisher had a test file at all**, so the failure
+mappings were documentation of an intention rather than a description of
+behaviour.
+
+- **`src/lib/publish/publishers.test.ts`, 26 tests.** Each publisher's account
+  gate (no HTTP attempt when the account is missing *or* ambiguous — a publisher
+  that fetched first would send an unauthenticated request and report a working
+  connection as broken), and each platform's own error mapping: a Facebook
+  account with no Page, Instagram refusing a text-only publish and a media
+  container that returns no id, Threads' length limit and its translation of
+  Meta's permission error into the action the user must take, Telegram's empty
+  message, and X's platform-supplied message surviving into the result.
+- **Two cross-cutting invariants asserted once across all five**, not five times
+  each: no result reports success *together with* an error, and every result
+  carries its platform name so a failure can be attributed in a multi-target
+  publish. Neither is visible from a single platform — it takes a publisher and
+  a change elsewhere to violate either.
+- **Only the two outbound edges are mocked** — `fetchWithTimeout` and
+  `getConnectedAccount`. The publishers, `shared.ts`'s error mapping, and
+  `result-url`'s sanitization are all real, so each assertion is about what the
+  code does with a given HTTP response. Mocking a publisher's own error mapping
+  would only assert that the mock behaves as the mock behaves.
+- **Verified by mutation:** letting the account gate fall through to a request
+  fails the gate tests, and discarding X's platform error message fails exactly
+  that one test with the other 25 green.
+- One assertion of mine was wrong rather than the code: Telegram capitalizes the
+  platform's `description` and appends the fix, so a case-sensitive
+  `toContain` failed against better behaviour than I had assumed. Fixed to a
+  case-insensitive match, which is what the test was actually about.
+- The how-to now points step 5 at the test file instead of admitting no tests
+  exist, and the `<platform>.test.ts` template left the docs guard's
+  allowlist — an entry that is no longer needed is worse than none, since it
+  hides the next stale reference that reuses the name.
+
 ### Verification for the series
 
-470 unit tests (43 files) · 205 integration tests (17 files) · typecheck clean ·
+496 unit tests (44 files) · 205 integration tests (17 files) · typecheck clean ·
 lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into

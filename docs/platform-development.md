@@ -19,7 +19,7 @@ sitting in today.
 | 2 | Declare its capabilities | `src/lib/platforms.ts` |
 | 3 | Write the publisher | `src/lib/publish/<platform>.ts` |
 | 4 | Route it | `src/lib/publish/index.ts` — one `case` in the switch |
-| 5 | Test the failure modes | a new `src/lib/publish/<platform>.test.ts` — **none exist yet**, so yours is the first |
+| 5 | Test the failure modes | `src/lib/publish/publishers.test.ts` — add a `describe` for your platform |
 | 6 | Document it | this file, `docs/accounts.md` |
 
 ---
@@ -100,14 +100,23 @@ Four requirements:
   makes every error path report `unknown`, which is non-retryable — the run fails
   with a message that says nothing about why.
 
-**None of the five publishers has a test file.** The failure modes above are
-therefore documentation, not enforced behaviour: `src/lib/publish/` currently
-holds no `*.test.ts`, and the only connector tests are
-`src/lib/connectors/errors.test.ts` and `registry.test.ts`, which cover the
-error taxonomy and the registry rather than any platform's API calls. A new
-publisher with a test file is therefore the *only* publisher whose failure
-mapping is verified — write it, and treat the list above as the specification
-rather than as a description of what already happens.
+**The failure modes above are now tested — for all five publishers.**
+`src/lib/publish/publishers.test.ts` covers each one: the account gate (no HTTP
+attempt when the account is missing or ambiguous), and each platform's own
+error mapping — a Facebook account with no Page, Instagram's refusal of a
+text-only publish and a media container that comes back without an id, Threads'
+length limit and its translation of Meta's permission error, Telegram's empty
+message, and X's platform-supplied message. Two cross-cutting invariants are
+asserted once across all five rather than five times: no result reports success
+together with an error, and every result carries its platform name so a failure
+can be attributed in a multi-target publish.
+
+The tests mock the two outbound edges — `fetchWithTimeout` and
+`getConnectedAccount` — and nothing else. The publishers, `shared.ts`'s error
+mapping, and `result-url`'s sanitization are all real, so an assertion is about
+what the code does with a given HTTP response rather than about how a mock was
+written. A new publisher should follow that shape, and should add its cases to
+the per-platform `describe` blocks.
 
 ## 4. The adapter
 

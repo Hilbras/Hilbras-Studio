@@ -189,7 +189,7 @@ export default function PrivacyPolicyPage() {
           <strong>Email:</strong> privacy@hilbras.com
           <br />
           <strong>Website:</strong>{" "}
-          <Link href="/" className="text-gold-600 dark:text-gold-400">
+          <Link href="/" className="text-gold-700 dark:text-gold-500">
             https://hilbras-studio.vercel.app
           </Link>
         </p>

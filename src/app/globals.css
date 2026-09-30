@@ -7,6 +7,29 @@
  * Gold is the single accent color; everything else is neutral warm.
  */
 
+/*
+ * Make Tailwind's `dark:` variant follow the same `dark` class the tokens use.
+ *
+ * By default Tailwind v4 compiles `dark:` to
+ * `@media (prefers-color-scheme: dark)` — the **operating system's** preference.
+ * This app does not use the OS preference: `next-themes` puts a `dark` class on
+ * `<html>`, and `.dark` below re-declares every token. So the two disagreed, and
+ * every `dark:` utility in the app (11 distinct ones) followed the OS while the
+ * colours around it followed the toggle.
+ *
+ * The visible consequence: a visitor who chose light mode on a dark-mode machine
+ * got light colours with dark-mode utilities, and the theme toggle changed the
+ * palette without changing anything keyed on `dark:`. Found by the accessibility
+ * smoke test, which emulates no OS preference at all and therefore saw the
+ * classes as dead.
+ *
+ * `&:where(.dark, .dark *)` scopes the variant to the class and its descendants —
+ * the selector next-themes' class actually produces. Using `is(.dark *)` here
+ * would raise specificity above every base utility and start overriding
+ * unrelated styles.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafaf7;
   --foreground: #1c1a16;

@@ -177,6 +177,62 @@ whoever next remembers to run a thirty-minute harness. That is not hypothetical:
 accounted for: it reads a date from `.mutation-harness-verified` and refuses to
 pass if the tree has changed since. Run the four scripts, then write the date.
 
+### Browser accessibility smoke
+
+`pnpm e2e:smoke` starts a dev server and runs `e2e/a11y.spec.ts` against the
+critical flows: landing, pricing, privacy, login, and signup into the dashboard
+shell. It needs a migrated Postgres — point `TEST_DATABASE_URL` at one, or the run
+fails rather than silently skipping.
+
+**Why this is separate from `pnpm lint`.** `eslint-plugin-jsx-a11y` inspects JSX,
+so it catches a `div` doing a button's job. It cannot see anything that only
+exists in the rendered page:
+
+| What | Found by |
+|---|---|
+| `aria-label` on a bare `<span>` — prohibited by ARIA, so ignored | axe |
+| Icon-only button with no accessible name (`button-name`, critical) | axe |
+| Text at 2.98:1 against its background | axe (computed styles) |
+| Content unreachable by Tab | `expectKeyboardReachable` |
+| Reduced motion not reaching a CSS keyframe | `emulateMedia` |
+
+Every one of those existed in this codebase and passed `jsx-a11y`.
+
+**The opacity floor.** Muted text is `text-muted-foreground` at some opacity. The
+sidebar sits on a darker background than the token, so:
+
+| Opacity | Contrast on the sidebar background | |
+|---|---|---|
+| `/70` | 3.61:1 | fails — this was the bug |
+| `/80` | 4.35:1 | fails |
+| `/85` | 4.79:1 | the floor for body text |
+| `/100` | 6.16:1 | fine |
+
+Use `/85` or higher for anything that reads as text. `/50` and below is for
+decorative icons only, and the smoke test does not assert on those.
+
+**Dark is the default theme**, and the two palettes invert — in dark mode the same
+`--gold-*` step is a *brighter* colour, so white-on-gold fails there while
+dark-on-gold fails in light mode. Contrast has to be measured in both, and
+`theme-provider.tsx` says which one a first-time visitor gets.
+
+`src/lib/palette-contrast.test.ts` enforces this without a browser: it walks every
+`.tsx`, reads each file's own `text-gold-N … dark:text-gold-M` class strings, and
+requires both halves to clear 4.5:1 against the surface that element actually sits
+on. Surfaces that are dark in *both* themes — the dashboard rail, the signed-in
+user chip — are listed explicitly, because adding one is a decision rather than a
+silent exception.
+
+**`dark:` follows the class, not your OS.** Tailwind's default compiles `dark:` to
+`prefers-color-scheme`, but this app themes via a `dark` class on `<html>`. The
+`@custom-variant` at the top of `globals.css` aligns them; without it every
+`dark:` utility in the app is driven by the operating system while the colour
+tokens around it follow the toggle.
+
+**Two shapes need different checks.** A *filled* gold button puts neutral text on
+a gold fill, so the thing that must clear 4.5:1 is the background — invisible to a
+`text-gold-N` pair check, and two mutations slipped past until that test existed.
+
 ### The bundle budget
 
 `node scripts/bundle-budget.mjs` measures the gzipped first-load JS of every

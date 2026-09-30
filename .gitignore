@@ -56,3 +56,10 @@ next-env.d.ts
 # and deliberately untracked so that creating it cannot fail release:check's own
 # "working tree is clean" gate.
 /.mutation-harness-verified
+
+# Playwright output. `test-results/` holds traces and screenshots from failed
+# runs — useful locally, and uploaded to CI as an artifact on failure rather than
+# committed.
+test-results/
+playwright-report/
+.playwright/

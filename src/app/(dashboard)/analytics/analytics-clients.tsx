@@ -73,7 +73,7 @@ export function RecentPostsClient({ posts }: { posts: PublishedPost[] }) {
                     href={post.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-gold-600 dark:text-gold-400 hover:underline shrink-0"
+                    className="text-xs text-gold-700 dark:text-gold-500 hover:underline shrink-0"
                   >
                     View
                   </a>

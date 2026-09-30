@@ -18,9 +18,30 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent/50 hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
-        gold: "bg-gold-500 text-white hover:bg-gold-400 dark:bg-gold-600 dark:text-white dark:hover:bg-gold-500",
+        // Dark is the DEFAULT theme (`defaultTheme="dark"` in theme-provider.tsx),
+        // so the `dark:` half is what a first-time visitor actually sees.
+        //
+        // The two palettes invert: in light mode gold-700 (#91651c) is dark and
+        // takes white text at 5.14:1; in dark mode the same step is a *bright*
+        // #e5b94a, which takes near-black text or nothing at all. No gold-on-gold
+        // pairing reaches 4.5:1 in dark mode at any step, so dark text there is
+        // the neutral `--foreground` against a deep gold fill (7.37:1).
+        //
+        // Every ratio here was measured by the accessibility smoke test, not read
+        // off the token values — axe reported 2.98:1 on this button before it.
+        //
+        // `dark:` here follows the `dark` class on <html>, not the OS preference:
+        // see the `@custom-variant` note in globals.css. Under Tailwind's default
+        // the whole `dark:` half compiled to a media query and was inert.
+        gold: "bg-gold-700 text-white hover:bg-gold-800 dark:bg-gold-300 dark:text-foreground dark:hover:bg-gold-400",
         goldOutline:
-          "border border-gold-500 text-gold-600 hover:bg-gold-500/10 dark:text-gold-400 dark:hover:bg-gold-400/10",
+          // Outlined variant: the *text* is what has to be readable, so it uses
+          // the same measured steps as `gold` — gold-700 in light (4.92:1 on the
+          // page background), gold-500 in dark (6.25:1 on a card). It previously
+          // used gold-600/gold-400, which measured 3.44:1 and 4.37:1. Found by
+          // `src/lib/palette-contrast.test.ts`, which reads this class string out
+          // of the source rather than restating it.
+          "border border-gold-500 text-gold-700 hover:bg-gold-500/10 dark:text-gold-500 dark:hover:bg-gold-400/10",
       },
       size: {
         default: "h-10 px-4 py-2",

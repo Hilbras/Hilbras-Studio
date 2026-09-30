@@ -157,7 +157,7 @@ export function Sidebar({
         {NAV_GROUPS.map((group) => (
           <div key={group.title} className="space-y-1">
             {!collapsed && (
-              <p className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground/70 font-semibold">
+              <p className="px-3 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground/85 font-semibold">
                 {group.title}
               </p>
             )}
@@ -240,29 +240,36 @@ function NavLink({
       className={cn(
         "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
         active
-          ? "bg-gold-500/15 text-gold-600 dark:text-gold-400 shadow-sm shadow-gold-500/5"
+          ? "bg-gold-500/15 text-gold-500 dark:text-gold-500 shadow-sm shadow-gold-500/5"
           : "text-muted-foreground hover:bg-accent/60 hover:text-foreground hover:shadow-sm"
       )}
     >
       <Icon
         className={cn(
           "size-[18px] shrink-0 transition-transform duration-200 group-hover:scale-110",
-          active && "text-gold-500 dark:text-gold-400"
+          active && "text-gold-500 dark:text-gold-500"
         )}
       />
       {!collapsed && <span className="truncate">{label}</span>}
 
       {!collapsed && badge > 0 ? (
-        <span
-          className="ml-auto shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-white"
-          aria-label={`${badge} waiting for approval`}
-        >
+        // No `aria-label` here. The badge's own text — the number — is its
+        // accessible name, and the surrounding link already announces the
+        // destination, so an aria-label on this <span> was both prohibited by
+        // ARIA (ignored by assistive tech, reported by axe as
+        // `aria-prohibited-attr`) and misleading about what it described. The
+        // visible number is what a screen reader reads.
+        <span className="ml-auto shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-white">
           {badge}
         </span>
       ) : null}
 
       {collapsed && badge > 0 ? (
+        // Collapsed: the dot carries no text, so it needs a real role for its
+        // label to be exposed at all — the same `aria-prohibited-attr` fix as
+        // `PlatformIcon`, and here the label is genuinely the only description.
         <span
+          role="img"
           className="absolute right-1.5 top-1.5 size-2 rounded-full bg-amber-500"
           aria-label={`${badge} waiting for approval`}
         />

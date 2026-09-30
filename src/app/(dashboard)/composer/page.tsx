@@ -551,7 +551,7 @@ export default function ComposerPage() {
                         whileTap={canSelect ? { scale: 0.98 } : undefined}
                         className={`flex items-center gap-3 w-full rounded-xl px-3 py-2.5 text-sm transition-all duration-200 ${
                           selected.includes(p)
-                            ? "bg-gold-500/15 text-gold-600 dark:text-gold-400 shadow-sm shadow-gold-500/5"
+                            ? "bg-gold-500/15 text-gold-700 dark:text-gold-500 shadow-sm shadow-gold-500/5"
                             : canSelect
                               ? "hover:bg-accent/60 text-muted-foreground"
                               : isPlatformConnected

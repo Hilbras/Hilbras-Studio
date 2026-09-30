@@ -622,6 +622,56 @@ rewritten each tranche while the earlier summary lines are not revisited. A
 stale "remaining" line is worse than none — it sends the next session looking for
 work that is already finished.
 
+### (16th) The browser a11y smoke test — and what it immediately found
+
+The plan's last unchecked *build* item. It needed `@playwright/test`,
+`@axe-core/playwright`, a Postgres service and a browser install in CI; it is now
+`pnpm e2e:smoke` (`e2e/a11y.spec.ts`), covering landing, pricing, privacy, login,
+signup, the dashboard shell, keyboard reachability, and reduced motion in a real
+browser. **8/8 passing locally.**
+
+The value was in the first run, not in the passing suite. It found six things
+`jsx-a11y` cannot see, because that rule inspects JSX and none of these exist
+until the page renders:
+
+- **`aria-label` on a bare `<span>`** (`PlatformIcon`, the collapsed sidebar
+  badge). Prohibited by ARIA and therefore ignored by assistive tech: the icon
+  was unlabelled *and* invalid. Nine instances on the landing page alone.
+  `role="img"` fixes it — except on the expanded badge, where the visible number
+  *is* the name and the label was removed rather than made valid.
+- **An icon-only button with no accessible name** (`button-name`, **critical**) —
+  the notification bell. A screen-reader user reached a control with no name.
+- **`Tailwind's \`dark:\` variant was inert.`** This is the significant one.
+  Tailwind v4 compiles `dark:` to `@media (prefers-color-scheme: dark)` — the
+  **OS** preference — while `next-themes` puts a `dark` *class* on `<html>`. The
+  two disagreed, so all 11 `dark:` utilities followed the OS while the colour
+  tokens around them followed the toggle. One `@custom-variant` aligns them.
+- **Contrast failures on every gold element.** Both palettes *invert*, so the
+  steps that read in one theme fail in the other, and the pairs had been chosen by
+  eye: the login button measured 2.98:1, the auth links 3.29:1 light / 3.72:1 dark.
+- **An infinite CSS pulse** that `MotionConfig reducedMotion` cannot reach, since
+  that governs framer-motion and not keyframes. Now `motion-safe:`.
+- **Sidebar section labels at `text-muted-foreground/70`** — 3.61:1. `/85` is the
+  floor on that background and is now documented in `docs/development.md`.
+
+**`src/lib/palette-contrast.test.ts`** keeps the colour half from regressing, and
+it is a tree scan rather than a list of files, because fixing login immediately
+revealed the same inverted pair on `/privacy`, in the app shell, in the sidebar
+and in five more components. It reads each file's own class strings — an earlier
+version restated the pairs as literals in the test and **putting the old failing
+pair back into a component did not fail it**, which is the whole reason a contrast
+guard written that way is worse than none.
+*Verified by mutation:* reverting any of five sites fails the scan with the ratio
+in the message. It checks the filled button's **background** separately, because
+that shape (gold fill, neutral label) is invisible to a `text-gold-N` pair check —
+two mutations slipped past until that test existed.
+
+**Three of my own mistakes, all caught before they shipped:** a comment blamed
+Tailwind class-string ordering when the real cause was the OS media query; the
+JSX comment I inserted used `//` and rendered as text (lint caught it); and the
+login test counted zero `<h1>` on a page that has one, because `waitForURL`
+resolves before Next.js swaps the DOM — it now waits for `main`.
+
 ### (15th) Fixing the P2 findings that were still open
 
 AUD-014…033 with the code inspected rather than the status assumed. Four were
@@ -750,7 +800,7 @@ rename cannot make the rule silently vacuous.
 
 ### Verification for the series
 
-531 unit tests (48 files) · 214 integration tests (18 files) · typecheck clean ·
+538 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·
 lint 0 errors / 26 warnings (zero `exhaustive-deps`; down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into
@@ -859,8 +909,10 @@ P0/P1/P2 severities (4 / 46 / 47).
   the only one needing inspection to confirm: `platform.ts` now returns
   `toPlatformCredentialStatus(...)`, which yields `hasClientSecret: Boolean(x)` —
   a boolean, never the value.
-- [ ] P2 findings have owners and dates or documented risk acceptance. **Open,
-  2026-09-30.** The 20 medium findings are AUD-014…033 in the audit report, and
+- [ ] P2 findings have owners and dates or documented risk acceptance. **Partly
+  triaged 2026-09-30** — see entries 15th and 16th: AUD-018/027/032/033 fixed,
+  AUD-015/016/019/020/024/026 already closed, the rest are product decisions
+  recorded below. **Open** The 20 medium findings are AUD-014…033 in the audit report, and
   several are already resolved by this series (the analytics all-failed counts,
   the inert-preference toggles, the pricing/testimonial claims, the doc-path rot).
   **Triaged 2026-09-30.** AUD-018, AUD-027, AUD-032 and AUD-033 were real and are

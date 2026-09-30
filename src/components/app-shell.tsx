@@ -86,13 +86,25 @@ export function AppShell({
           </div>
 
           <div className="flex items-center gap-1 ml-auto">
+            {/* `aria-label` is required: this button has no text, only an icon, so
+                without it axe reports `button-name` as **critical** — a screen-reader
+                user reaches a control with no name at all. `jsx-a11y` passed it
+                because the rule inspects JSX and this is a rendered-only problem.
+
+                The bell is also inert today (AUD-037 — the notification control is
+                not functional). It is labelled as the control it is rather than
+                removed here, because removing a nav affordance is a product call. */}
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Notifications"
               className="relative rounded-xl hover:bg-gold-500/10"
             >
-              <Bell className="size-4 text-muted-foreground" />
-              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-gold-500 animate-[pulse-gold_2s_ease-in-out_infinite]" />
+              <Bell className="size-4 text-muted-foreground" aria-hidden="true" />
+              {/* The unread dot pulses forever. Reduced motion is honoured by
+                  MotionConfig for framer-motion, not for CSS keyframes, so this
+                  stops under `prefers-reduced-motion` explicitly. */}
+              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-gold-500 motion-safe:animate-[pulse-gold_2s_ease-in-out_infinite]" />
             </Button>
             <ThemeToggle />
 
@@ -109,7 +121,7 @@ export function AppShell({
                 <TooltipContent side="bottom" align="end" className="text-xs">
                   {user.name}
                   {user.username && (
-                    <span className="text-gold-400 dark:text-gold-500"> @{user.username}</span>
+                    <span className="text-gold-500 dark:text-gold-500"> @{user.username}</span>
                   )}
                   <br />
                   <span className="text-muted-foreground">{user.email}</span>
@@ -119,7 +131,7 @@ export function AppShell({
 
             {user.username && (
               <span className="hidden lg:flex items-center gap-1 text-xs ml-1 max-w-32 truncate">
-                <span className="text-gold-500 dark:text-gold-400">@{user.username}</span>
+                <span className="text-gold-500 dark:text-gold-500">@{user.username}</span>
               </span>
             )}
             {firstName && (

@@ -121,7 +121,13 @@ export function PlatformIcon({
   const brand = platform ? BRAND_COLORS[platform as PlatformId] : undefined;
 
   return (
+    // `role="img"` is required for the label to mean anything. `aria-label` on a
+    // generic <span> is prohibited by ARIA and is ignored by assistive tech, so
+    // the icon was unlabelled *and* invalid — a combination axe reports as
+    // `aria-prohibited-attr` (serious). It passed `jsx-a11y` because that rule
+    // inspects JSX, not the rendered accessibility tree.
     <span
+      role="img"
       aria-label={label}
       title={label}
       className={cn(

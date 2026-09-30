@@ -15,7 +15,9 @@
     "test:integration": "vitest run --config vitest.integration.config.mts",
     "typecheck": "tsc --noEmit --incremental false",
     "bundle:budget": "node scripts/bundle-budget.mjs",
-    "release:check": "node scripts/release-check.mjs"
+    "release:check": "node scripts/release-check.mjs",
+    "e2e:smoke": "playwright test",
+    "e2e:smoke:report": "playwright show-report"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
@@ -59,6 +61,8 @@
     }
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/node": "^20.19.43",

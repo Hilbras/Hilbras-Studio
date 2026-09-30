@@ -167,7 +167,7 @@ export default async function RunPage({
                     key={event.id}
                     className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-6 py-2.5"
                   >
-                    <span className="shrink-0 text-muted-foreground/70">
+                    <span className="shrink-0 text-muted-foreground/85">
                       {event.at.toISOString().slice(11, 19)}
                     </span>
                     <LevelDot level={event.level} />

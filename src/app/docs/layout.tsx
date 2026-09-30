@@ -38,7 +38,7 @@ export default function DocsLayout({ children }: LayoutProps<"/docs">) {
             </Link>
             <Link
               href="/dashboard"
-              className="flex items-center gap-1.5 rounded-xl bg-gold-500/15 px-3.5 py-2 text-sm font-medium text-gold-600 transition-colors hover:bg-gold-500/25 dark:text-gold-400"
+              className="flex items-center gap-1.5 rounded-xl bg-gold-500/15 px-3.5 py-2 text-sm font-medium text-gold-700 transition-colors hover:bg-gold-500/25 dark:text-gold-500"
             >
               Open Studio <ArrowRight className="size-3.5" />
             </Link>

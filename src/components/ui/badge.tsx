@@ -15,7 +15,7 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-destructive-foreground",
         outline: "text-foreground",
-        gold: "border-transparent bg-gold-500/15 text-gold-600 dark:text-gold-400 border-gold-500/30",
+        gold: "border-transparent bg-gold-500/15 text-gold-700 dark:text-gold-500 border-gold-500/30",
 
         // The `Tone` vocabulary from `@/lib/runtime/view`. Kept in step with
         // that module's `Tone` union rather than defined here, so a screen that

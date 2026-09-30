@@ -71,7 +71,7 @@ export function DocsNav() {
                   className={cn(
                     "rounded-lg px-2.5 py-1.5 text-sm transition-colors",
                     active
-                      ? "bg-gold-500/15 font-medium text-gold-600 dark:text-gold-400"
+                      ? "bg-gold-500/15 font-medium text-gold-700 dark:text-gold-500"
                       : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
                   )}
                 >

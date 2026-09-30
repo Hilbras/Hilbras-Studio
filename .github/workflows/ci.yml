@@ -67,3 +67,78 @@ jobs:
 
       - name: Audit dependencies
         run: pnpm audit --audit-level=high
+
+  # Browser accessibility smoke, as its own job for two reasons.
+  #
+  # It needs a Postgres *service* and a browser install, neither of which the
+  # quality gates have — and adding them there would push that job toward its
+  # 15-minute ceiling for work that has nothing to do with lint or types.
+  # Separating them also means an a11y failure is legible as an a11y failure,
+  # rather than a red X on "Quality gates" that hides which gate broke.
+  a11y-smoke:
+    name: Browser a11y smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: e2e
+          POSTGRES_PASSWORD: e2e
+          POSTGRES_DB: e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://e2e:e2e@localhost:5432/e2e
+      TEST_DATABASE_URL: postgres://e2e:e2e@localhost:5432/e2e
+      ENCRYPTION_KEY: ci-a11y-smoke-encryption-key
+      AUTH_SECRET: ci-a11y-smoke-auth-secret-at-least-32-chars
+      APP_URL: http://localhost:3210
+      NEXT_TELEMETRY_DISABLED: "1"
+      CI: "true"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The browser is ~300 MB, so it is cached by its install rather than
+      # re-fetched on every run. `--with-deps` needs sudo, which is available on
+      # the hosted runner but not locally; the workflow uses the plain install
+      # because the runner image already carries the system libraries.
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Apply migrations
+        run: pnpm exec drizzle-kit migrate
+        env:
+          DATABASE_URL: postgres://e2e:e2e@localhost:5432/e2e
+
+      - name: Accessibility smoke
+        run: pnpm e2e:smoke
+
+      - name: Upload trace on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

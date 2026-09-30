@@ -14,7 +14,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { PlatformIcon } from "@/components/platform-icon";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
-import type { PublishedPost } from "@/app/actions/analytics";
+import type { PublishedPost } from "@/lib/dashboard/queries";
 
 export const LazyPublishingChart = dynamic(
   () => import("./analytics-charts").then((m) => m.PublishingChartClient),

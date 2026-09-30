@@ -33,6 +33,41 @@ const MAX_RELOAD_MESSAGES = 200;
 export type SessionRow = typeof chatSessions.$inferSelect;
 export type MessageRow = typeof chatMessages.$inferSelect;
 
+// ---------------------------------------------------------------------------
+// Shapes the browser renders
+// ---------------------------------------------------------------------------
+//
+// These live here, with the data they describe, rather than in the
+// `@/app/actions/chat` adapter that returns them. A `"use server"` module may
+// only export async functions — every export is compiled into an RPC endpoint
+// the client can call — so a DTO declared there is a declaration in a module
+// whose contract does not describe DTOs, and the shape a client component
+// depends on is owned by the transport layer rather than by the data.
+//
+// They are re-exported from the action module, so no consumer's import changed
+// shape. (remediation Task 17)
+
+/** One Assistant session, as the session picker lists it. */
+export interface ChatSessionItem {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+/** One stored turn, as a reopened transcript renders it. */
+export interface ChatMessageItem {
+  id: string;
+  role: string;
+  content: string;
+}
+
+/** One durable fact the Assistant remembers about this user. */
+export interface MemoryItem {
+  id: string;
+  content: string;
+  createdAt: string;
+}
+
 function titleFrom(message: string): string {
   const flat = message.replace(/\s+/g, " ").trim();
   return flat.length > 60 ? `${flat.slice(0, 60)}…` : flat;

@@ -37,8 +37,8 @@ import {
   loadChatSession,
   renameChatSession,
   deleteChatSession,
-  type ChatSessionItem,
 } from "@/app/actions/chat";
+import type { ChatSessionItem } from "@/lib/chat";
 
 interface ChatMessage {
   id: string;

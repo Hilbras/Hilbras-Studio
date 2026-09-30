@@ -37,6 +37,39 @@ import { postTargets, type PostTarget } from "@/db/schema";
  */
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/**
+ * A post, as the Composer's and Scheduler's lists render it.
+ *
+ * Declared here rather than in `@/app/actions/posts` because it is a *row plus
+ * its targets*, and this is the only module that knows how those two are joined
+ * — `posts.platforms` is gone (migration 0011), so a post's platforms cannot be
+ * read without asking this module for them. A `"use server"` module may only
+ * export async functions, so a shape declared there is a contract in a module
+ * whose contract does not describe shapes (remediation Task 17).
+ *
+ * Every date is a pre-formatted ISO string rather than a `Date`. A `Date` that
+ * crossed the client boundary would arrive in the browser's zone, so the same
+ * row would render as a different moment depending on who was looking; an ISO
+ * string is unambiguous and the screen formats it where it is displayed.
+ */
+export interface PostItem {
+  id: string;
+  content: string;
+  imageUrl: string | null;
+  /**
+   * Target platform ids, from `post_targets`.
+   *
+   * An array, not a comma-separated string: the old shape could not be counted,
+   * indexed, or joined, which is why every consumer carried its own `split(",")`.
+   */
+  platforms: string[];
+  status: string;
+  scheduledAt: string | null;
+  results: string | null;
+  createdAt: string;
+  publishedAt: string | null;
+}
+
 /** Trim, drop empties, and de-duplicate while preserving first-seen order. */
 function normalize(platforms: readonly string[]): string[] {
   return [...new Set(platforms.map((p) => p.trim()).filter(Boolean))];

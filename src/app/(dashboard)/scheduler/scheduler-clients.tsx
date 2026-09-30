@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import Link from "next/link";
 import { Clock } from "lucide-react";
 import { PlatformIcon } from "@/components/platform-icon";
-import type { PostItem } from "@/app/actions/posts";
+import type { PostItem } from "@/lib/posts/targets";
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 

@@ -16,7 +16,8 @@ import { PlatformIcon } from "@/components/platform-icon";
 import { BlurFade } from "@/components/motion/blur-fade";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { Sparkles, Send, Wand2, Loader2 } from "lucide-react";
-import { sendReply, markInboxRead, type InboxMessage, type InboxPlatformError } from "@/app/actions/inbox";
+import { sendReply, markInboxRead } from "@/app/actions/inbox";
+import type { InboxMessage, InboxPlatformError } from "@/lib/inbox/types";
 import { processAssistantMessage } from "@/app/actions/ai";
 
 export function InboxClient({

@@ -46,14 +46,11 @@ import {
   setDefaultAiProviderAction,
   testPingProviderAction,
   listAiProviders,
-  type AiProviderItem,
   type AiProviderFormState,
 } from "@/app/actions/ai-providers";
-import {
-  deleteAssistantMemory,
-  clearAssistantMemories,
-  type MemoryItem,
-} from "@/app/actions/chat";
+import type { AiProviderItem } from "@/lib/ai-providers";
+import { deleteAssistantMemory, clearAssistantMemories } from "@/app/actions/chat";
+import type { MemoryItem } from "@/lib/chat";
 import { deleteAccountAction } from "@/app/actions/account";
 
 // The four `user_preferences` columns (autoHashtags, adaptTone, autoSchedule,

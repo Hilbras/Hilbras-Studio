@@ -52,7 +52,8 @@ import { OrbitingDots } from "@/components/motion/orbiting-dots";
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
 import { improvePostAction, generateHashtagsAction } from "@/app/actions/ai";
 import { publishComposerDraftAction } from "@/app/actions/publish";
-import { createPostAction, listPosts, deletePost, getConnectedPlatforms, getConfiguredPlatforms, type PostItem } from "@/app/actions/posts";
+import { createPostAction, listPosts, deletePost, getConnectedPlatforms, getConfiguredPlatforms } from "@/app/actions/posts";
+import type { PostItem } from "@/lib/posts/targets";
 import { parseLocalSchedule } from "@/lib/schedule";
 
 const AI_SUGGESTIONS = [

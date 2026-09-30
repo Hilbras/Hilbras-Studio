@@ -6,26 +6,13 @@ import { getSessionUser } from "@/lib/session";
 import { fetchWithTimeout } from "@/lib/http";
 import { decryptSecret } from "@/lib/crypto";
 import { markMessageRead, readMessageKeys } from "@/lib/inbox/read-state";
+import type { InboxMessage, InboxPlatformError } from "@/lib/inbox/types";
 
-export interface InboxMessage {
-  id: string;
-  platform: string;
-  name: string;
-  handle: string;
-  text: string;
-  time: string;
-  unread: boolean;
-}
-
-/**
- * A provider fetch that failed, named so the UI can say "X is erroring"
- * instead of showing an empty inbox that reads as "nothing new"
- * (remediation Task 14: provider errors are distinct from an empty inbox).
- */
-export interface InboxPlatformError {
-  platform: string;
-  error: string;
-}
+// The DTOs describe provider-fetched inbox data, so they are declared in
+// `@/lib/inbox/types` and re-exported here. A `"use server"` module may only
+// export async functions, so declaring a shape here puts a contract in a module
+// whose contract does not describe shapes (remediation Task 17).
+export type { InboxMessage, InboxPlatformError };
 
 /** Best-effort human message from a provider error body. */
 async function providerErrorText(

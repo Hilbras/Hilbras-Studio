@@ -12,6 +12,9 @@ import {
   deleteMemory,
   clearMemories,
   loadMessages,
+  type ChatSessionItem,
+  type ChatMessageItem,
+  type MemoryItem,
 } from "@/lib/chat";
 
 /** Ids are client-minted: session ids are UUIDs, memory ids are UUIDs too — bounded either way. */
@@ -25,23 +28,11 @@ const renameInput = z.object({
     .max(80),
 });
 
-export interface ChatSessionItem {
-  id: string;
-  title: string;
-  updatedAt: string;
-}
-
-export interface ChatMessageItem {
-  id: string;
-  role: string;
-  content: string;
-}
-
-export interface MemoryItem {
-  id: string;
-  content: string;
-  createdAt: string;
-}
+// The DTOs describe rows in `@/lib/chat`, so they are declared there and
+// re-exported here. A `"use server"` module may only export async functions, so
+// declaring a shape here puts a contract in a module whose contract does not
+// describe shapes (remediation Task 17).
+export type { ChatSessionItem, ChatMessageItem, MemoryItem };
 
 /** Recent sessions for the Assistant's session picker. */
 export async function listChatSessions(): Promise<ChatSessionItem[]> {

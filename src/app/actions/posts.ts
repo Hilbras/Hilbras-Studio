@@ -6,7 +6,7 @@ import { db } from "@/db";
 import { posts } from "@/db/schema";
 import { listConnectedPlatforms } from "@/lib/accounts/store";
 import { createPost } from "@/lib/posts/service";
-import { getPostTargets } from "@/lib/posts/targets";
+import { getPostTargets, type PostItem } from "@/lib/posts/targets";
 import { getSessionUser } from "@/lib/session";
 import { publishDuePosts } from "@/lib/scheduled-posts";
 
@@ -40,24 +40,22 @@ const statusFilter = z
   .optional()
   .catch(undefined);
 
-export interface PostItem {
-  id: string;
-  content: string;
-  imageUrl: string | null;
-  /**
-   * Target platform ids, from `post_targets`.
-   *
-   * An array, not a comma-separated string: the old shape could not be counted,
-   * indexed, or joined, which is why every consumer carried its own `split(",")`.
-   */
-  platforms: string[];
-  status: string;
-  scheduledAt: string | null;
-  results: string | null;
-  createdAt: string;
-  publishedAt: string | null;
-}
+// `PostItem` is a post row joined with its targets, and `posts/targets.ts` is
+// the only module that knows how those two are read together — `posts.platforms`
+// is gone (migration 0011). So the shape is declared there and re-exported here.
+// A `"use server"` module may only export async functions, so declaring a shape
+// here puts a contract in a module whose contract does not describe shapes
+// (remediation Task 17).
+export type { PostItem };
 
+/**
+ * What a post form reports back.
+ *
+ * Unlike the DTOs above this one *does* belong to the action: it is the shape
+ * `useActionState` holds for this action's own result, and no service returns
+ * it. A form state is the action's contract with its own form, which is the one
+ * thing a `"use server"` module legitimately describes.
+ */
 export interface PostFormState {
   error?: string;
   success?: string;

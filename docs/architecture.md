@@ -316,9 +316,11 @@ These are finished, tested, and load the layers above them. Do not rewrite.
 
 | Asset | Reason |
 |---|---|
-| `src/lib/mock-data.ts` | Dashboard is now live. Confirm no remaining imports, then delete. |
+| `src/lib/mock-data.ts` | **Done 2026-09-29** — deleted with zero importers. |
 | `vercel.json` cron entry | Replaced by the durable queue (ADR-001). Kept only as a fallback sweep. |
 | `data/hilbras.db` | SQLite artifacts. The app is Postgres-only. Not tracked by git; delete locally. |
+| `app/actions/dashboard.ts`, `actions/analytics.ts` | **Done 2026-09-30** — thin adapters whose last caller became a server component reading `dashboard/queries.ts` directly. See ADR-008. |
+| `app/actions/credentials.ts` | **Done 2026-09-30** — generic-credential UI superseded by the per-platform path in `actions/platform.ts`. The writer in `lib/credential-store.ts` is still live. |
 
 ---
 

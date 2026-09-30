@@ -17,9 +17,9 @@ sitting in today.
 |---|---|---|
 | 1 | Register the platform | `src/lib/platforms.ts` |
 | 2 | Declare its capabilities | `src/lib/platforms.ts` |
-| 3 | Write the publisher | `src/lib/publish.ts` |
-| 4 | Let the adapter find it | automatic — one adapter serves all |
-| 5 | Test the failure modes | `src/lib/connectors/*.test.ts` |
+| 3 | Write the publisher | `src/lib/publish/<platform>.ts` |
+| 4 | Route it | `src/lib/publish/index.ts` — one `case` in the switch |
+| 5 | Test the failure modes | a new `src/lib/publish/<platform>.test.ts` — **none exist yet**, so yours is the first |
 | 6 | Document it | this file, `docs/accounts.md` |
 
 ---
@@ -64,9 +64,21 @@ channel or chat, `"none"` when there is nothing to select.
 
 ## 3. Write the publisher
 
-Add `publishToMyPlatform(userId, text, imageUrl, accountKey)` in
-[`src/lib/publish.ts`](../src/lib/publish.ts) and dispatch it from the switch in
-`publishForUser`.
+Add `publishToMyPlatform(userId, text, imageUrl, accountKey)` in a new
+`src/lib/publish/myplatform.ts`, then add one `case` to the switch in
+`routePublishForUser` in [`src/lib/publish/index.ts`](../src/lib/publish/index.ts)
+and one import beside the others.
+
+The switch is the only registration step: `publishForUser` and
+`publishToAllForUser` are the module's public surface, and both route through
+it. Every result is passed through `sanitizePublishResult` on the way out, so a
+publisher cannot bypass the server-side result validation by being called
+directly — which is the reason to call the exported function rather than your
+own.
+
+Copy the shape of an existing publisher (`instagram.ts` for media,
+`threads.ts` for the Meta Graph helpers in `shared.ts`); they differ in their API
+calls and agree on everything else.
 
 Four requirements:
 
@@ -87,6 +99,15 @@ Four requirements:
 - **Handle every documented failure.** A new publisher that only handles success
   makes every error path report `unknown`, which is non-retryable — the run fails
   with a message that says nothing about why.
+
+**None of the five publishers has a test file.** The failure modes above are
+therefore documentation, not enforced behaviour: `src/lib/publish/` currently
+holds no `*.test.ts`, and the only connector tests are
+`src/lib/connectors/errors.test.ts` and `registry.test.ts`, which cover the
+error taxonomy and the registry rather than any platform's API calls. A new
+publisher with a test file is therefore the *only* publisher whose failure
+mapping is verified — write it, and treat the list above as the specification
+rather than as a description of what already happens.
 
 ## 4. The adapter
 

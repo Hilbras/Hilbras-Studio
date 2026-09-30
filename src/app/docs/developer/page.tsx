@@ -57,9 +57,10 @@ export default function DeveloperDocsPage() {
 │  ├─ docs/, pricing/, privacy/   public pages
 │  └─ layout.tsx, globals.css
 ├─ components/         UI primitives, sidebar, feature components
-├─ lib/                platforms.ts (registry), publish.ts (publishers),
-│                      ai.ts (model resolution), scheduled-posts.ts,
-│                      chat.ts, crypto
+├─ lib/                platforms.ts (registry), ai.ts (model resolution),
+│                      scheduled-posts.ts, chat.ts, crypto
+│  ├─ publish/         one file per platform + index.ts (the router),
+│  │                   shared.ts (account lookup, Graph helpers), types.ts
 │  ├─ ai/              planner.ts, compose.ts, complete.ts (the one
 │  │                   model-call boundary), limits.ts (per-run spend),
 │  │                   context.ts (what crosses into model output)
@@ -276,8 +277,8 @@ pnpm dev                        # http://localhost:3000`}</code>
         </li>
         <li>
           <strong>Publisher</strong> — write <code>publishToX</code>-style
-          function in <code>src/lib/publish.ts</code> and add its dispatcher
-          case.
+          function in <code>src/lib/publish/&lt;platform&gt;.ts</code> and add
+          its case to the switch in <code>src/lib/publish/index.ts</code>.
         </li>
         <li>
           <strong>Connection</strong> — OAuth platforms work off the{" "}

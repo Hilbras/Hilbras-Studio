@@ -566,6 +566,35 @@ the next file added does not reproduce it.
 - Worth recording that memory was the wrong hypothesis: constraining Node to a
   1.5 GB heap still passed 18/18, so it was concurrency, not allocation.
 
+#### …and that diagnosis was also wrong
+
+The cap did **not** fix CI. The second run failed again, and its log is what
+finally showed the real thing: **`Test Files 18 passed (18)` / `Tests 214 passed
+(214)` — with `Errors 1 error` underneath.** Every test passed *and* the run was
+red. The first CI log had no summary at all, which is why I read it as a killed
+process; the second run finished normally, which is what made the difference
+visible. Concurrency was never the cause; the ceiling story fit "died at 50s" too
+well, and I stopped at the first hypothesis that explained the number.
+
+**The actual cause** is `src/db/index.ts` having no `error` listener on its
+`Pool`. node-postgres treats an unhandled `error` on a Pool as an uncaught
+exception, so one idle client dying takes the process down. A `57P01` arriving
+after the tests that used the pool had passed surfaced as an uncaught exception
+and failed an otherwise-green run. The listener is now there, logged through the
+structured-event helper the rest of the codebase uses.
+
+**This is a production bug, not a CI nuisance.** A server-side idle-connection
+close — a proxy timeout, a restart, a failover — would kill the application
+process outright rather than being retried. Proved directly rather than asserted:
+a two-line probe emitting `error` on a Pool exits 1 with "Unhandled 'error'
+event" without a listener, and exits 0 with one. Same probe, both directions.
+
+Not reproduced locally in either form — 3/3 clean solo, and 18/18 green on the
+full suite. It is timing- and runner-dependent, which is the kind of defect that
+is easiest to misattribute to whatever else is running. The maxWorkers cap is
+kept: it is defensible on its own terms and bounds container count, but it is
+**not** the fix, and the ledger should not imply otherwise.
+
 **A mistake I made doing this, because the lesson is about the tool.** Testing
 the uncapped variant timed out, and the kernel died **before** restoring the
 config — so the next call found a config with `maxWorkers` silently removed and

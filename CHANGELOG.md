@@ -92,6 +92,13 @@ lint 0 errors / 27 warnings · build green. All four mutation harnesses were run
 against this tree: phase 6 **20 covered / 0 holes**, phase 7 **16 / 0**,
 phase 8 **23 / 0**, task 17 **21 / 0**.
 
+**Fixed.** An idle Postgres client dying — a proxy timeout, a restart, a
+failover — crashed the process outright. node-postgres treats an unhandled
+`error` on a connection Pool as an uncaught exception, and the application pool
+had no listener, so a database blip the app would otherwise have retried through
+became a process exit. The pool now logs the event instead of dying; a query
+actually using the connection still fails normally.
+
 The harnesses are not in CI — each mutation starts a Postgres container, so they
 take tens of minutes and run before a release instead. `pnpm release:check` now
 accounts for that: it reads a date from `.mutation-harness-verified` and fails

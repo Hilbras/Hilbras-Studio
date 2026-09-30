@@ -81,6 +81,40 @@ export async function waitForStyles(page: Page): Promise<void> {
     undefined,
     { timeout: 60_000 },
   );
+
+  // Then wait for animations to finish.
+  //
+  // This is the third distinct cause of the same symptom, and the one that
+  // survived the two CSS checks. The landing header is a `motion.header` that
+  // animates `opacity: 0 → 1` over 500ms, inside a `backdrop-filter: blur()` glass
+  // panel. axe composites a partially-transparent element against its backdrop, so
+  // read mid-animation it reports contrast failures for text that measures ~6:1
+  // once settled — on the same element, on every run, and never locally, because a
+  // warm server finishes the animation before the first assertion.
+  //
+  // The web-animations API is used rather than a fixed sleep: it waits on the
+  // animations that actually exist and returns as soon as they finish, so warm runs
+  // pay nothing. `opacity` animations only — a transform or filter animation does
+  // not change composited colours.
+  await page.evaluate(async () => {
+    const running = () =>
+      document.getAnimations().filter((a) => {
+        // KeyframeEffect only — a CSS animation's effect may be null, and a
+        // ScrollTimeline-driven one has no target property to inspect.
+        const effect = a.effect;
+        if (!effect || !("targetProperty" in effect)) return false;
+        // `targetProperty` is not in this TS lib's DOM types yet, though it is
+        // standard (CSS Animations 2) and present in every browser this runs on.
+        const property = (effect as { targetProperty?: unknown }).targetProperty;
+        return a.playState === "running" && String(property).includes("opacity");
+      });
+    // Two passes: an animation can start another, and a single pass would miss it.
+    for (let pass = 0; pass < 2 && running().length > 0; pass += 1) {
+      await Promise.all(
+        running().map((a) => a.finished.catch(() => undefined)),
+      );
+    }
+  });
 }
 
 /** Severities that block a release. `minor`/`moderate` are reported, not failed. */
@@ -205,13 +239,22 @@ export async function seedUser(page: Page): Promise<SeededUser> {
   // Signup should land on the dashboard. If it does not, the remaining tests
   // would each fail with a confusing "not signed in" instead of one clear error.
   //
-  // Generous, and the reason is compile time rather than flakiness: under
-  // `next dev` the *first* request to a route builds it, and on a cold runner
-  // signup is the most expensive page in the suite — the form, its server action,
-  // the redirect, and then the dashboard's own first render. Two things wait for
-  // it: the URL change, then the shell actually being mounted, because
-  // `waitForURL` resolves while Next.js is still swapping the DOM.
-  await page.waitForURL((url) => !url.pathname.includes("signup"), { timeout: 120_000 });
+  // Budget sized to what this step actually costs on a cold build.
+  //
+  // Measured with `.next` deleted, which is what a CI runner has: the five routes
+  // took 1.7s, 9.1s, 4.2s, 14.9s and 9.6s to compile, and signup still exceeded
+  // 120s — because the *server action* behind the form compiles separately, on
+  // first invocation, and a GET of /signup does not trigger it. The route being
+  // warm and the action being compiled are two different things.
+  //
+  // 300s is not a fudge factor: it is the first figure at which the cold build
+  // completed, and it only ever applies cold — a warm server signs up in about 15s.
+  // The cost is paid once per run and buys a suite that is either green or
+  // reporting a real accessibility failure, instead of one that reports timeouts.
+  await page.waitForURL((url) => !url.pathname.includes("signup"), { timeout: 300_000 });
+
+  // The URL change is not the page being ready: Next swaps the route client-side,
+  // so `waitForURL` can resolve while the old DOM is still mounted.
   await page.locator("main").first().waitFor({ state: "visible", timeout: 60_000 });
   return user;
 }

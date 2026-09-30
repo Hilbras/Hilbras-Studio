@@ -58,7 +58,7 @@ export default defineConfig({
   // cost of the environment rather than a limit on the behaviour under test, so
   // it failed as a timeout instead of as an assertion. Warm, every test here runs
   // in well under 20s, so this only bites when it should.
-  timeout: 150_000,
+  timeout: 330_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
 

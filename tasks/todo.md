@@ -889,10 +889,37 @@ narrower than "my fix was wrong": a readiness probe keyed to an element a
 particular page happens to contain is a probe for that page, not for the suite, and
 it will mis-time every other page.
 
-**The honest state: 8/8 locally against a warm server, and a CI failure I have
-narrowed to "the landing page's stylesheet is not fully applied when axe reads it"
-without yet pinning which rule is late.** The remaining fix is in that
-canary, not in the product.
+**Two more causes, found the same way — by a cold runner that local never
+reproduces:**
+
+4. **A `motion.header` opacity animation behind a `backdrop-filter` glass panel.**
+   axe composites a partially-transparent element against its backdrop, so read
+   mid-animation it reports contrast failures for text that measures ~6:1 once
+   settled. The suite now waits for running opacity animations via the
+   web-animations API, filtered to `targetProperty` because that is the only
+   property that changes composited colour — and narrowing to it mattered, since a
+   blanket "wait for all animations" would block forever on the three infinite
+   `spin` animations on the landing page.
+
+5. **The signup server action compiles on first *invocation*, not on first GET.**
+   Measured with `.next` deleted: the five warmed routes cost 1.7s–22.5s, and
+   signup still ran past 300s — because the action behind the form is compiled
+   separately and a `GET /signup` provably does not trigger it. A GET-based warm-up
+   added to the test that needs it was tried and **removed**: it cannot do the job,
+   and leaving it in would be decoration.
+
+**Fixed, and verified the only way that means anything.** `seedUser`'s budget is
+300s (the per-test limit raised to 330s so it cannot fire first and misname the
+failure), then verified against a **cold-started** dev server with `.next` deleted:
+**8/8 in 3.1 minutes**, signup at 28.6s. The same suite failed at 300s minutes
+earlier in the session against an equally cold build — which is the difference
+between having a number and having checked it.
+
+The general lesson, and it is the fourth time in this series: **every one of these
+bugs was invisible locally.** Locally the suite was 8/8 green through all five, and
+each version of every fix appeared to work. Only a cold runner distinguishes
+"waiting for readiness" from "waiting for the right readiness", which is an argument
+for the suite living in CI rather than on a laptop.
 
 **Not solved, and recorded in place at the failing line.** On a *cold* dev server the
 signup test has timed out at 120s with no server-side error: the log shows

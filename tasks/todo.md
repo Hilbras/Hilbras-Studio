@@ -25,7 +25,7 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | 9 OAuth matrix | **Done (2026-09-29)** | Signed state verified; Facebook GET vs Meta POST separated; Instagram/Threads refresh implemented. **2026-09-29: X and Reddit exchange via HTTP Basic (secret never in the body); profile lookups for X/Reddit/LinkedIn/TikTok/YouTube/Pinterest with per-provider contract tests — an unresolvable profile fails the connect (`profile_unavailable`) instead of storing a colliding `"unknown"` id; PKCE issued for every flow whose exchange can carry a verifier (Facebook's GET flow gets none, per its documented parameters; the dead `usesPkce` flag was removed and the policy documented); X's rotating refresh token is refreshed by the cron maintainer (rotation contract tested); callback route contract tests pin the exchange/profile shapes.** Remaining (operator): sandbox verification per live provider. |
 | 10 Scheduler leases | **Done** | Claim/lease (5 min), 100s deadline, 60s per-post timeout under 120s route maxDuration, uncertain-outcome handling, 10 integration tests + Inngest run-idempotency tests. |
 | 11 Independent settlement | Partial core done → **remaining items closed 2026-09-29** | `Promise.allSettled`, shared server-side transitions, receipts. **2026-09-29: connector results validated server-side (URL host allowlist, bounded text, `success === true` strictness — `sanitizePublishResult`); composer-path all-failure, timeout, and sanitization tests added to `publish.test.ts`.** Remaining (minor): an analytics/Composer display-parity test. |
-| 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`; EXPLAIN before/after evidence for the index strategy. |
+| 12 DB constraints | Partial → **core constraints added 2026-09-29** | Uniqueness/indexes/tenant isolation (documented app-only branch) verified on the new schema. **2026-09-29: migration 0014 adds a CHECK on `posts.status` (five terminal states) and a partial unique index enforcing one default `ai_providers` row per user, both integration-tested; `registerConnection`, provider selection, and the provider save path are now transactional.** Remaining: CHECK/enum for `run_steps.state`/`runs.state`. **2026-09-30: the EXPLAIN evidence is now a test, not a pasted table** — `tests/integration/index-plans.test.ts` seeds 4,000 goals and 4,000 approvals and asserts the two hot queries are *eligible* for `goals_due_idx` and `run_step_approvals_pending_expiry_idx` by plan shape, against the real schema on every integration run. Asserting the **index name** is the point: a partial index is invisible to the planner unless the query's predicate implies the partial one, so a future edit that widens the predicate stops the index being a candidate and the sweeper degrades to a full scan on a table that only grows — the query still returns the right rows, just slowly, and nothing else in the suite notices. A test demonstrates that failure mode directly: drop `state = 'pending'` and the index stops being a candidate while the query stays correct. The limits are recorded in the file: it does **not** prove production-volume performance, and at 4,000 rows PostgreSQL seq-scans anyway, so dropping the indexes fails the two eligibility tests and leaves the row-count tests green. A production `EXPLAIN (ANALYZE, BUFFERS)` remains an operator step. |
 | 13 Timezones/HTTP | **Done (2026-09-29)** | Goals use `timestamptz` + DST-tested cron; single HTTP funnel (`http.test.ts` enforces no raw `fetch`); `fetchWithTimeout` does not follow redirects and bounds every response body at 2 MiB inside the total deadline; the assistant stream cancels upstream generation on client disconnect. **Migration 0016 converts all 33 remaining bare `timestamp` columns to `timestamptz` with explicit `AT TIME ZONE 'UTC'` casts** — one timestamp contract, so the scheduler, claim-lease, and rate-limit comparisons no longer depend on the server's timezone. This **reverses the deferral recorded twice above** (Task 13 previously read "`posts.scheduled_at` is a bare `timestamp` … needs a deliberate data decision"); that decision and its UTC precondition are now in the 0016 migration note. **Corrected 2026-09-29:** this row previously claimed 0016 was "verified by the full integration suite", which was not true — the suite applied 0016 and asserted nothing about it. `tests/integration/timestamptz-migration.test.ts` now stages the journal at 0015, writes a row through the pre-0016 schema, applies the real 0016, and asserts the instant is preserved and the session-dependence is gone; two drift guards read the migration file so a lost `AT TIME ZONE 'UTC'` fails in CI. Both were confirmed to fail against a deliberately wrong zone. Remaining: connect-phase timeout distinct from the total deadline (low value). |
 | 14 Analytics/inbox/prefs | **Done (2026-09-29, one recorded scope decision)** | Analytics reads real results incl. partial success; query bounded (`.limit(500)`); a failed provider fetch is reported per platform ("X: …") instead of reading as an empty inbox. **2026-09-29: inbox read state persists (`inbox_read_state` table, 30-day pruning, per-message `markInboxRead` action, unread count survives reloads); the four inert preference toggles are removed from the UI — none changed behavior, and a toggle that does nothing is a false claim (columns retained in schema, documented for reintroduction). Goal-run publishes in the analytics dashboard are recorded OUT OF SCOPE: receipts record successes only, so merging them into a published/failed split would distort the stats, and run outcomes are already visible in the Runs view — revisit only if the dashboard gains a runtime section.** |
 | 15 Dead code | **Final sweep done 2026-09-30 — Task 15 CLOSED** | **`src/lib/mock-data.ts` deleted and four unused dependencies removed (2026-09-29). 2026-09-30: the final reference-checked sweep, the item the plan ordered last on purpose.** Rather than grep for names, the sweep **resolves the real import graph** — the first attempt did grep, and reported `lib/crypto.ts` and `lib/session.ts` as unreferenced, both of which are imported dozens of times. **Six modules deleted, five kept with a recorded reason.** Deleted: the two `dashboard/*.tsx` files (orphaned behind `/dashboard`, which permanently redirects to `/runtime`); `actions/analytics.ts` and `actions/dashboard.ts` (thin adapters written three commits earlier, whose last caller — the analytics page — had become a server component reading the service directly, so a `"use server"` module with no importer is an endpoint nothing calls); and `actions/credentials.ts` (a generic-credential UI superseded by the per-platform path in `actions/platform.ts` — it carried `server-only`, not `"use server"`, so it was never an RPC endpoint at all). The `stored_credentials` table and its writer are still live and untouched. Kept, in a `KEPT` list in the guard with a reason each: `ui/separator.tsx` and `ui/tabs.tsx` (Radix primitives — a kit is a set, not a set of usages) and three motion primitives unused since v0.1.0, kept as a group so the kit shrinks by decision rather than file-by-file. **New guard:** any production module with neither an importer nor a framework entry point now fails the suite. |
@@ -366,13 +366,49 @@ The defect was about types.
   and the writer is still live, so deleting the record of why a boundary exists
   would be the wrong kind of tidy.
 
+### (7th) Task 12 — EXPLAIN evidence for the two hot-path indexes
+
+The last mechanical item on Task 12, and the one where a pasted `EXPLAIN`
+table would have been worthless: it is a claim about a database that no longer
+exists. It is now a test against the real schema.
+
+- **`tests/integration/index-plans.test.ts`** seeds 4,000 goals and 4,000
+  approvals — the real distribution, where most goals are paused and most
+  approvals decided — and asserts the scheduler's due-goal query and the
+  approvals sweeper are *eligible* for their partial indexes.
+- **Asserting the index name is the whole point.** A partial index is invisible
+  to the planner unless the query's own predicate implies the partial one. A
+  future edit that widens `status = 'active'` to a set, or drops the `state`
+  filter, silently stops the index being a candidate: the query still returns
+  the right rows, the sweeper degrades to a full scan on a table that only
+  grows, and nothing in the suite, the build, or the linter notices. One test
+  demonstrates that failure mode directly rather than describing it.
+- **Three of my own mistakes, each caught by a test rather than by reading:**
+  the fixture set due goals a minute in the *future*, so the query matched
+  nothing — and the index assertion still passed, because a plan over an empty
+  result still names the index. Only the row-count assertion caught it, which
+  is why both exist. The access-path assertion demanded an `Index Scan` node
+  when the planner had correctly chosen a *Bitmap Heap Scan*; asserting the
+  relation access path rather than a node name fixed it. And the third was a
+  double-wrapped `EXPLAIN`.
+- **The mutation run, and the limit it exposed:** dropping both indexes fails
+  the two eligibility tests and leaves the row-count and access-path tests
+  **green** — at 4,000 rows PostgreSQL prefers a sequential scan either way.
+  That is recorded in the file rather than hidden: the eligibility assertions
+  carry the weight, and the suite is built so they are the ones that go red.
+- **What it does not prove:** production-volume performance. The plan at 10,000
+  rows is not the plan at 10 million. A production
+  `EXPLAIN (ANALYZE, BUFFERS)` against real data stays an operator step.
+
 ### Verification for the series
 
-467 unit tests (42 files) · 198 integration tests (16 files) · typecheck clean ·
+467 unit tests (42 files) · 204 integration tests (17 files) · typecheck clean ·
 lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into
-the baseline.
+the baseline; the six lint *errors* in the first version of the plan test were
+also mine (an `any`-typed plan node) and were fixed by typing the shape rather
+than suppressing the rule.
 
 ## Phase 0: Safety Baseline
 

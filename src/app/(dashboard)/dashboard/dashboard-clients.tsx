@@ -33,7 +33,7 @@ import type {
   DashboardStat,
   ActivityItem,
   ConnectedAccountInfo,
-} from "@/app/actions/dashboard";
+} from "@/lib/dashboard/queries";
 
 export const LazyWeeklyChart = dynamic(
   () => import("./dashboard-charts").then((m) => m.WeeklyChartClient),

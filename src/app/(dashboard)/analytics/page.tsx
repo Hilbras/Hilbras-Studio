@@ -13,8 +13,11 @@ import { GradientMesh } from "@/components/motion/gradient-mesh";
 import { WordReveal } from "@/components/motion/word-reveal";
 import { MagneticButton } from "@/components/motion/magnetic-button";
 import { BlurFade } from "@/components/motion/blur-fade";
-import { getAnalyticsData } from "@/app/actions/analytics";
-import { getWeeklyChartData } from "@/app/actions/dashboard";
+import {
+  getAnalyticsData,
+  getWeeklyChartData,
+} from "@/lib/dashboard/queries";
+import { requireSessionUser } from "@/lib/session";
 import {
   LazyPublishingChart,
   LazyPlatformBreakdown,
@@ -23,9 +26,15 @@ import {
 } from "./analytics-clients";
 
 export default async function AnalyticsPage() {
+  // Read through the owner-scoped layer with the id in hand, rather than
+  // through the action adapters: this is a server component, so the session is
+  // already resolved here and passing it explicitly is both cheaper and the
+  // rule ADR-008 states (remediation Task 17).
+  const user = await requireSessionUser();
+
   const [analyticsData, weeklyChart] = await Promise.all([
-    getAnalyticsData(),
-    getWeeklyChartData(),
+    getAnalyticsData(user.id),
+    getWeeklyChartData(user.id),
   ]);
 
   return (

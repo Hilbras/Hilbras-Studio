@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BlurFade } from "@/components/motion/blur-fade";
-import type { WeeklyChartPoint } from "@/app/actions/dashboard";
+import type { WeeklyChartPoint } from "@/lib/dashboard/queries";
 
 export function WeeklyChartClient({ data }: { data: WeeklyChartPoint[] }) {
   return (

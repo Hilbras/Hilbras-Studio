@@ -18,11 +18,11 @@ import {
 } from "recharts";
 
 import { StaggerChildren, staggerItem } from "@/components/motion/stagger-children";
-import type { WeeklyChartPoint } from "@/app/actions/dashboard";
 import type {
   PlatformBreakdown,
   PlatformPublishStats,
-} from "@/app/actions/analytics";
+  WeeklyChartPoint,
+} from "@/lib/dashboard/queries";
 
 const chartTooltipStyle = {
   backgroundColor: "var(--color-card)",

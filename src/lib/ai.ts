@@ -6,7 +6,7 @@ import {
   getRecentActivity,
   getWeeklyChartData,
   getConnectedAccountsWithDetails,
-} from "@/app/actions/dashboard";
+} from "@/lib/dashboard/queries";
 import { SYSTEM_PROMPT } from "./ai-chat";
 
 /**
@@ -18,9 +18,9 @@ import { SYSTEM_PROMPT } from "./ai-chat";
  * context builder here. This module re-exports the public API so every
  * consumer keeps importing `@/lib/ai`.
  *
- * The context builder still reads the dashboard through the UI-layer action
- * module — the one remaining cross-layer import in this file, recorded as
- * remaining work in tasks/todo.md.
+ * The context builder reads the dashboard through `@/lib/dashboard/queries`
+ * and is handed the user id explicitly, so the last cross-layer import out of
+ * `@/lib` is gone: nothing under `lib/` reaches into `app/` any more.
  */
 
 export type { ChatMessage } from "@/lib/ai-sdk";
@@ -71,56 +71,67 @@ Rules:
 
   const blocks: string[] = [];
 
-  // Long-term memory — facts from every session, not just this one.
+  // Resolved once, up front: the memory block and the account-data block are
+  // both about the same person, and the reads below are explicitly scoped to
+  // this id rather than to whatever session happens to be ambient.
+  let user: Awaited<ReturnType<typeof getSessionUser>> = null;
   try {
-    const user = await getSessionUser();
-    if (user) {
+    user = await getSessionUser();
+  } catch {
+    // best-effort — the chat must not fail because the session lookup did
+  }
+
+  // Long-term memory — facts from every session, not just this one.
+  if (user) {
+    try {
       const rows = await listMemories(user.id);
       const facts = rows.map((m) => `- ${m.content}`);
       if (facts.length) blocks.push(`<memory>\n${facts.join("\n")}\n</memory>`);
+    } catch {
+      // best-effort
     }
-  } catch {
-    // best-effort
   }
 
-  try {
-    const [accounts, stats, weekly, activity] = await Promise.all([
-      getConnectedAccountsWithDetails(),
-      getDashboardStats(),
-      getWeeklyChartData(),
-      getRecentActivity(3),
-    ]);
+  if (user) {
+    try {
+      const [accounts, stats, weekly, activity] = await Promise.all([
+        getConnectedAccountsWithDetails(user.id),
+        getDashboardStats(user.id),
+        getWeeklyChartData(user.id),
+        getRecentActivity(user.id, 3),
+      ]);
 
-    const stat = (label: string) => stats.find((s) => s.label === label)?.value ?? 0;
-    const lines: string[] = [
-      `Today: ${new Date().toLocaleDateString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      })}`,
-      `Connected accounts: ${
-        accounts.length
-          ? accounts
-              .map((a) => `${platformName(a.platform)} @${a.username ?? "unknown"}`)
-              .join(", ")
-          : "none connected yet"
-      }`,
-      `Posts: ${stat("Posts Published")} published in the last 7 days, ${stat(
-        "Scheduled"
-      )} scheduled, ${stat("Total Posts")} total`,
-      `This week (published per day): ${weekly.map((w) => `${w.day} ${w.posts}`).join(" · ")}`,
-    ];
-    if (activity.length) {
-      lines.push(
-        `Recent activity: ${activity
-          .map((a) => `${a.action} — ${a.detail} (${a.timestamp})`)
-          .join("; ")}`
-      );
+      const stat = (label: string) => stats.find((s) => s.label === label)?.value ?? 0;
+      const lines: string[] = [
+        `Today: ${new Date().toLocaleDateString("en-US", {
+          weekday: "long",
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        })}`,
+        `Connected accounts: ${
+          accounts.length
+            ? accounts
+                .map((a) => `${platformName(a.platform)} @${a.username ?? "unknown"}`)
+                .join(", ")
+            : "none connected yet"
+        }`,
+        `Posts: ${stat("Posts Published")} published in the last 7 days, ${stat(
+          "Scheduled"
+        )} scheduled, ${stat("Total Posts")} total`,
+        `This week (published per day): ${weekly.map((w) => `${w.day} ${w.posts}`).join(" · ")}`,
+      ];
+      if (activity.length) {
+        lines.push(
+          `Recent activity: ${activity
+            .map((a) => `${a.action} — ${a.detail} (${a.timestamp})`)
+            .join("; ")}`
+        );
+      }
+      blocks.push(`<user_context>\n${lines.join("\n")}\n</user_context>`);
+    } catch {
+      // best-effort — the chat must not fail because context queries did
     }
-    blocks.push(`<user_context>\n${lines.join("\n")}\n</user_context>`);
-  } catch {
-    // best-effort — the chat must not fail because context queries did
   }
 
   const summary = opts?.summary?.trim();

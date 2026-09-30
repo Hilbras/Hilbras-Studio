@@ -51,3 +51,8 @@ next-env.d.ts
 # IDE / editor
 .zcode/
 .freebuff/
+
+# local release evidence — written by hand after running scripts/mutate-*.sh,
+# and deliberately untracked so that creating it cannot fail release:check's own
+# "working tree is clean" gate.
+/.mutation-harness-verified

@@ -475,6 +475,43 @@ nothing, and the `cmp` guard cannot see that.
   harness is running, so it measures the machine's load rather than the code.
   Isolation is structural instead, via the temp copies.
 
+### (10th) Correcting a false enforcement claim, and accounting for the gap
+
+The Phase-8 repair exposed something larger than the broken pattern: **the
+mutation harnesses are not in CI at all**, and ADR-008 described them as
+"**Enforced, not merely documented**". That is accurate about the technique and
+misleading about the timing — nothing ran them automatically, which is precisely
+why a dead pattern survived two phases.
+
+- **ADR-008 corrected** to "Enforced, not merely documented — *when the harness
+  is run*", with the cost of the choice stated in the ADR itself: the scripts
+  take tens of minutes because each mutation starts a Postgres container, so
+  they run before a release rather than on every push, and that is how the
+  compare-and-swap coverage went missing.
+- **`pnpm release:check` now accounts for it.** It reads a date from
+  `.mutation-harness-verified` and fails if the tree has changed since. It does
+  not run the harnesses — that is the point of the stamp — but a release now
+  asserts that the evidence backing its ADR claims was re-derived against the
+  code being tagged, which is the half that was missing. A *missing* stamp is a
+  warning rather than a failure, so a clean release is not blocked by
+  bookkeeping; a *stale* one is a failure.
+- **Two things that had to be got right.** The comparison is by calendar date,
+  not instant: a stamp is written by hand after a long run, so comparing
+  `2026-09-30` against a commit made at 16:52 would call every same-day stamp
+  stale and train the reader to write tomorrow's date instead. And the stamp
+  file is gitignored — otherwise creating it would fail `release:check`'s own
+  "working tree is clean" gate, which is the sort of self-inflicted deadlock
+  that makes people skip the check.
+- Verified all three paths: today's date is accepted, yesterday's fails, an
+  unparseable date fails.
+- **The other two harnesses were then run in full, for the first time in this
+  series: `mutate-phase7.sh` reports 16 covered / 0 holes and
+  `mutate-phase8.sh` reports 23 covered / 0 holes.** They had been cited in the
+  ledger as the enforcement for ADR-008's read layer and for the executor's
+  guarantees without anyone confirming they still passed, which is the same
+  mistake as the dead pattern one level up: an inherited claim that nobody
+  re-derives. The stamp was written afterwards.
+
 ### Verification for the series
 
 500 unit tests (45 files) · 205 integration tests (17 files) · typecheck clean ·

@@ -172,6 +172,61 @@ check("no environment or database file is tracked", () => {
   }
 });
 
+// --- mutation harnesses --------------------------------------------------
+//
+// The harnesses are the evidence behind several ADR claims, and one of them
+// (`mutate-phase6.sh`, that a step claim is a compare-and-swap) sat broken
+// from Phase 8 until 2026-09-30 without anybody noticing — it takes tens of
+// minutes, so it does not run on every push.
+//
+// This does not run them either; it records *that they were run* and how
+// recently, which is the half that was missing. A release asserts properties
+// its evidence has to support, and a mutation count that nobody re-derives
+// before a tag is a claim in the same category as a changelog entry that
+// nobody wrote.
+//
+// A missing stamp is a warning rather than a failure, so a release from a clean
+// tree is not blocked by bookkeeping — but a stamp that is *older than the
+// code it covers* is a failure, because the evidence predates the change it is
+// being used to support.
+const HARNESS_STAMP = ".mutation-harness-verified";
+
+check("mutation harnesses were run against this tree", () => {
+  let stamped;
+  try {
+    stamped = read(HARNESS_STAMP).trim();
+  } catch {
+    notes.push(
+      `no ${HARNESS_STAMP} — run scripts/mutate-phase{6,7,8}.sh and ` +
+        `scripts/mutate-task17.sh, then write the date to ${HARNESS_STAMP}`,
+    );
+    return;
+  }
+
+  const stamp = new Date(stamped);
+  if (Number.isNaN(stamp.getTime())) {
+    throw new Error(`${HARNESS_STAMP} does not contain a parseable date: "${stamped}"`);
+  }
+
+  // Newest commit touching the tree. If the evidence is older than the code, the
+  // evidence says nothing about the code about to be tagged.
+  //
+  // Compared as **calendar dates**, not instants. The stamp is a day — nobody
+  // re-runs twenty minutes of containers twice in one afternoon — and comparing
+  // `2026-09-30` against a commit made at `16:52` would call every same-day
+  // stamp stale, which trains the reader to write tomorrow's date instead.
+  const lastTouched = git("log", "-1", "--format=%cI").trim();
+  const lastDay = lastTouched.slice(0, 10);
+  if (stamped < lastDay) {
+    throw new Error(
+      `the harnesses were last run on ${stamped} but the tree has changed since ` +
+        `(last commit ${lastDay}). Re-run them before tagging — the coverage they ` +
+        `provide does not describe this code.`,
+    );
+  }
+  notes.push(`mutation harnesses verified ${stamped}`);
+});
+
 // --- report --------------------------------------------------------------
 for (const note of notes) console.log(note);
 if (failures.length) {

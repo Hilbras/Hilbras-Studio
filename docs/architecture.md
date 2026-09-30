@@ -742,11 +742,25 @@ calls.
   deciding what it *means* fails `typecheck` rather than rendering a bare badge in
   one place. The tables are keyed exhaustively for the same reason the executor's
   state machine is.
-- **Enforced, not merely documented.** `scripts/mutate-phase7.sh` removes the
-  `userId` from each of these `WHERE` clauses in turn and requires the integration
-  suite to fail; three further mutations are expected to break `typecheck` and
-  `build` rather than a test. ADR-004 predicted that a `server-only` import
-  boundary would be mechanically checkable — the last of those is that check.
+- **Enforced, not merely documented — when the harness is run.**
+  `scripts/mutate-phase7.sh` removes the `userId` from each of these `WHERE`
+  clauses in turn and requires the integration suite to fail; three further
+  mutations are expected to break `typecheck` and `build` rather than a test.
+  ADR-004 predicted that a `server-only` import boundary would be mechanically
+  checkable — the last of those is that check.
+- **The harness is not in CI, and that has a cost.** The mutation scripts take
+  tens of minutes (each mutation runs a real Postgres container), so they are
+  run deliberately before a release rather than on every push — see
+  `docs/development.md`. The visible cost of that choice was paid in Phase 8:
+  a mutation in `mutate-phase6.sh` stopped matching when the code it targeted
+  was reformatted, and nothing noticed for two phases, because nobody ran the
+  harness and no cheaper check noticed either. The coverage was silently gone.
+- **What runs in CI is the cheap half.** `src/mutation-harness.test.ts` applies
+  every `sed` expression in all four harnesses to the file it names and requires
+  that each one actually changes it. It cannot tell whether a mutation makes a
+  test fail — only a real run can — but it catches the specific failure above
+  within seconds, so "the harness would catch this" is a claim somebody can
+  re-check rather than one nobody has checked since Phase 6.
 
 **Related.** The UI is reorganised around the Runtime, so `/dashboard` now
 redirects permanently to `/runtime` and the integration-centric pages are demoted

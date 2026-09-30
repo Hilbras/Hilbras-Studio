@@ -165,6 +165,18 @@ injecting a real violation and requiring the suite to go red — one of them
 specifier match was fixed, which is exactly the bug a hand-written tree guard
 hides.
 
+`src/mutation-harness.test.ts` is the same idea applied to the harnesses
+themselves: it applies every `sed` expression in all four scripts to the file it
+names and requires each one to change it. It cannot tell whether a mutation
+makes a test fail — only a real run can — but it runs in seconds, so a pattern
+that has drifted from the code fails the unit suite rather than waiting for
+whoever next remembers to run a thirty-minute harness. That is not hypothetical:
+`mutate-phase6.sh` had a dead pattern from Phase 8 until 2026-09-30.
+
+**These harnesses are not in CI**, and `pnpm release:check` is where that is
+accounted for: it reads a date from `.mutation-harness-verified` and refuses to
+pass if the tree has changed since. Run the four scripts, then write the date.
+
 ### The bundle budget
 
 `node scripts/bundle-budget.mjs` measures the gzipped first-load JS of every

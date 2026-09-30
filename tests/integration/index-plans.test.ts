@@ -179,9 +179,16 @@ beforeAll(async () => {
   // chain has to exist first. Seeding it with `generate_series` keeps the whole
   // fixture to three statements; each row gets its own run and step because
   // `run_step_approvals_step_unique` is on `step_id`.
+  //
+  // `completed`, not `succeeded`. This fixture originally wrote `succeeded`,
+  // which is a real word in this codebase — a `GoalHealth` computed in
+  // `goals/service.ts` — and migration 0017 rejected it on the first run of the
+  // full suite. That is the constraint working: two vocabularies with a
+  // plausible word in common, kept apart by the database rather than by every
+  // writer remembering which is which.
   await pool.query(
     `INSERT INTO runs (id, goal_id, user_id, idempotency_key, schedule_slot, state, created_at)
-     SELECT gen_random_uuid(), g.id, u.id, 'plan-run-' || a, '2026-01-01T00:00Z', 'succeeded', now()
+     SELECT gen_random_uuid(), g.id, u.id, 'plan-run-' || a, '2026-01-01T00:00Z', 'completed', now()
      FROM generate_series(1, 4000) a, users u
      JOIN goals g ON g.user_id = u.id AND g.status = 'active'
      LIMIT 4000`,
@@ -191,7 +198,7 @@ beforeAll(async () => {
     `INSERT INTO run_steps (id, run_id, step_index, label, capability, target_account,
                             idempotency_key, input, state, finished_at)
      SELECT gen_random_uuid(), r.id, 0, 'Publish to X', 'publish_post', 'x:hilbras',
-            r.id || ':0', '{}', 'succeeded', now()
+            r.id || ':0', '{}', 'completed', now()
      FROM runs r WHERE r.idempotency_key LIKE 'plan-run-%'`,
   );
 

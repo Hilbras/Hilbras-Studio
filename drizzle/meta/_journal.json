@@ -120,6 +120,13 @@
       "when": 1790708598458,
       "tag": "0016_timestamps_to_timestamptz",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790769791366,
+      "tag": "0017_state_checks",
+      "breakpoints": true
     }
   ]
 }

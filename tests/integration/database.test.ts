@@ -15,9 +15,13 @@ const {
   chatMessages,
   chatSessions,
   connections,
+  goals,
   memories,
   postTargets,
   posts,
+  runStepApprovals,
+  runSteps,
+  runs,
   users,
 } = schema;
 
@@ -244,6 +248,127 @@ describe("PostgreSQL migrations and tenant boundaries", () => {
       .where(eq(schema.aiProviders.userId, userId));
     expect(providers.find((p) => p.id === second)?.isDefault).toBe(true);
     expect(providers.filter((p) => p.isDefault)).toHaveLength(1);
+  });
+
+  it("enforces the four state and status checks from migration 0017", async () => {
+    // The 0014 helper, repeated rather than hoisted: each test states the
+    // preconditions it needs, and a shared helper across two constraint tests
+    // would couple them for no gain. Drizzle wraps driver errors — the
+    // constraint name lives on the pg error in `cause`, not the wrapper message.
+    const expectViolation = async (statement: Promise<unknown>, pattern: RegExp) => {
+      let error: unknown;
+      try {
+        await statement;
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeDefined();
+      const messages: string[] = [];
+      let current: unknown = error;
+      while (current instanceof Error) {
+        messages.push(current.message);
+        current = (current as { cause?: unknown }).cause;
+      }
+      expect(messages.join(" ")).toMatch(pattern);
+    };
+
+    const userId = randomUUID();
+    await testDb.insert(users).values({
+      id: userId,
+      name: "State Check",
+      email: "state-check@example.invalid",
+      username: "state_check",
+      passwordHash: "not-a-real-hash",
+    });
+
+    // `goals.status` — three values, and the partial index `goals_due_idx` is
+    // only correct while they are the whole vocabulary.
+    const goalId = randomUUID();
+    await testDb.insert(goals).values({
+      id: goalId,
+      userId,
+      title: "State check goal",
+      statement: "publish twice a day",
+      scheduleCron: "0 10 * * *",
+      status: "active",
+      nextFiringAt: new Date(),
+    });
+    await expectViolation(
+      testDb.update(goals).set({ status: "snoozed" }).where(eq(goals.id, goalId)),
+      /goals_status_check/,
+    );
+    // And the modeled values still write.
+    await testDb.update(goals).set({ status: "paused" }).where(eq(goals.id, goalId));
+
+    // `runs.state` and `run_steps.state` — the six EXECUTION_STATES.
+    const runId = randomUUID();
+    await testDb.insert(runs).values({
+      id: runId,
+      goalId,
+      userId,
+      idempotencyKey: `state-check-${runId}`,
+      scheduleSlot: "2026-09-30T10:00Z",
+    });
+    await expectViolation(
+      testDb.update(runs).set({ state: "succeeded" }).where(eq(runs.id, runId)),
+      /runs_state_check/,
+    );
+    // `succeeded` is a real word in this codebase — it is a `GoalHealth`, a
+    // computed value in `goals/service.ts` — and it is deliberately *not* a
+    // stored run state. That is the whole reason for the check: the two live in
+    // the same codebase and a writer that reaches for the wrong one would
+    // otherwise be indistinguishable from a correct one.
+    await testDb
+      .update(runs)
+      .set({ state: "awaiting_approval" })
+      .where(eq(runs.id, runId));
+
+    const stepId = randomUUID();
+    await testDb.insert(runSteps).values({
+      id: stepId,
+      runId,
+      stepIndex: 0,
+      label: "Publish to X",
+      capability: "publish_post",
+      idempotencyKey: `${runId}:0`,
+      input: "{}",
+    });
+    await expectViolation(
+      testDb.update(runSteps).set({ state: "queued" }).where(eq(runSteps.id, stepId)),
+      /run_steps_state_check/,
+    );
+    await testDb
+      .update(runSteps)
+      .set({ state: "completed" })
+      .where(eq(runSteps.id, stepId));
+
+    // `run_step_approvals.state` — a fourth vocabulary: decided or expired, and
+    // it never moves backwards. `succeeded` is not one of these either.
+    const approvalId = randomUUID();
+    await testDb.insert(runStepApprovals).values({
+      id: approvalId,
+      runId,
+      stepId,
+      userId,
+      tool: "publish_post",
+      input: "{}",
+      // Stamped at creation, not computed at read time, so a pending decision
+      // keeps the window it was created with (see the column's comment).
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+    await expectViolation(
+      testDb
+        .update(runStepApprovals)
+        .set({ state: "awaiting_approval" })
+        .where(eq(runStepApprovals.id, approvalId)),
+      /run_step_approvals_state_check/,
+    );
+    // The sweeper's own write is inside the vocabulary — this is the one that
+    // would break the expiry sweep if the list were wrong.
+    await testDb
+      .update(runStepApprovals)
+      .set({ state: "expired", decidedAt: new Date() })
+      .where(eq(runStepApprovals.id, approvalId));
   });
 
   it("cascades user-owned chat and memory rows when a user is deleted", async () => {

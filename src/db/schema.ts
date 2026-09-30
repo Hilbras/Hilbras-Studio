@@ -331,6 +331,13 @@ export const goals = pgTable(
     index("goals_due_idx")
       .on(t.nextFiringAt)
       .where(sql`${t.status} = 'active'`),
+    // The partial index above is only correct while these three are the whole
+    // vocabulary: an index on `next_firing_at` filtered to `'active'` stops
+    // matching any row whose status is something else, and the scheduler would
+    // quietly stop firing goals in that new state rather than refusing to store
+    // it. That is the argument for the constraint, and it is why it is here
+    // rather than left as a comment on the index.
+    check("goals_status_check", sql`${t.status} in ('active', 'paused', 'archived')`),
   ],
 );
 
@@ -383,6 +390,15 @@ export const runs = pgTable(
     unique("runs_idempotency_key_unique").on(t.idempotencyKey),
     index("runs_goal_created_idx").on(t.goalId, t.createdAt),
     index("runs_state_idx").on(t.state),
+    // Remediation Task 12: the same argument as `posts_status_check`, and the
+    // same six values `EXECUTION_STATES` in `lib/runtime/state.ts` declares.
+    // That module is the single source of truth for what a run may be, and this
+    // is what makes a writer that disagrees with it fail at the write rather
+    // than at a dashboard that renders a state nothing knows how to interpret.
+    check(
+      "runs_state_check",
+      sql`${t.state} in ('pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled')`
+    ),
   ]
 );
 
@@ -430,6 +446,13 @@ export const runSteps = pgTable(
     unique("run_steps_run_index_unique").on(t.runId, t.stepIndex),
     unique("run_steps_idempotency_key_unique").on(t.idempotencyKey),
     index("run_steps_run_idx").on(t.runId, t.stepIndex),
+    // Same six values as `runs.state` and `EXECUTION_STATES` — a step and its
+    // run move through the same machine, so they are constrained identically
+    // rather than each getting its own list to drift.
+    check(
+      "run_steps_state_check",
+      sql`${t.state} in ('pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled')`
+    ),
   ]
 );
 
@@ -556,6 +579,14 @@ export const runStepApprovals = pgTable(
     index("run_step_approvals_pending_expiry_idx")
       .on(t.expiresAt)
       .where(sql`${t.state} = 'pending'`),
+    // A fourth state, and the only table here that is not an execution state:
+    // an approval is *decided* (`approved` / `rejected`) or *expired*, and it
+    // never moves backwards. The sweeper writes `expired` and nothing else does,
+    // so a row claiming any other value is a bug.
+    check(
+      "run_step_approvals_state_check",
+      sql`${t.state} in ('pending', 'approved', 'rejected', 'expired')`
+    ),
   ],
 );
 

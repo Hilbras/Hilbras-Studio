@@ -1,0 +1,4 @@
+ALTER TABLE "goals" ADD CONSTRAINT "goals_status_check" CHECK ("goals"."status" in ('active', 'paused', 'archived'));--> statement-breakpoint
+ALTER TABLE "run_step_approvals" ADD CONSTRAINT "run_step_approvals_state_check" CHECK ("run_step_approvals"."state" in ('pending', 'approved', 'rejected', 'expired'));--> statement-breakpoint
+ALTER TABLE "run_steps" ADD CONSTRAINT "run_steps_state_check" CHECK ("run_steps"."state" in ('pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled'));--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_state_check" CHECK ("runs"."state" in ('pending', 'running', 'awaiting_approval', 'completed', 'failed', 'cancelled'));

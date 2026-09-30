@@ -538,6 +538,41 @@ why a dead pattern survived two phases.
   mistake as the dead pattern one level up: an inherited claim that nobody
   re-derives. The stamp was written afterwards.
 
+### (11th) The 18th integration file broke CI, and it was not a test bug
+
+Pushing v0.11.0 failed CI on `PostgreSQL integration tests` — three `57P01`
+`terminating connection due to administrator command` errors attributed to
+`account-lifecycle.test.ts`, and **no test summary at all**. The suite was 214/214
+green locally.
+
+The failing file is a red herring: `account-lifecycle.test.ts` is in the CI log
+with `✓ 2 tests`. Every test passed and the process was killed underneath them.
+No summary is the tell — a real assertion failure prints one.
+
+**Cause.** Each integration file starts its own Postgres container in
+`beforeAll`, and Vitest defaults to one worker per CPU. Seventeen files had
+been at the ceiling; the 18th tipped it, so CI died 50 seconds in. Nothing about
+that file was wrong, which is the general shape of this failure: *adding a file
+broke the run*, and the error pointed at an unrelated one.
+
+**Fixed** with `maxWorkers: 4` in `vitest.integration.config.mts` — capped
+rather than serialized, so the suite stays parallel but the peak is bounded and
+the next file added does not reproduce it.
+
+- **Verified by the reproduction that distinguishes the two hypotheses.** Capped
+  on a 2-CPU machine (`taskset -c 0,1`, approximating the runner): 18/18 green
+  in 222s. Uncapped, the same run **did not finish inside 300s** — which is the
+  hang, demonstrated rather than argued.
+- Worth recording that memory was the wrong hypothesis: constraining Node to a
+  1.5 GB heap still passed 18/18, so it was concurrency, not allocation.
+
+**A mistake I made doing this, because the lesson is about the tool.** Testing
+the uncapped variant timed out, and the kernel died **before** restoring the
+config — so the next call found a config with `maxWorkers` silently removed and
+`git status` clean, which is exactly the state where a fix appears never to have
+been made. Restored from the backup and re-verified. Restoring state after an
+experiment is part of the experiment; a timeout is not a rollback.
+
 ### Verification for the series
 
 500 unit tests (45 files) · 214 integration tests (18 files) · typecheck clean ·

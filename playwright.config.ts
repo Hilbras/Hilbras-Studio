@@ -60,7 +60,18 @@ export default defineConfig({
   // in well under 20s, so this only bites when it should.
   timeout: 330_000,
   expect: { timeout: 10_000 },
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  // `html` alongside the others, and `open: "never"` so it writes the report
+  // without trying to launch a browser in CI.
+  //
+  // This exists because the failure artifact uploaded nothing. With only
+  // `list` + `github`, no `playwright-report/` directory is ever created, so
+  // `actions/upload-artifact` found an empty path and the run that failed five
+  // times in this series produced no readable detail — the element and the
+  // computed colours were unavailable, and each diagnosis had to be rebuilt from
+  // the log's one-line summary.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"]],
 
   use: {
     baseURL,

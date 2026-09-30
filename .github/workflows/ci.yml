@@ -140,10 +140,20 @@ jobs:
       - name: Accessibility smoke
         run: pnpm e2e:smoke
 
-      - name: Upload trace on failure
+      # Both directories, and `if-no-files-found` is the default so a green run
+      # does not warn. `playwright-report/` is the HTML report; `test-results/`
+      # holds the per-test traces and screenshots.
+      #
+      # Only `playwright-report/` was uploaded before, and with the `list` reporter
+      # alone it was never created — so this step silently produced nothing. That
+      # is why five consecutive a11y failures arrived with no readable detail: the
+      # offending element and its computed colours were simply not available.
+      - name: Upload report and traces on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7

@@ -1027,6 +1027,30 @@ by a passing run — the guard settles on the real page, rejects a text element 
 faster (1.6m against 1.5–9m), which is the expected shape when a wait stops
 over-waiting.
 
+### (20th) The failure artifact that uploaded nothing
+
+While diagnosing the a11y suite I hit a wall worth recording: **a CI run that
+failed five times produced no readable detail.** The `upload trace on failure` step
+pointed at `playwright-report/`, and the configured reporters were `github` and
+`list` — neither of which writes that directory. So the step succeeded, uploaded an
+empty path, and the offending element with its computed colours was simply not
+available. Every diagnosis had to be rebuilt from a one-line log summary, and two of
+them I got wrong for exactly that reason.
+
+- **`playwright.config.ts`** now includes the `html` reporter with
+  `open: "never"` — it writes the report without trying to launch a browser in CI.
+  *Verified by running a test with `CI=true`:* `playwright-report/index.html` is
+  created.
+- **`.github/workflows/ci.yml`** uploads both `playwright-report/` and
+  `test-results/`, the latter holding the per-test traces and screenshots.
+
+The lesson is not about Playwright. It is that a CI step which can succeed while
+transmitting nothing looks exactly like a step which is working, so nothing flags
+it until someone needs the thing it was supposed to provide. That is the fifth time
+in this series a check has reported success while checking nothing — the
+mutation-pattern guard, the palette guard, the contrast canary, the environment
+guard, and now this.
+
 ### Verification for the series
 
 540 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·

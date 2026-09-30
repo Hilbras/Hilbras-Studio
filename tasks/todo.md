@@ -31,7 +31,7 @@ Source plan: [`tasks/plan.md`](./plan.md)
 | 15 Dead code | **Final sweep done 2026-09-30 — Task 15 CLOSED** | **`src/lib/mock-data.ts` deleted and four unused dependencies removed (2026-09-29). 2026-09-30: the final reference-checked sweep, the item the plan ordered last on purpose.** Rather than grep for names, the sweep **resolves the real import graph** — the first attempt did grep, and reported `lib/crypto.ts` and `lib/session.ts` as unreferenced, both of which are imported dozens of times. **Six modules deleted, five kept with a recorded reason.** Deleted: the two `dashboard/*.tsx` files (orphaned behind `/dashboard`, which permanently redirects to `/runtime`); `actions/analytics.ts` and `actions/dashboard.ts` (thin adapters written three commits earlier, whose last caller — the analytics page — had become a server component reading the service directly, so a `"use server"` module with no importer is an endpoint nothing calls); and `actions/credentials.ts` (a generic-credential UI superseded by the per-platform path in `actions/platform.ts` — it carried `server-only`, not `"use server"`, so it was never an RPC endpoint at all). The `stored_credentials` table and its writer are still live and untouched. Kept, in a `KEPT` list in the guard with a reason each: `ui/separator.tsx` and `ui/tabs.tsx` (Radix primitives — a kit is a set, not a set of usages) and three motion primitives unused since v0.1.0, kept as a group so the kit shrinks by decision rather than file-by-file. **New guard:** any production module with neither an importer nor a framework entry point now fails the suite. |
 | 16 Docs truthfulness | Partial → **public-facing claims fixed 2026-09-29** | README/platform claims match the registry (done by the rebuild). **2026-09-29: the pricing page no longer quotes unimplemented tiers/trial/seats (now: free while v1 is built, honest capability list); fabricated testimonials removed from the landing page; the CTA no longer claims GDPR compliance; the privacy page now describes the retention/deletion scope that actually exists and marks self-serve export/deletion as roadmap instead of promising it.** Remaining: product-owner sign-off on public claims (not machine-checkable). **2026-09-30: developer-doc path rot fixed, and now guarded.** A sweep of every backticked file path in `README.md`, `ROADMAP.md`, `CHANGELOG.md`, `docs/**` and the in-app `src/app/docs/**` found `docs/platform-development.md` still instructing readers to write a publisher in `src/lib/publish.ts` and *linking to it* — a file that has not existed since v0.3.0, when the 975-line module was split into a directory. That is the main onboarding path for adding a platform, so its first instruction sent a new contributor nowhere; the link renders, the build passes, and a reader who does not already know the layout cannot tell it is wrong. The same sweep found the architecture doc's "retire this" table still listing `src/lib/mock-data.ts` as a pending to-do weeks after it was deleted, so the table read as live work. Both corrected, along with two `publish.ts` references in the in-app developer guide. **New `src/docs.test.ts`** fails on any documentation reference to a file that does not exist, with a narrow rule (source extensions only, whole tokens only) so a false positive never argues with the author, and a `HISTORICAL_ALLOWLIST` for deleted files named in records that are still true — a third test fails an allowlist entry whose file exists again, because an unnecessary exception reads as a live one and hides the next stale reference that reuses the name. **Verified by mutation:** pointing the how-to back at `src/lib/publish.ts` fails exactly the missing-file test and leaves the other two green. |
 | 17 Boundaries/DAL | **Fourth tranche done 2026-09-30 — Task 17 CLOSED** | **The 975-line `publish.ts` is now `src/lib/publish/`** (tranche 1); `actions/ai` and `ai-providers` are thin adapters over server-only services (tranche 2); `src/lib/ai.ts` is split by concern behind its unchanged barrel (tranche 2). **Tranche 3 — the last cross-layer import is closed.** The dashboard *and* analytics reads moved out of the `"use server"` modules into the server-only, owner-scoped `src/lib/dashboard/queries.ts`, every one taking a `userId` in the `WHERE` clause per ADR-008. The blocker was not the import path but the **ambient session**: each reader resolved the session itself, which made them unusable by the Assistant's context builder, the caller that needed them. `buildAssistantSystemPrompt` now resolves the session once and passes `user.id` explicitly, and the analytics page reads the service directly via `requireSessionUser()`. 19 new integration tests + `scripts/mutate-task17.sh` (21 mutations, 21 covered / 0 holes — it found a real gap in the tests, and its one unreachable filter is documented rather than papered over). **Tranche 4 — DTOs left the `"use server"` modules,** which export RPC endpoints and so cannot own a row's shape: chat DTOs → `src/lib/chat.ts`, inbox DTOs → new `src/lib/inbox/types.ts` (types-only; there is no inbox table), `PostItem` → `src/lib/posts/targets.ts` (the only module that knows a post is a row *plus* its targets). Every action re-exports its types, so no consumer's import changed shape. `PostFormState` and its nine siblings stay — they are `useActionState`'s type for an action's own result, which no service returns. **`src/layers.test.ts` enforces all of it by scanning the tree**, each rule verified to fail against a real injected violation. |
-| 18 Observability/a11y | **Third tranche done 2026-09-30** | `src/lib/logger.ts` — one JSON object per line (`ts`, `level`, `event`, flat fields), unit-tested — carries the events the plan names: `publish_run_finished`, `token_request_failed`/`token_rotation_failed`, `ai_budget_denied`, `account_deleted`. `eslint-plugin-jsx-a11y` recommended rules run in `pnpm lint`, which CI enforces. **2026-09-30 — bundle budget.** New `scripts/bundle-budget.mjs`, wired into CI after the build: gzipped first-load JS per prerendered route, failing over 295 KiB total / 82 KiB largest chunk (measured baseline: `/` at 254.1 KiB, largest chunk 69.8 KiB). **It reads the `<script src>` tags out of each route's emitted HTML, not the per-route build manifest** — Turbopack's manifest carries only the shared `rootMainFiles`, identical for all 49 routes, so a budget built from it compares one number with itself; that is how the first draft was wrong. Dynamic (ƒ) routes are reported as unmeasured rather than counted as zero. `--update` re-baselines to measurement **+15%**, verified idempotent, and both thresholds were verified to fail. **2026-09-30 — reduced motion.** 26 components animate through framer-motion and the only reduced-motion handling in the product was one CSS rule for the docs fade, so a visitor whose OS asks for reduced motion still received every JS-driven animation. Fixed with `MotionConfig reducedMotion="user"` in the root provider — one place, above every route. Three static guards keep it wired, each verified to fail when the fix is removed. Remaining: **browser-level a11y smoke** (needs `@playwright/test` + a CI browser install — a dependency and workflow decision, not made unilaterally); external-call latency baselines; query-plan evidence for the Task 12 indexes. |
+| 18 Observability/a11y | **Third tranche done 2026-09-30** | `src/lib/logger.ts` — one JSON object per line (`ts`, `level`, `event`, flat fields), unit-tested — carries the events the plan names: `publish_run_finished`, `token_request_failed`/`token_rotation_failed`, `ai_budget_denied`, `account_deleted`. `eslint-plugin-jsx-a11y` recommended rules run in `pnpm lint`, which CI enforces. **2026-09-30 — bundle budget.** New `scripts/bundle-budget.mjs`, wired into CI after the build: gzipped first-load JS per prerendered route, failing over 295 KiB total / 82 KiB largest chunk (measured baseline: `/` at 254.1 KiB, largest chunk 69.8 KiB). **It reads the `<script src>` tags out of each route's emitted HTML, not the per-route build manifest** — Turbopack's manifest carries only the shared `rootMainFiles`, identical for all 49 routes, so a budget built from it compares one number with itself; that is how the first draft was wrong. Dynamic (ƒ) routes are reported as unmeasured rather than counted as zero. `--update` re-baselines to measurement **+15%**, verified idempotent, and both thresholds were verified to fail. **2026-09-30 — reduced motion.** 26 components animate through framer-motion and the only reduced-motion handling in the product was one CSS rule for the docs fade, so a visitor whose OS asks for reduced motion still received every JS-driven animation. Fixed with `MotionConfig reducedMotion="user"` in the root provider — one place, above every route. Three static guards keep it wired, each verified to fail when the fix is removed. **2026-09-30 — query-plan evidence** (fourth tranche, closing the Task 12 item this line previously listed as remaining): `tests/integration/index-plans.test.ts` asserts the scheduler's due-goal query and the approvals sweeper are *eligible* for their partial indexes, by seeding 4,000 goals and 4,000 approvals at the real distribution. Asserting the index name is the point — a partial index silently stops being a candidate if a predicate widens, and nothing else in the suite notices. Remaining: **browser-level a11y smoke** (needs `@playwright/test` + a CI browser install — a dependency and workflow decision, not made unilaterally); external-call latency baselines. |
 
 ## Work order (re-baselined priority)
 
@@ -44,7 +44,7 @@ Source plan: [`tasks/plan.md`](./plan.md)
 7. ~~**Task 14** — read-state persistence, provider errors, preferences removed~~ **done 2026-09-29** (goal-run analytics recorded out of scope).
 8. ~~**Task 8** — export + self-serve deletion~~ **done 2026-09-29** (retention/backup runbook remains with the operator).
 9. ~~**Task 17** — DAL extraction~~ **tranches 1–4 done 2026-09-30**: the publish boundary, `ai.ts` by concern, the dashboard/analytics owner-scoped read layer, and the DTOs out of the `"use server"` modules (enforced by `src/layers.test.ts` and 21 mutations in `scripts/mutate-task17.sh`). **Task 17 CLOSED.**
-10. **Task 18** — observability (three tranches: structured logger, CI bundle budget, reduced motion). Remaining: browser a11y smoke (needs a Playwright dependency + CI browser install — owner's call), external-call latency baselines, query-plan evidence for the Task 12 indexes.
+10. **Task 18** — observability (four tranches: structured logger, CI bundle budget, reduced motion, and the Task 12 query-plan evidence). Remaining: browser a11y smoke and external-call latency baselines — both operator-owned, and why is stated below.
 11. ~~**Task 0**~~ — remains an owner action (secret rotation), no code.
 
 ## Migration notes — 0015 (inbox read state) and 0016 (timestamptz)
@@ -602,9 +602,63 @@ config — so the next call found a config with `maxWorkers` silently removed an
 been made. Restored from the backup and re-verified. Restoring state after an
 experiment is part of the experiment; a timeout is not a rollback.
 
+### (12th) Auditing the ledger after the release, and what it found
+
+The release prompted a check I had not made: whether the ledger still described
+the tree accurately. Two things were stale.
+
+**The work order and the Task 18 line both listed "query-plan evidence for the
+Task 12 indexes" as remaining work, while entry (7th) recorded it as done.** I
+verified before correcting — `index-plans.test.ts` exists and passes 6/6 — because
+the failure mode of this kind of entry is that "done" and "never done" look
+identical in a diff. The evidence was real; the summary of what remained was
+not. Both corrected to four tranches.
+
+**This is the third stale-claim finding in this series**, after ADR-008's
+"enforced, not merely documented" and the two harnesses cited as passing without
+anyone having run them. The pattern is consistent enough to name: this ledger
+records *intent* accurately and *residual work* badly, because what remains is
+rewritten each tranche while the earlier summary lines are not revisited. A
+stale "remaining" line is worse than none — it sends the next session looking for
+work that is already finished.
+
+### (13th) The guardable half of the external-latency criterion
+
+Task 18's acceptance criteria ask that "external-call latency **have
+baselines**". Read literally that needs credentials and a network, and it stays
+outstanding — but the criterion hides a half that is entirely measurable here,
+and leaving the whole thing unaddressed would be the wrong call.
+
+**What determines the worst case is already bounded, and nothing enforced it.**
+`fetchWithTimeout` carries a 15s timeout, a 2 MB response cap and redirect
+limits; those are what turn "the network is slow" into an error instead of an
+outage. They applied to a new platform only if that platform went through the
+same helper — and the invariant held *by discipline*. The only raw `fetch` in
+`src/` was the one inside the helper itself, which is a property worth a test
+because the failure is invisible: a module calling `fetch` directly compiles,
+lints, and passes every test while having no timeout at all.
+
+**New guard in `src/layers.test.ts`** — a bare global `fetch(` outside the
+fetcher is a failure, reported with file and line and a pointer to the two
+helpers to use instead. A second test asserts the fetcher still exists, so a
+rename cannot make the rule silently vacuous.
+
+- **Verified by mutation:** an injected bare `fetch` in a real server module is
+  caught; `fetch (u)` with a space and `await fetch` inside a `try` are both
+  still caught.
+- **A false positive found and fixed, which is the part worth recording.**
+  A string literal containing `fetch(` tripped the rule — and this codebase
+  builds error messages, so `` `Request to ${host} failed: fetch(x)` `` is
+  entirely plausible. Comments and dotted forms (`globalThis.fetch`) were already
+  handled; literals were not. Literals are now stripped before matching, and all
+  four no-flag cases plus all three must-flag cases were re-checked afterwards. A
+  guard that cries wolf gets disabled, and a disabled guard loses the real
+  violations too — which is the same trade as the mutation-pattern test, and the
+  reason to test the negatives rather than only the positives.
+
 ### Verification for the series
 
-500 unit tests (45 files) · 214 integration tests (18 files) · typecheck clean ·
+502 unit tests (45 files) · 214 integration tests (18 files) · typecheck clean ·
 lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into
@@ -700,7 +754,7 @@ than suppressing the rule.
 - [x] **Task 15 — Remove confirmed dead code and dependencies** (quick wins 2026-09-29; final reference-checked sweep 2026-09-30 — **closed**).
 - [ ] **Task 16 — Rewrite documentation and product claims** (pricing/testimonials/public claims done; developer-doc path rot fixed 2026-09-30 and now guarded by `src/docs.test.ts`. Remaining: product-owner sign-off on public claims, which is not machine-checkable).
 - [x] **Task 17 — Extract server data and publishing boundaries** (**tranches 1–4 done 2026-09-30** — publish split, `ai.ts` by concern, the dashboard/analytics owner-scoped read layer, and the DTOs out of the `"use server"` modules; boundaries enforced by `src/layers.test.ts` and 21 mutations in `scripts/mutate-task17.sh`). **Depends on:** Tasks 9–14.
-- [ ] **Task 18 — Add observability, performance, and accessibility guardrails** (**three tranches done 2026-09-30** — structured logger, CI bundle budget, reduced motion; remaining: browser a11y smoke, external-call latency baselines, query-plan evidence for the Task 12 indexes). **Depends on:** Tasks 1, 13, and 16.
+- [ ] **Task 18 — Add observability, performance, and accessibility guardrails** (**four tranches done 2026-09-30** — structured logger, CI bundle budget, reduced motion, and the Task 12 query-plan evidence in `index-plans.test.ts`; remaining: browser a11y smoke, and the credentialed half of external-call latency — the bounded-fetch guard now covers the half that is measurable here). **Depends on:** Tasks 1, 13, and 16.
 
 ### Checkpoint: Release Readiness
 

@@ -379,3 +379,84 @@ describe("no production module is unreachable", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * `fetchWithTimeout` is the only outbound call any module may make.
+ *
+ * This is the guardable half of Task 18's "external-call latency has baselines".
+ * The half that needs credentials — how long a real platform takes — is not
+ * measurable from here, and pretending otherwise would be worse than recording
+ * it as outstanding.
+ *
+ * What *is* measurable is the part that determines the worst case. Every
+ * outbound call goes through `fetchWithTimeout`, which carries a 15s default
+ * timeout, a 2 MB response cap, and redirect limits. Those bounds are what turn
+ * "the network is slow" from an outage into an error, and they apply to a new
+ * platform only if the new platform goes through the same helper.
+ *
+ * The invariant currently holds by discipline rather than by construction: the
+ * only raw `fetch` in `src/` is the one inside `fetchWithTimeout` itself. That
+ * is a property worth a test, because the failure is invisible. A module that
+ * calls `fetch` directly still compiles, still lints, still passes every test —
+ * and simply has no timeout, so a platform that accepts a connection and never
+ * answers hangs that request for as long as the runtime allows. Nothing in the
+ * suite notices, because nothing is broken from the test's point of view.
+ *
+ * The rule is deliberately narrow: it looks for a *call* to a bare global
+ * `fetch`, so `globalThis.fetch` inside the helper itself is exempted by
+ * identity rather than by an allowlist, and a module that merely mentions
+ * `fetch` in a comment or an import does not trip it.
+ */
+describe("outbound requests go through the bounded fetcher", () => {
+  it("finds the bounded fetcher to compare against", () => {
+    // Without this, a rename of `fetchWithTimeout` would make the rule below
+    // silently vacuous — it would report no violations because it exempts a
+    // file that no longer exists.
+    expect(readFileSync(join(SRC, "lib/http.ts"), "utf8")).toContain("export async function fetchWithTimeout");
+  });
+
+  it("calls no bare global fetch outside the bounded fetcher", () => {
+    // `fetch(` not preceded by a dot — so `this.fetch(`, `obj.fetch(` and
+    // `globalThis.fetch(` do not match, which is what exempts the helper's own
+    // internal call without naming it.
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles()) {
+      const rel = relative(ROOT, file).replace(/\\/g, "/");
+      if (file.endsWith(".test.ts") || rel.endsWith(".test.tsx")) continue;
+      if (rel === "src/lib/http.ts") continue; // the fetcher itself
+
+      const source = readFileSync(file, "utf8");
+      source.split("\n").forEach((line, i) => {
+        // Remove comments and string/template literals before matching.
+        //
+        // Strings matter as much as comments, and the reason is specific: this
+        // codebase builds error messages, so a literal like
+        // `` `Request to ${host} failed — we call fetch(x) there` `` is entirely
+        // plausible. Matching inside one produces a false positive that reads as
+        // a real violation, and a guard that cries wolf gets disabled — which
+        // loses the actual violations too.
+        const code = line
+          .replace(/\/\/.*$/, "")
+          .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+          .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+          .replace(/`(?:[^`\\]|\\.)*`/g, "``");
+        if (/(^|[^.\w])fetch\s*\(/.test(code)) {
+          offenders.push(`${rel}:${i + 1}  ${line.trim().slice(0, 80)}`);
+        }
+      });
+    }
+
+    expect(
+      offenders,
+      `These modules call the global \`fetch\` directly, so they get none of the ` +
+        `bounds in \`fetchWithTimeout\` — no ${15}s timeout, no 2 MB response cap, ` +
+        `no redirect limit. A platform that accepts a connection and never answers ` +
+        `then hangs the request for as long as the runtime allows, and nothing in the ` +
+        `suite notices because nothing is broken from a test's point of view.\n\n` +
+        `Use \`fetchWithTimeout\` from \`@/lib/http\`, or \`pinnedProviderFetch\` from ` +
+        `\`@/lib/pinned-provider-fetch\` where the host must be pinned.\n\n` +
+        offenders.join("\n"),
+    ).toEqual([]);
+  });
+});

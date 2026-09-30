@@ -869,6 +869,31 @@ bug is invisible without a cold runner.
 **Signup is fixed.** The variant-layer canary resolved the cold-run timeout: the
 second CI run had signup passing with only the landing page failing.
 
+**What CI has actually established, as of three runs:**
+1. Run 1 — 13 contrast failures on the landing CTA. Cause: the `dark:` variant
+   layer had not loaded; axe measured the button unstyled.
+2. Run 2 — signup passing; 14 contrast failures on the landing *nav*, a base
+   utility. Cause: the base layer had not loaded. (Signup's fix was a side effect
+   of waiting for both layers.)
+3. Run 3 — signup passing; 15 on the *same* nav element, unchanged after adding a
+   second check. That element measures 6.42:1 and zero violations locally, so the
+   page is still being measured before that particular rule lands.
+
+**A fourth attempt that I reverted, and why it is worth recording.** The third
+failure's natural reading is "the canary's probe element is styled by an earlier
+chunk than the page's", so the fix was to wait on a real `text-muted-foreground`
+element — the class the landing nav actually uses. That made the *dashboard* fail
+locally (16 violations at `h1`), because the dashboard has no such element at the
+moment the check runs, so it advanced at the wrong point. Reverted. The lesson is
+narrower than "my fix was wrong": a readiness probe keyed to an element a
+particular page happens to contain is a probe for that page, not for the suite, and
+it will mis-time every other page.
+
+**The honest state: 8/8 locally against a warm server, and a CI failure I have
+narrowed to "the landing page's stylesheet is not fully applied when axe reads it"
+without yet pinning which rule is late.** The remaining fix is in that
+canary, not in the product.
+
 **Not solved, and recorded in place at the failing line.** On a *cold* dev server the
 signup test has timed out at 120s with no server-side error: the log shows
 `signUpAction` completing and both `/dashboard` and `/runtime` serving, while the

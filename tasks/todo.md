@@ -670,7 +670,31 @@ two mutations slipped past until that test existed.
 Tailwind class-string ordering when the real cause was the OS media query; the
 JSX comment I inserted used `//` and rendered as text (lint caught it); and the
 login test counted zero `<h1>` on a page that has one, because `waitForURL`
-resolves before Next.js swaps the DOM — it now waits for `main`.
+resolves before Next.js swaps the DOM.
+
+**Then the first CI run failed, which was worth more than the local passes.**
+
+- **A contrast failure that did not exist locally** — 13 elements on the landing
+  page, for a button measuring 5.14:1 in both themes against both `next dev` and
+  `next start`. The cause is `next dev` compiling Tailwind's CSS on demand: a
+  cold runner can hand the page a stylesheet that is still being generated, and
+  axe then reports *unstyled* colours. `waitForStyles` now blocks until a token is
+  actually readable from `:root` before measuring.
+- **A production build was the wrong answer here, and I only found out by trying
+  it.** With `next start`, NODE_ENV is production, the auth cookie is `secure`, and
+  a secure cookie is dropped over `http://` — so signup failed with "Something went
+  wrong" and no test-visible cause. Reverted to `next dev` with the style wait, and
+  both facts are recorded in `playwright.config.ts` so the next person does not
+  re-derive them.
+- **My first style-wait was worse than none.** It probed the first `<button>` for a
+  background colour, which timed out on three pages — the landing page has no
+  button until its client code mounts. A condition that depends on a specific
+  element's style is a condition that can fail for reasons unrelated to what is
+  being tested. Replaced with a token check.
+- **Signup's 30s timeout was dev-mode compile latency**, not a fault. The dev log
+  showed `signUpAction` completing and `GET /dashboard` serving; the test was
+  simply giving up before the first route compile finished. Raised to 60s, and the
+  test now takes ~15s.
 
 ### (15th) Fixing the P2 findings that were still open
 
@@ -797,6 +821,52 @@ rename cannot make the rule silently vacuous.
   guard that cries wolf gets disabled, and a disabled guard loses the real
   violations too — which is the same trade as the mutation-pattern test, and the
   reason to test the negatives rather than only the positives.
+
+### (17th) Chasing the a11y suite's CI failures to a root cause
+
+The browser smoke suite passed 8/8 locally and failed on CI. Getting to a
+trustworthy answer took three wrong fixes before one that held, and the wrong ones
+are the durable part.
+
+**Wrong fix 1 — wait for *a* stylesheet.** `next dev` emits CSS on demand, so a cold
+runner can hand axe a half-styled page and it reports unstyled colours as contrast
+failures. The fix was right in principle: `waitForStyles` before measuring.
+
+**Wrong fix 2 — wait for the wrong thing, twice.** Probing the first `<button>` for a
+background timed out on three pages (the landing page has no button until its client
+code mounts). Replacing it with "is `--background` readable?" was worse — that token
+lives in the base stylesheet, which resolves *before* Tailwind emits utilities, so
+the same false-contrast failure reappeared on the pricing page. I raised timeouts at
+this point, which is treating a symptom: it turned a fast, honest failure into a
+slow, dishonest one.
+
+**The fix that held** — wait for the **variant layer** specifically. Every false
+contrast failure involved the gold button, whose `dark:bg-gold-300 dark:text-foreground`
+arrives in a *later* chunk than the base utilities. The canary now appends a probe
+element carrying a `dark:` class and checks that its property actually resolved. If
+the variant layer has not loaded, it has not.
+
+**Also fixed along the way:**
+- `document-title` was reported on the dashboard, a state the app is never actually
+  in — axe was measuring the window between `/dashboard` and `/runtime` during a
+  client-side redirect. A double `requestAnimationFrame` was not enough; the settle
+  now waits for `readyState === "complete"` and a non-empty `document.title`.
+- `expectSingleH1` and `signIn` wait for content rather than counting on arrival.
+- `playwright.config.ts` defaulted to `next start` while its own comment and the CI
+  job both said `next dev` — and the CI job had no build step, so that default would
+  have failed the job before a single assertion ran. Now `next dev` by default, with
+  `E2E_PROD=1` as the opt-in, and the two discarded alternatives documented.
+
+**Not solved, and recorded in place at the failing line.** On a *cold* dev server the
+signup test has timed out at 120s with no server-side error: the log shows
+`signUpAction` completing and both `/dashboard` and `/runtime` serving, while the
+page never leaves `/signup` from the test's point of view. A warm server takes ~20s.
+An explicit warm-up (`e2e/global-setup.ts`) did not explain it — it compiled every
+route in about a second, so compile time is not the cost. That is a real loose end,
+and it is written down next to the timeout rather than left for someone to rediscover.
+
+Verified: 538 unit tests (49 files) · 214 integration · typecheck clean · lint 0/26 ·
+e2e smoke 8/8 against a warm server.
 
 ### Verification for the series
 

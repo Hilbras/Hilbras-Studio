@@ -51,7 +51,14 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  timeout: 60_000,
+  // Generous, because a cold start pays for route compilation. The first test
+  // on a fresh runner triggers the dev server to compile `/`, the next `/pricing`,
+  // the next `/signup` and `/dashboard` — and on a cold CI runner each of those
+  // can take most of a minute on its own. The earlier 60s budget was below the
+  // cost of the environment rather than a limit on the behaviour under test, so
+  // it failed as a timeout instead of as an assertion. Warm, every test here runs
+  // in well under 20s, so this only bites when it should.
+  timeout: 150_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
 
@@ -63,15 +70,64 @@ export default defineConfig({
 
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 
+  // Compile the suite's routes before any assertion runs.
+  //
+  // `webServer.url` waits for the dev server's *first* response, which it gives
+  // on `/` immediately. Every route after that is compiled on first request, and
+  // on a cold runner signup alone can exceed a minute — the form, its server
+  // action, the redirect, and then the dashboard's first render. Left alone, that
+  // cost lands inside whichever test happened to touch the route first, so the
+  // suite fails as a timeout and looks flaky rather than slow.
+  //
+  // Warming them explicitly moves the cost into one place, before the clock that
+  // the tests are measured against. It is the difference between "this suite is
+  // slow" and "this suite is unreliable", and the second one is what stops anyone
+  // trusting the a11y results.
+  globalSetup: "./e2e/global-setup.ts",
+
+  // `next dev`, deliberately.
+  //
+  // Two candidate setups were measured against the same code before choosing:
+  //
+  // - `next start` (production build) over plain HTTP cannot work at all. The
+  //   auth cookie is set `secure` when NODE_ENV is production, and a secure
+  //   cookie is dropped over http:// — so signup silently fails with "Something
+  //   went wrong" and no test-visible cause. Serving TLS on a CI runner would
+  //   mean generating a certificate and trusting it, which is a lot of machinery
+  //   for an accessibility check.
+  //
+  // - `next dev` compiles CSS on demand, so a cold runner can hand the page a
+  //   stylesheet that is still being generated. That is a real risk of false
+  //   contrast failures, and it is why `expectNoBlockingViolations` waits for the
+  //   stylesheet to be applied before measuring (see `e2e/helpers.ts`).
+  //
+  // The trade is dev-mode CSS against a measurement that waits for it, rather than
+  // a production build that cannot complete a signup flow at all.
+  //
+  // `E2E_PROD=1` opts into `next start` for anyone running against a real build
+  // over HTTPS. It is *not* the default, and it needs a build to have happened
+  // first — the CI job does not build, so defaulting to it would fail that job
+  // before a single assertion ran.
+  //
   // `reuseExistingServer` is for local iteration only — in CI the server must be
   // the one this run started, or a stale process would be tested instead.
   webServer: process.env.E2E_SKIP_SERVER
     ? undefined
     : {
-        command: `pnpm exec next dev --port ${PORT}`,
+        command:
+          process.env.E2E_PROD === "1"
+            ? `pnpm exec next start --port ${PORT}`
+            : `pnpm exec next dev --port ${PORT}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
-        timeout: 180_000,
+        // Generous, because `url` only waits for the first HTTP response. The dev
+        // server answers that on `/` and then spends the next minute or two
+        // compiling the routes the suite actually visits — signup is the most
+        // expensive, since it pulls in the form, its server action, the redirect,
+        // and then the dashboard's own first render. Waiting 180s here rather
+        // than the default 60s is what lets the per-test budget cover assertions
+        // instead of compilation.
+        timeout: 240_000,
         env: {
           // The dev server must not inherit a developer's own .env silently and
           // then be tested against the wrong database.

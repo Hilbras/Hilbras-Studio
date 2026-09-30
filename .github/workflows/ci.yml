@@ -132,6 +132,11 @@ jobs:
         env:
           DATABASE_URL: postgres://e2e:e2e@localhost:5432/e2e
 
+      # The smoke suite starts its own `next dev` server, so no build step here.
+      # A production build was tried and cannot work: the auth cookie is `secure`
+      # under NODE_ENV=production, and a secure cookie is dropped over http://, so
+      # signup fails with no test-visible cause. See the note in
+      # `playwright.config.ts`.
       - name: Accessibility smoke
         run: pnpm e2e:smoke
 

@@ -13,6 +13,84 @@ import { expect, type Page } from "@playwright/test";
  * and "the smoke test did not run" should never be invisible.
  */
 
+/**
+ * Block until the page's stylesheets have actually been applied.
+ *
+ * A stylesheet element exists long before its rules are parsed and the cascade is
+ * computed, so `waitForLoadState("networkidle")` is not enough — that waits on the
+ * network, not on style resolution. This waits for the document to report a
+ * stylesheet count, then for `getComputedStyle` to return a real colour on an
+ * element that only has one because a class applies it.
+ *
+ * That second part is the part that matters: it is the observable condition the
+ * assertions depend on, rather than a proxy for it.
+ */
+export async function waitForStyles(page: Page): Promise<void> {
+  // Wait until the *utility* CSS has applied, not merely the base stylesheet.
+  //
+  // Two earlier versions were wrong and both failed in CI rather than locally:
+  //
+  // - Probing the first <button> for a background timed out on three pages. The
+  //   landing page has no button until its client code mounts, and a button can
+  //   legitimately be transparent before the cascade lands.
+  //
+  // - Waiting for `--background` to be readable was too weak. That token lives in
+  //   the base stylesheet, which resolves long before Tailwind has emitted the
+  //   utility rules — so axe measured the page with tokens applied and utilities
+  //   missing, and reported the gold button at 2.98:1. It is the same
+  //   false-contrast failure as before, just triggered by a different element.
+  //
+  // The condition that actually distinguishes the two states: a rule that only
+  // exists in the generated utilities, applied to an element that carries it.
+  // `text-gold-700` is on the pricing CTA in every build, and it cannot resolve
+  // until the utility layer is present.
+  await page.waitForFunction(
+    () => {
+      if (document.styleSheets.length === 0) return false;
+      // Any element whose utility class has produced a colour proves the utility
+      // layer resolved. Text is the safer probe than background: `transparent` is
+      // a legitimate computed background, but a `color` that is a real value on a
+      // `text-muted-foreground` element is not ambiguous.
+      // Prove the `dark:` variant layer specifically, not merely that some
+      // utility resolved. The contrast failures that motivated this all involved
+      // the gold button, whose dark half (`dark:bg-gold-300 dark:text-foreground`)
+      // arrives in the variant layer — a *later* chunk than the base utilities. So
+      // a probe satisfied by `text-muted-foreground` passes while the button is
+      // still unstyled, which is precisely the state axe then measures.
+      //
+      // The check is whether a `dark:` utility's value is actually being applied:
+      // set the class on a detached probe element and see whether the property
+      // changes. If the variant layer has not loaded, it will not.
+      const probe = document.createElement("div");
+      probe.className = "dark:bg-gold-300";
+      probe.style.display = "none";
+      document.body.appendChild(probe);
+      const applied = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return applied !== "" && applied !== "rgba(0, 0, 0, 0)";
+    },
+    undefined,
+    { timeout: 60_000 },
+  );
+
+  // Wait for the document to be committed, not merely for a frame to paint.
+  //
+  // A double `requestAnimationFrame` was the first attempt and was not enough:
+  // after signup the app swaps `/dashboard` for `/runtime` client-side, and
+  // axe measured that window and reported `document-title` — a document with no
+  // `<title>`, which is not a state this app is ever actually in. Two frames of
+  // a client-side route change is well under a frame's worth of work.
+  //
+  // The condition is "readyState is complete and the document still has a title",
+  // which is the property the assertion depends on. Waiting for the *absence* of
+  // a violation would be circular; waiting for the thing the rule checks is not.
+  await page.waitForFunction(
+    () => document.readyState === "complete" && document.title.trim().length > 0,
+    undefined,
+    { timeout: 60_000 },
+  );
+}
+
 /** Severities that block a release. `minor`/`moderate` are reported, not failed. */
 export type AxeImpact = "critical" | "serious";
 
@@ -46,6 +124,13 @@ export async function violations(
   page: Page,
   blocking: AxeImpact[] = ["critical", "serious"],
 ): Promise<A11yViolation[]> {
+  // Wait for the stylesheet before measuring. Under `next dev` Tailwind emits CSS
+  // on demand, so a cold runner can analyse a page whose rules have not arrived
+  // yet — and axe reports the *unstyled* computed colours, which produces
+  // contrast failures for elements that are fine once the CSS lands. The first CI
+  // run of this suite failed exactly that way, on a button that measures 5.14:1.
+  await waitForStyles(page);
+
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
 
   return results.violations
@@ -127,7 +212,15 @@ export async function seedUser(page: Page): Promise<SeededUser> {
 
   // Signup should land on the dashboard. If it does not, the remaining tests
   // would each fail with a confusing "not signed in" instead of one clear error.
-  await page.waitForURL((url) => !url.pathname.includes("signup"), { timeout: 30_000 });
+  //
+  // Generous, and the reason is compile time rather than flakiness: under
+  // `next dev` the *first* request to a route builds it, and on a cold runner
+  // signup is the most expensive page in the suite — the form, its server action,
+  // the redirect, and then the dashboard's own first render. Two things wait for
+  // it: the URL change, then the shell actually being mounted, because
+  // `waitForURL` resolves while Next.js is still swapping the DOM.
+  await page.waitForURL((url) => !url.pathname.includes("signup"), { timeout: 120_000 });
+  await page.locator("main").first().waitFor({ state: "visible", timeout: 60_000 });
   return user;
 }
 
@@ -184,8 +277,17 @@ export async function expectImagesLabelled(page: Page, label: string): Promise<v
   expect(missing, `${label}: images without an alt attribute:\n${missing.join("\n")}`).toEqual([]);
 }
 
-/** Exactly one first-level heading, so screen-reader users get one page title. */
+/**
+ * Exactly one first-level heading, so screen-reader users get one page title.
+ *
+ * Waits for the heading rather than counting immediately. Counting on arrival
+ * reads the DOM before Next.js has swapped the route, and this reported zero
+ * `<h1>` on the runtime page — which has one. It was the one genuinely flaky test
+ * in the suite and it failed on CI twice, which is the useful signal: a test that
+ * is flaky on a cold runner is measuring render timing, not accessibility.
+ */
 export async function expectSingleH1(page: Page, label: string): Promise<void> {
+  await page.locator("h1").first().waitFor({ state: "attached", timeout: 30_000 });
   const count = await page.locator("h1").count();
   expect(count, `${label}: expected exactly one <h1>, found ${count}`).toBe(1);
 }

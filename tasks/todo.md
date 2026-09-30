@@ -504,6 +504,32 @@ why a dead pattern survived two phases.
   that makes people skip the check.
 - Verified all three paths: today's date is accepted, yesterday's fails, an
   unparseable date fails.
+- **v0.11.0 released 2026-09-30.** Alongside the release, the 0017 migration got
+  the preflight its own changelog entry had been promising and which did not
+  exist: `drizzle/0017_state_checks.preflight.sql`, four SELECT-only queries
+  that must each return zero rows. The release notes tell an operator to run it
+  before applying 0017, so it cannot be a file that has never been executed.
+- **`tests/integration/state-check-migration.test.ts`** — 9 tests. It migrates
+  to 0016, inserts, then applies 0017, because a constraint cannot be tested
+  from a database that already has it. Beyond refusing bad values it checks the
+  other direction — that every value *in* each vocabulary still survives, since
+  an over-tight CHECK that refuses valid state would be equally wrong.
+- **The preflight is tested as the artefact that ships.** The test reads the SQL
+  file off disk rather than restating its queries; a duplicated copy would stay
+  green if the file's were wrong. Verified by mutation: deleting a constraint
+  from 0017 fails four tests, and a typo in a table name, a typo in a column
+  name, and a predicate widened to accept the bad value each fail the
+  preflight test. The last is the one that matters — it is how a preflight would
+  report "clean" in production while blocking nothing.
+- **Two assertions I wrote first were wrong.** Asserting on the constraint *name*
+  fails against a correctly-enforcing database, because Drizzle nests the pg
+  error under `cause` and the name never reaches `error.message` — so the test
+  pushes you toward weakening it. It now asserts SQLSTATE `23514` plus the name
+  from the cause chain, which distinguishes "refused for this reason" from a
+  fixture that has gone stale. And the last test originally expected the
+  re-applied `ALTER TABLE` to succeed; the database refusing to add a CHECK
+  over a corrupt row is the entire point of the migration, so it now asserts the
+  refusal and then asserts that correcting the row unblocks it.
 - **The other two harnesses were then run in full, for the first time in this
   series: `mutate-phase7.sh` reports 16 covered / 0 holes and
   `mutate-phase8.sh` reports 23 covered / 0 holes.** They had been cited in the
@@ -514,7 +540,7 @@ why a dead pattern survived two phases.
 
 ### Verification for the series
 
-500 unit tests (45 files) · 205 integration tests (17 files) · typecheck clean ·
+500 unit tests (45 files) · 214 integration tests (18 files) · typecheck clean ·
 lint 0 errors / 27 warnings (down from 29 because the deleted dashboard
 components carried warnings) · production build green · bundle budget green.
 One warning in the new script was mine and was removed rather than absorbed into

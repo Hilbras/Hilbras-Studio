@@ -13,6 +13,98 @@ Tags are `vX.Y.Z`, created only from a green CI run on `main`.
 
 Nothing yet.
 
+## [0.11.0] — 2026-09-30
+
+The Task 17–18 tranche: the "use server" boundary becomes a layer, the
+observability the plan asks for, and the release gate starts checking its own
+evidence. Twenty-three commits, 71 files. Internal — no user-facing change.
+
+**The action boundary is now a layer (Task 17).** `src/app/actions/` no longer
+contains logic. Prompts, output sanitizers and spend control moved into a
+server-only `ai/composer`; provider resolution, chat wrappers and the background
+memory/summary jobs became server-only modules behind the unchanged `@/lib/ai`
+barrel; the dashboard and analytics reads became an owner-scoped read service in
+`src/lib/dashboard/queries.ts`; the settings page reads AI providers through a
+server-only service. The 975-line publisher became `src/lib/publish/` — types,
+shared account/Graph helpers, five per-platform connectors, and the routing
+core — with an identical public API. Action modules are thin adapters that keep
+only the session gate and input validation. **This is a breaking change to
+internal module boundaries** (permitted pre-1.0 by ADR-007); no route, action
+name or user-facing behaviour changed.
+
+**DTOs leave the "use server" modules.** Client components type-imported shapes
+that were defined inside `use server` files, which forced server-only modules
+into the browser graph. They now live in plain modules, which is what let
+`prefers-reduced-motion` and the bundle work below happen.
+
+**Observability (Task 18).** Structured JSON event logging — one line per event
+for publish runs, token failures, AI budget denials and account deletion,
+replacing prose `console` calls on the paths the plan names. Accessibility is a
+CI gate: `jsx-a11y` recommended rules on every lint, which caught a scrim that
+was a `div` doing a button's job (now a labelled button).
+
+**Reduced motion.** `MotionConfig reducedMotion="user"` at the theme provider,
+honouring the OS preference across all 26 animated components.
+
+**A client bundle budget.** `pnpm bundle:budget` measures per-route JS from the
+emitted HTML and fails on regression; wired into CI after the build.
+
+**Data integrity.** Migration `0017` adds CHECK constraints to the four
+remaining unguarded state columns — `runs.state`, `run_steps.state`,
+`run_step_approvals.state` and `goals.status` — so an invalid state is rejected
+at the database rather than being read back as a corrupt row. The two hot-path
+indexes have `EXPLAIN` evidence recorded as a test (`index-plans.test.ts`).
+
+### Migration notes
+
+`drizzle/0017_state_checks.sql` adds four CHECK constraints
+(`runs.state`, `run_steps.state`, `run_step_approvals.state`, `goals.status`).
+It is additive and cannot lose data, but **it can fail to apply**: a row that
+already holds a value outside the vocabulary makes the `ALTER TABLE` fail.
+
+**Run the preflight first:**
+
+```
+psql "$DATABASE_URL" -f drizzle/0017_state_checks.preflight.sql
+```
+
+Every query must return **zero rows**. Each returns the offending rows if any
+exist; correct them (or decide the vocabulary is wrong) before applying 0017,
+and do not widen the CHECK to fit a bad row — that discards the guarantee the
+migration exists to provide.
+
+The preflight is SELECT-only and has been tested against both a clean database
+and one holding a deliberately corrupt row, in
+`tests/integration/state-check-migration.test.ts`. That test runs the file from
+disk rather than duplicating its queries, and was verified by mutation: a typo
+in a table or column name fails it, and so does a predicate widened to accept
+the bad value — the failure mode that would report "clean" in production while
+blocking nothing.
+
+**It has never been run against production data,** because that is not possible
+from the development environment. Treat the first production run as the real
+one.
+
+### Verification
+
+500 unit tests (45 files) · 205 integration tests (17 files) · typecheck clean ·
+lint 0 errors / 27 warnings · build green. All four mutation harnesses were run
+against this tree: phase 6 **20 covered / 0 holes**, phase 7 **16 / 0**,
+phase 8 **23 / 0**, task 17 **21 / 0**.
+
+The harnesses are not in CI — each mutation starts a Postgres container, so they
+take tens of minutes and run before a release instead. `pnpm release:check` now
+accounts for that: it reads a date from `.mutation-harness-verified` and fails
+if the tree has changed since. Repairing the phase-6 harness found a mutation
+that had matched nothing since Phase 8, so the compare-and-swap guarantee had
+been unchecked for two phases; `src/mutation-harness.test.ts` now applies every
+pattern in all four harnesses in the unit suite, so that failure takes seconds
+to catch rather than a release cycle.
+
+**Not verified.** No browser accessibility smoke test (no Playwright), no
+external-call latency baseline, no staging or production run of anything in
+this release.
+
 ## [0.10.0] — 2026-09-29
 
 A stabilization tranche, and the first release that is not a roadmap phase. It

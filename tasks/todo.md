@@ -1051,6 +1051,40 @@ in this series a check has reported success while checking nothing — the
 mutation-pattern guard, the palette guard, the contrast canary, the environment
 guard, and now this.
 
+### (21st) A flaky run, and what the new artifact showed immediately
+
+With the HTML reporter in place, a **flaky** run became diagnosable in one step —
+which is the whole argument for having built it. Previously the same flake would
+have arrived as a red X with no detail.
+
+`a person can sign in again and reach the dashboard` failed on its first attempt
+and passed on retry. The report's context showed `document-title` — "Documents must
+have `<title>`" — on a page whose snapshot contained an `alert` boundary and no
+title.
+
+**The settle condition was already waiting for a non-empty title, and still lost the
+race.** `document.readyState === "complete"` is true throughout a client-side route
+swap, so a single sample can land in the window where Next.js has cleared the title
+and not yet written the new one. The condition was not wrong; it was *instantaneous*,
+and the thing it guards against is a gap rather than a state.
+
+The fix requires the condition to hold on two consecutive evaluations. A single
+sample races precisely the gap it is trying to close; two samples cannot both fall
+inside it.
+
+**The general point, which cost seven CI rounds to learn:** every one of these
+failures was a *timing* failure, and every fix I reached for first assumed the
+problem was a *state*. Checking what a page is rather than when you looked at it is
+the whole difference, and the way to do that is to probe — `document.getAnimations()`
+returning nothing, 40 inherited-opacity elements, ten never-settling dots, and now
+an empty `document.title` with `readyState: complete` are all things that were
+visible in seconds of inspection and invisible across multiple CI rounds.
+
+**Not verified yet:** the two-sample fix is written and typechecks, but the run that
+would confirm it needs a dev server, and the mutation harnesses — which saturate the
+machine — were running concurrently and repeatedly killing it. The harness result
+comes first; the flake fix gets its own cold run after.
+
 ### Verification for the series
 
 540 unit tests (49 files) · 214 integration tests (18 files) · typecheck clean ·

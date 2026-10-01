@@ -76,8 +76,23 @@ export async function waitForStyles(page: Page): Promise<void> {
   );
 
   // The document the assertions read must itself be settled.
+  //
+  // This waited on `document.title` being non-empty, which looked sufficient and
+  // is not: Next.js clears the title while swapping routes, so a client-side
+  // redirect can satisfy "complete" with an empty one, and axe then reports
+  // `document-title` — a document state this app is never actually in. Caught by a
+  // flaky run whose report showed an `alert` boundary and no title.
+  //
+  // The condition is the one the assertion actually depends on: a settled
+  // document that still has a title, held for two consecutive checks rather than
+  // one. A single sample races the very gap it is trying to close.
   await page.waitForFunction(
-    () => document.readyState === "complete" && document.title.trim().length > 0,
+    () => {
+      const settled = document.readyState === "complete" && document.title.trim().length > 0;
+      const previous = (window as Window & { __a11ySettled?: boolean }).__a11ySettled;
+      (window as Window & { __a11ySettled?: boolean }).__a11ySettled = settled;
+      return settled && previous === true;
+    },
     undefined,
     { timeout: 60_000 },
   );
